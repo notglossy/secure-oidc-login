@@ -301,8 +301,7 @@ class Secure_OIDC_Login {
 
 		return new WP_Error(
 			'oidc_native_login_disabled',
-			__( '<strong>ERROR</strong>: Username/password authentication is disabled. Please use Single Sign-On.', 'secure-oidc-login' ) .
-			' <a href="' . esc_url( wp_login_url() ) . '">' . __( 'Return to login', 'secure-oidc-login' ) . '</a>'
+			__( '<strong>ERROR</strong>: Username/password authentication is disabled. Please use the Single Sign-On button above.', 'secure-oidc-login' )
 		);
 	}
 
