@@ -52,6 +52,7 @@ if ( ! class_exists( 'Firebase\JWT\JWT' ) ) {
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-client.php';
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-admin.php';
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-user-handler.php';
+require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-token-crypto.php';
 
 /**
  * Main plugin class implementing OpenID Connect authentication for WordPress.
@@ -436,10 +437,29 @@ class Secure_OIDC_Login {
 			return;
 		}
 
-		// Store tokens for single logout support
-		update_user_meta( $user->ID, 'oidc_id_token', $tokens['id_token'] );
-		if ( ! empty( $tokens['refresh_token'] ) ) {
-			update_user_meta( $user->ID, 'oidc_refresh_token', $tokens['refresh_token'] );
+
+		// Store tokens for single logout support (encrypt at rest)
+		$options = get_option( 'secure_oidc_login_settings' );
+
+		$id_token_to_store = $tokens['id_token'];
+		$encrypted_id     = OIDC_Token_Crypto::encrypt( $id_token_to_store );
+		if ( is_wp_error( $encrypted_id ) ) {
+			OIDC_Token_Crypto::log_error( 'ID token encryption failed: ' . $encrypted_id->get_error_message() );
+		} else {
+			$id_token_to_store = $encrypted_id;
+		}
+		update_user_meta( $user->ID, 'oidc_id_token', $id_token_to_store );
+
+		// Persist refresh token only when single logout is enabled
+		if ( ! empty( $tokens['refresh_token'] ) && ! empty( $options['enable_single_logout'] ) ) {
+			$refresh_token_to_store = $tokens['refresh_token'];
+			$encrypted_refresh      = OIDC_Token_Crypto::encrypt( $refresh_token_to_store );
+			if ( is_wp_error( $encrypted_refresh ) ) {
+				OIDC_Token_Crypto::log_error( 'Refresh token encryption failed: ' . $encrypted_refresh->get_error_message() );
+			} else {
+				$refresh_token_to_store = $encrypted_refresh;
+			}
+			update_user_meta( $user->ID, 'oidc_refresh_token', $refresh_token_to_store );
 		}
 
 		// Establish WordPress session
@@ -481,7 +501,17 @@ class Secure_OIDC_Login {
 			return;
 		}
 
-		$id_token = get_user_meta( $user_id, 'oidc_id_token', true );
+		$stored_id_token = get_user_meta( $user_id, 'oidc_id_token', true );
+		$id_token        = '';
+
+		if ( ! empty( $stored_id_token ) ) {
+			$maybe_decrypted = OIDC_Token_Crypto::decrypt_if_needed( $stored_id_token );
+			if ( is_wp_error( $maybe_decrypted ) ) {
+				OIDC_Token_Crypto::log_error( 'ID token decrypt failed during logout: ' . $maybe_decrypted->get_error_message() );
+			} else {
+				$id_token = $maybe_decrypted;
+			}
+		}
 
 		// Clean up stored OIDC tokens
 		delete_user_meta( $user_id, 'oidc_id_token' );
