@@ -213,6 +213,18 @@ class OIDC_Admin {
 			)
 		);
 
+		add_settings_field(
+			'disable_native_login',
+			__( 'Disable Native Login', 'secure-oidc-login' ),
+			array( $this, 'render_checkbox_field' ),
+			'secure-oidc-login',
+			'oidc_login_section',
+			array(
+				'field'       => 'disable_native_login',
+				'description' => __( 'Hide username/password form and block native authentication. Emergency access: add ?native=1 to login URL.', 'secure-oidc-login' ),
+			)
+		);
+
 		// === User Settings Section ===
 		add_settings_section(
 			'oidc_user_section',
@@ -337,7 +349,7 @@ class OIDC_Admin {
 		);
 
 		// Boolean checkbox fields
-		$checkbox_fields = array( 'enable_single_logout', 'create_users', 'require_verified_email' );
+		$checkbox_fields = array( 'enable_single_logout', 'create_users', 'require_verified_email', 'disable_native_login' );
 
 		foreach ( $text_fields as $field ) {
 			$sanitized[ $field ] = isset( $input[ $field ] ) ? sanitize_text_field( $input[ $field ] ) : '';
@@ -639,6 +651,25 @@ class OIDC_Admin {
 			echo '<div class="notice notice-warning"><p>';
 			_e( 'OIDC Authentication is not fully configured. Please fill in the required fields.', 'secure-oidc-login' );
 			echo '</p></div>';
+		}
+
+		// Check if native login is disabled
+		$disable_native_login = isset( $options['disable_native_login'] ) && $options['disable_native_login'];
+
+		if ( $disable_native_login ) {
+			if ( empty( $client_id ) || empty( $authorization_endpoint ) || empty( $token_endpoint ) ) {
+				echo '<div class="notice notice-error"><p>';
+				_e( '<strong>WARNING:</strong> Native login is disabled but OIDC is not fully configured. Users may be locked out. Configure OIDC or disable "Disable Native Login" immediately.', 'secure-oidc-login' );
+				echo '</p></div>';
+			} else {
+				echo '<div class="notice notice-info"><p>';
+				printf(
+					/* translators: %s: emergency login URL */
+					__( 'Native login is disabled. Emergency admin access: <code>%s</code>', 'secure-oidc-login' ),
+					esc_html( wp_login_url() . '?native=1' )
+				);
+				echo '</p></div>';
+			}
 		}
 	}
 
