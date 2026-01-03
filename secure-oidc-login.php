@@ -3,7 +3,7 @@
  * Plugin Name: Secure OIDC Login
  * Plugin URI: https://github.com/notglossy/secure-oidc-login
  * Description: OpenID Connect (OIDC) authentication plugin for WordPress. Allows users to authenticate using any OIDC-compliant identity provider.
- * Version: 0.1.0-beta
+ * Version: 0.2.0-beta
  * Requires at least: 5.8
  * Tested up to: 6.7
  * Requires PHP: 7.4
@@ -22,7 +22,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'SECURE_OIDC_LOGIN_VERSION', '0.1.0' );
+define( 'SECURE_OIDC_LOGIN_VERSION', '0.2.0' );
 define( 'SECURE_OIDC_LOGIN_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'SECURE_OIDC_LOGIN_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 
@@ -135,6 +135,8 @@ class Secure_OIDC_Login {
 		add_action( 'init', array( $this, 'init' ) );
 		add_action( 'login_form', array( $this, 'add_login_button' ) );
 		add_action( 'wp_logout', array( $this, 'handle_logout' ), 10, 1 );
+		add_action( 'login_head', array( $this, 'hide_native_login_form' ) );
+		add_filter( 'authenticate', array( $this, 'block_native_authentication' ), 30, 3 );
 
 		register_activation_hook( __FILE__, array( $this, 'activate' ) );
 		register_deactivation_hook( __FILE__, array( $this, 'deactivate' ) );
@@ -182,12 +184,126 @@ class Secure_OIDC_Login {
 		}
 		$login_url = add_query_arg( 'oidc_login', '1', wp_login_url() );
 
-		echo '<div style="margin: 20px 0; text-align: center;">';
-		echo '<p style="margin-bottom: 10px;">' . esc_html__( 'Or', 'secure-oidc-login' ) . '</p>';
-		echo '<a href="' . esc_url( $login_url ) . '" class="button button-primary button-large" style="width: 100%;">';
-		echo esc_html( $button_text );
-		echo '</a>';
-		echo '</div>';
+		// Check if native login is disabled
+		$disable_native = ! empty( $options['disable_native_login'] ) && ! $this->is_emergency_bypass_active();
+
+		if ( $disable_native ) {
+			// OIDC-only mode: Display button prominently (replaces form fields)
+			echo '<p class="oidc-button-container" style="text-align: center;">';
+			echo '<a href="' . esc_url( $login_url ) . '" class="button button-primary button-large" style="width: 100%;">';
+			echo esc_html( $button_text );
+			echo '</a>';
+			echo '</p>';
+		} else {
+			// Hybrid mode: Display button as alternative
+			echo '<div style="margin: 20px 0; text-align: center;">';
+			echo '<p style="margin-bottom: 10px;">' . esc_html__( 'Or', 'secure-oidc-login' ) . '</p>';
+			echo '<a href="' . esc_url( $login_url ) . '" class="button button-primary button-large" style="width: 100%;">';
+			echo esc_html( $button_text );
+			echo '</a>';
+			echo '</div>';
+		}
+	}
+
+	/**
+	 * Check if emergency bypass is active via URL parameter.
+	 *
+	 * @return bool True if emergency bypass parameter is present.
+	 */
+	private function is_emergency_bypass_active(): bool {
+		return isset( $_GET['native'] ) && $_GET['native'] === '1';
+	}
+
+	/**
+	 * Hide the native login form when OIDC-only mode is enabled.
+	 *
+	 * Injects CSS to hide username/password fields unless emergency bypass is active.
+	 */
+	public function hide_native_login_form(): void {
+		$options = get_option( 'secure_oidc_login_settings' );
+
+		if ( empty( $options['disable_native_login'] ) ) {
+			return;
+		}
+
+		if ( $this->is_emergency_bypass_active() ) {
+			return;
+		}
+
+		$client_id              = self::get_setting( 'client_id', $options );
+		$authorization_endpoint = self::get_setting( 'authorization_endpoint', $options );
+
+		if ( empty( $client_id ) || empty( $authorization_endpoint ) ) {
+			return;
+		}
+
+		?>
+		<style type="text/css">
+			/* Hide native login form fields but keep the form container */
+			#loginform p:not(.oidc-button-container),
+			#loginform label,
+			#loginform input,
+			#loginform .forgetmenot,
+			#loginform .submit,
+			.login form#lostpasswordform,
+			.login form#registerform,
+			p#nav,
+			p#backtoblog {
+				display: none !important;
+			}
+
+			/* Add message above the form */
+			#loginform::before {
+				content: "<?php echo esc_js( __( 'Single Sign-On authentication is required.', 'secure-oidc-login' ) ); ?>";
+				display: block;
+				text-align: center;
+				margin-bottom: 20px;
+				padding: 12px 20px;
+				background: #f0f0f1;
+				border-left: 4px solid #72aee6;
+			}
+		</style>
+		<?php
+	}
+
+	/**
+	 * Block native username/password authentication when OIDC-only mode is enabled.
+	 *
+	 * Filters the authenticate process to prevent password-based login unless
+	 * emergency bypass is active.
+	 *
+	 * @param WP_User|WP_Error|null $user     User object or error.
+	 * @param string                $username Username or email.
+	 * @param string                $password Password.
+	 * @return WP_User|WP_Error User object or error.
+	 */
+	public function block_native_authentication( $user, $username, $password ) {
+		if ( empty( $username ) || empty( $password ) ) {
+			return $user;
+		}
+
+		$options = get_option( 'secure_oidc_login_settings' );
+
+		if ( empty( $options['disable_native_login'] ) ) {
+			return $user;
+		}
+
+		if ( $this->is_emergency_bypass_active() ) {
+			return $user;
+		}
+
+		$client_id              = self::get_setting( 'client_id', $options );
+		$authorization_endpoint = self::get_setting( 'authorization_endpoint', $options );
+
+		if ( empty( $client_id ) || empty( $authorization_endpoint ) ) {
+			return $user;
+		}
+
+		return new WP_Error(
+			'oidc_native_login_disabled',
+			__( '<strong>ERROR</strong>: Username/password authentication is disabled. Please use Single Sign-On.', 'secure-oidc-login' ) .
+			' <a href="' . esc_url( wp_login_url() ) . '">' . __( 'Return to login', 'secure-oidc-login' ) . '</a>'
+		);
 	}
 
 	/**
@@ -442,6 +558,7 @@ class Secure_OIDC_Login {
 			'scope'                  => 'openid email profile',
 			'login_button_text'      => 'Login with SSO',
 			'enable_single_logout'   => false,
+			'disable_native_login'   => false,
 			'create_users'           => true,
 			'require_verified_email' => true,
 			'default_role'           => 'subscriber',
