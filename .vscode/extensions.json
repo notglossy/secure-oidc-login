@@ -1,0 +1,19 @@
+{
+	"recommendations": [
+		// PHP Language Support
+		"bmewburn.vscode-intelephense-client",
+
+		// PHP Coding Standards (PHPCS/PHPCBF)
+		"shevaua.phpcs",
+		"wongjn.php-sniffer",
+
+		// PHPStan Static Analysis
+		"swordev.phpstan",
+
+		// WordPress Snippets and Hooks
+		"wordpresstoolbox.wordpress-toolbox",
+
+		// EditorConfig Support
+		"editorconfig.editorconfig"
+	]
+}

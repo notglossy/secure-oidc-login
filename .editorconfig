@@ -1,0 +1,41 @@
+# EditorConfig helps maintain consistent coding styles across different editors
+# https://editorconfig.org
+
+# Top-most EditorConfig file
+root = true
+
+# All files
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# PHP files - WordPress uses tabs
+[*.php]
+indent_style = tab
+indent_size = 4
+
+# JSON, YAML, Markdown - use spaces
+[*.{json,yml,yaml,md}]
+indent_style = space
+indent_size = 2
+
+# JavaScript/TypeScript - spaces
+[*.{js,ts,jsx,tsx}]
+indent_style = space
+indent_size = 2
+
+# CSS/SCSS - tabs (WordPress standard for stylesheets)
+[*.{css,scss,sass}]
+indent_style = tab
+indent_size = 4
+
+# XML - tabs (matches phpcs.xml)
+[*.xml]
+indent_style = tab
+indent_size = 4
+
+# Markdown files - preserve trailing whitespace (needed for line breaks)
+[*.md]
+trim_trailing_whitespace = false

@@ -1,0 +1,15 @@
+includes:
+    - vendor/szepeviktor/phpstan-wordpress/extension.neon
+
+parameters:
+    level: 6
+    paths:
+        - secure-oidc-login.php
+        - includes/
+    parallel:
+        maximumNumberOfProcesses: 1
+    bootstrapFiles:
+        - vendor/autoload.php
+    ignoreErrors:
+        # This property registers its own WordPress hooks, so it is intentionally only written
+        - '#Property Secure_OIDC_Login::\$admin is never read, only written.#'

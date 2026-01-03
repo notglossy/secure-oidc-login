@@ -1,0 +1,92 @@
+{
+	// Editor: Use tabs for indentation (WordPress standard)
+	"editor.insertSpaces": false,
+	"editor.tabSize": 4,
+	"editor.detectIndentation": false,
+
+	// PHP: Language-specific settings
+	"[php]": {
+		"editor.insertSpaces": false,
+		"editor.tabSize": 4,
+		"editor.defaultFormatter": null,
+		"editor.formatOnSave": false
+	},
+
+	// Files: Ensure consistent line endings
+	"files.eol": "\n",
+	"files.trimTrailingWhitespace": true,
+	"files.insertFinalNewline": true,
+
+	// PHP Sniffer: Integration (if extension installed)
+	"phpcs.enable": true,
+	"phpcs.standard": "WordPress",
+	"phpcs.executablePath": "${workspaceFolder}/vendor/bin/phpcs",
+	"phpcbf.enable": true,
+	"phpcbf.executablePath": "${workspaceFolder}/vendor/bin/phpcbf",
+	"phpcbf.onsave": false,
+
+	// PHPStan: Integration (if extension installed)
+	"phpstan.enabled": true,
+	"phpstan.path": "${workspaceFolder}/vendor/bin/phpstan",
+	"phpstan.level": "5",
+
+	// Intelephense: PHP language server settings
+	"intelephense.stubs": [
+		"wordpress",
+		"wordpress-globals",
+		"wp-cli",
+		"apache",
+		"bcmath",
+		"Core",
+		"curl",
+		"date",
+		"dom",
+		"fileinfo",
+		"filter",
+		"gd",
+		"hash",
+		"iconv",
+		"json",
+		"libxml",
+		"mbstring",
+		"mysqli",
+		"mysqlnd",
+		"openssl",
+		"pcre",
+		"PDO",
+		"pdo_mysql",
+		"Phar",
+		"SimpleXML",
+		"sockets",
+		"SPL",
+		"tokenizer",
+		"xml",
+		"xmlreader",
+		"xmlwriter",
+		"zip",
+		"zlib"
+	],
+	"intelephense.diagnostics.undefinedFunctions": false,
+	"intelephense.diagnostics.undefinedConstants": false,
+	"intelephense.diagnostics.undefinedTypes": false,
+
+	// Files to exclude from explorer
+	"files.exclude": {
+		"**/.git": true,
+		"**/.DS_Store": true,
+		"**/vendor": true,
+		"**/node_modules": true,
+		"**/.phpcs-cache": true,
+		"**/.phpstan": true
+	},
+
+	// Search: Files to exclude from search
+	"search.exclude": {
+		"**/vendor": true,
+		"**/node_modules": true,
+		"**/build": true,
+		"**/dist": true,
+		"**/.phpcs-cache": true,
+		"**/.phpstan": true
+	}
+}
