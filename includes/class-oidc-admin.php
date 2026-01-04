@@ -766,7 +766,15 @@ class OIDC_Admin {
 			wp_send_json_error( __( 'Failed to fetch discovery document.', 'secure-oidc-login' ) );
 		}
 
-		$body   = wp_remote_retrieve_body( $response );
+		$body         = wp_remote_retrieve_body( $response );
+		$content_type = wp_remote_retrieve_header( $response, 'content-type' );
+		if ( is_array( $content_type ) ) {
+			$content_type = $content_type[0] ?? '';
+		}
+		if ( stripos( $content_type, 'application/json' ) === false ) {
+			wp_send_json_error( __( 'Discovery response was not JSON. Please verify the identity provider configuration.', 'secure-oidc-login' ) );
+		}
+
 		$config = json_decode( $body, true );
 
 		if ( ! $config ) {

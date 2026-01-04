@@ -152,9 +152,26 @@ class OIDC_Client {
 			);
 		}
 
-		$status_code = wp_remote_retrieve_response_code( $response );
-		$body        = wp_remote_retrieve_body( $response );
-		$tokens      = json_decode( $body, true );
+		$status_code  = wp_remote_retrieve_response_code( $response );
+		$body         = wp_remote_retrieve_body( $response );
+		$content_type = wp_remote_retrieve_header( $response, 'content-type' );
+		if ( is_array( $content_type ) ) {
+			$content_type = $content_type[0] ?? '';
+		}
+
+		if ( stripos( $content_type, 'application/json' ) === false ) {
+			return $this->handle_error(
+				'token_exchange',
+				sprintf(
+					'Token endpoint returned unexpected Content-Type "%s". Body: %s',
+					sanitize_text_field( $content_type ),
+					substr( wp_strip_all_tags( $body ), 0, 200 )
+				),
+				__( 'Authentication failed. Unexpected response from identity provider.', 'secure-oidc-login' )
+			);
+		}
+
+		$tokens = json_decode( $body, true );
 
 		if ( $status_code !== 200 ) {
 			// Log detailed IdP error but show generic message to users
@@ -491,8 +508,24 @@ class OIDC_Client {
 			);
 		}
 
-		$status_code = wp_remote_retrieve_response_code( $response );
-		$body        = wp_remote_retrieve_body( $response );
+		$status_code  = wp_remote_retrieve_response_code( $response );
+		$body         = wp_remote_retrieve_body( $response );
+		$content_type = wp_remote_retrieve_header( $response, 'content-type' );
+		if ( is_array( $content_type ) ) {
+			$content_type = $content_type[0] ?? '';
+		}
+
+		if ( stripos( $content_type, 'application/json' ) === false ) {
+			return $this->handle_error(
+				'userinfo',
+				sprintf(
+					'Userinfo endpoint returned unexpected Content-Type "%s". Body: %s',
+					sanitize_text_field( $content_type ),
+					substr( wp_strip_all_tags( $body ), 0, 200 )
+				),
+				__( 'Failed to retrieve user information. Unexpected response from identity provider.', 'secure-oidc-login' )
+			);
+		}
 
 		if ( $status_code !== 200 ) {
 			return $this->handle_error(
@@ -561,9 +594,26 @@ class OIDC_Client {
 			);
 		}
 
-		$status_code = wp_remote_retrieve_response_code( $response );
-		$body        = wp_remote_retrieve_body( $response );
-		$tokens      = json_decode( $body, true );
+		$status_code  = wp_remote_retrieve_response_code( $response );
+		$body         = wp_remote_retrieve_body( $response );
+		$content_type = wp_remote_retrieve_header( $response, 'content-type' );
+		if ( is_array( $content_type ) ) {
+			$content_type = $content_type[0] ?? '';
+		}
+
+		if ( stripos( $content_type, 'application/json' ) === false ) {
+			return $this->handle_error(
+				'token_refresh',
+				sprintf(
+					'Token refresh returned unexpected Content-Type "%s". Body: %s',
+					sanitize_text_field( $content_type ),
+					substr( wp_strip_all_tags( $body ), 0, 200 )
+				),
+				__( 'Session refresh failed. Unexpected response from identity provider.', 'secure-oidc-login' )
+			);
+		}
+
+		$tokens = json_decode( $body, true );
 
 		if ( $status_code !== 200 ) {
 			// Log detailed IdP error but show generic message to users
@@ -606,8 +656,19 @@ class OIDC_Client {
 			return $response;
 		}
 
-		$status_code = wp_remote_retrieve_response_code( $response );
-		$body        = wp_remote_retrieve_body( $response );
+		$status_code  = wp_remote_retrieve_response_code( $response );
+		$body         = wp_remote_retrieve_body( $response );
+		$content_type = wp_remote_retrieve_header( $response, 'content-type' );
+		if ( is_array( $content_type ) ) {
+			$content_type = $content_type[0] ?? '';
+		}
+
+		if ( stripos( $content_type, 'application/json' ) === false ) {
+			return new WP_Error(
+				'oidc_error',
+				__( 'Failed to discover OIDC configuration. Identity provider returned an unexpected response format.', 'secure-oidc-login' )
+			);
+		}
 
 		if ( $status_code !== 200 ) {
 			return new WP_Error( 'oidc_error', __( 'Failed to discover OIDC configuration.', 'secure-oidc-login' ) );
