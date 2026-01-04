@@ -99,7 +99,7 @@ class Secure_OIDC_Login {
 	 * - SECURE_OIDC_CLIENT_SECRET - Overrides database client_secret
 	 * - SECURE_OIDC_DISCOVERY_URL - Pre-populates discovery_url
 	 *
-	 * @since 1.1.0
+	 * @since 0.1.0
 	 *
 	 * @param string $option_key The settings array key to retrieve (e.g., 'client_secret').
 	 * @param array<string, mixed>  $options    The full options array from get_option().
@@ -230,7 +230,7 @@ class Secure_OIDC_Login {
 	private function is_emergency_bypass_active(): bool {
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- This is a feature flag, not user input
 		return ( isset( $_GET['native'] ) && $_GET['native'] === '1' ) ||
-		       ( isset( $_POST['native'] ) && $_POST['native'] === '1' );
+				( isset( $_POST['native'] ) && $_POST['native'] === '1' );
 	}
 
 	/**
@@ -455,12 +455,11 @@ class Secure_OIDC_Login {
 			return;
 		}
 
-
 		// Store tokens for single logout support (encrypt at rest)
 		$options = get_option( 'secure_oidc_login_settings' );
 
 		$id_token_to_store = $tokens['id_token'];
-		$encrypted_id     = OIDC_Token_Crypto::encrypt( $id_token_to_store );
+		$encrypted_id      = OIDC_Token_Crypto::encrypt( $id_token_to_store );
 		if ( is_wp_error( $encrypted_id ) ) {
 			OIDC_Token_Crypto::log_error( 'ID token encryption failed: ' . $encrypted_id->get_error_message() );
 		} else {
