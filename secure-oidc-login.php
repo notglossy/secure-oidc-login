@@ -99,7 +99,7 @@ class Secure_OIDC_Login {
 	 * - SECURE_OIDC_CLIENT_SECRET - Overrides database client_secret
 	 * - SECURE_OIDC_DISCOVERY_URL - Pre-populates discovery_url
 	 *
-	 * @since 1.1.0
+	 * @since 0.1.0
 	 *
 	 * @param string $option_key The settings array key to retrieve (e.g., 'client_secret').
 	 * @param array<string, mixed>  $options    The full options array from get_option().
@@ -135,6 +135,7 @@ class Secure_OIDC_Login {
 
 		add_action( 'init', array( $this, 'init' ) );
 		add_action( 'login_form', array( $this, 'add_login_button' ) );
+		add_action( 'login_form', array( $this, 'add_emergency_bypass_field' ) );
 		add_action( 'wp_logout', array( $this, 'handle_logout' ), 10, 1 );
 		add_action( 'login_head', array( $this, 'hide_native_login_form' ) );
 		add_filter( 'authenticate', array( $this, 'block_native_authentication' ), 30, 3 );
@@ -207,12 +208,29 @@ class Secure_OIDC_Login {
 	}
 
 	/**
+	 * Add hidden field to preserve emergency bypass parameter in login form.
+	 *
+	 * When the login page is accessed with ?native=1, this adds a hidden field
+	 * to ensure the parameter is preserved when the form is submitted via POST.
+	 */
+	public function add_emergency_bypass_field(): void {
+		if ( $this->is_emergency_bypass_active() ) {
+			echo '<input type="hidden" name="native" value="1" />';
+		}
+	}
+
+	/**
 	 * Check if emergency bypass is active via URL parameter.
+	 *
+	 * Checks both GET and POST parameters to handle the case where the login
+	 * form is submitted (POST) after loading the page with ?native=1 (GET).
 	 *
 	 * @return bool True if emergency bypass parameter is present.
 	 */
 	private function is_emergency_bypass_active(): bool {
-		return isset( $_GET['native'] ) && $_GET['native'] === '1';
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- This is a feature flag, not user input
+		return ( isset( $_GET['native'] ) && $_GET['native'] === '1' ) ||
+				( isset( $_POST['native'] ) && $_POST['native'] === '1' );
 	}
 
 	/**
@@ -437,12 +455,11 @@ class Secure_OIDC_Login {
 			return;
 		}
 
-
 		// Store tokens for single logout support (encrypt at rest)
 		$options = get_option( 'secure_oidc_login_settings' );
 
 		$id_token_to_store = $tokens['id_token'];
-		$encrypted_id     = OIDC_Token_Crypto::encrypt( $id_token_to_store );
+		$encrypted_id      = OIDC_Token_Crypto::encrypt( $id_token_to_store );
 		if ( is_wp_error( $encrypted_id ) ) {
 			OIDC_Token_Crypto::log_error( 'ID token encryption failed: ' . $encrypted_id->get_error_message() );
 		} else {
