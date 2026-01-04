@@ -524,7 +524,18 @@ class Secure_OIDC_Login {
 		$requested_redirect = ! empty( $_GET['redirect_to'] ) ? esc_url_raw( wp_unslash( $_GET['redirect_to'] ) ) : '';
 		$redirect_url       = wp_validate_redirect( $requested_redirect, admin_url() );
 
-		wp_safe_redirect( $redirect_url );
+		// Use wp_redirect() since we've already validated the URL with wp_validate_redirect()
+		// wp_safe_redirect() can fail in some edge cases even with valid URLs
+		if ( ! wp_redirect( $redirect_url ) ) {
+			// Fallback: If redirect fails (headers already sent), display a link
+			wp_die(
+				sprintf(
+					/* translators: %s: URL to redirect to */
+					__( 'Authentication successful. <a href="%s">Click here to continue</a>.', 'secure-oidc-login' ),
+					esc_url( $redirect_url )
+				)
+			);
+		}
 		exit;
 	}
 
@@ -630,7 +641,19 @@ class Secure_OIDC_Login {
 	private function handle_error( string $message ): void {
 		$login_url = wp_login_url();
 		$login_url = add_query_arg( 'oidc_error', urlencode( $message ), $login_url );
-		wp_safe_redirect( $login_url );
+
+		// Use wp_redirect() instead of wp_safe_redirect() since wp_login_url() is always safe
+		if ( ! wp_redirect( $login_url ) ) {
+			// Fallback: If redirect fails (headers already sent), display error with link
+			wp_die(
+				sprintf(
+					/* translators: 1: Error message, 2: Login URL */
+					__( '<strong>Authentication Error:</strong> %1$s<br><br><a href="%2$s">Return to login page</a>', 'secure-oidc-login' ),
+					esc_html( $message ),
+					esc_url( $login_url )
+				)
+			);
+		}
 		exit;
 	}
 
