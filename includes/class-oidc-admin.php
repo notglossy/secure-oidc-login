@@ -323,6 +323,29 @@ class OIDC_Admin {
 	 * @return array<string, mixed> Sanitized settings array.
 	 */
 	public function sanitize_settings( array $input ): array {
+		// Verify user capability
+		if ( ! current_user_can( 'manage_options' ) ) {
+			add_settings_error(
+				'secure_oidc_login_settings',
+				'capability_check_failed',
+				__( 'You do not have permission to modify these settings.', 'secure-oidc-login' ),
+				'error'
+			);
+			return get_option( 'secure_oidc_login_settings', array() );
+		}
+
+		// Verify nonce explicitly for CSRF protection
+		if ( ! isset( $_POST['_wpnonce'] ) ||
+			! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['_wpnonce'] ) ), 'secure_oidc_login_settings_group-options' ) ) {
+			add_settings_error(
+				'secure_oidc_login_settings',
+				'nonce_verification_failed',
+				__( 'Security verification failed. Please try again.', 'secure-oidc-login' ),
+				'error'
+			);
+			return get_option( 'secure_oidc_login_settings', array() );
+		}
+
 		$sanitized = array();
 
 		// Text fields - sanitize as plain text
