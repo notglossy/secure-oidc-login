@@ -135,6 +135,7 @@ class Secure_OIDC_Login {
 
 		add_action( 'init', array( $this, 'init' ) );
 		add_action( 'login_form', array( $this, 'add_login_button' ) );
+		add_action( 'login_form', array( $this, 'add_emergency_bypass_field' ) );
 		add_action( 'wp_logout', array( $this, 'handle_logout' ), 10, 1 );
 		add_action( 'login_head', array( $this, 'hide_native_login_form' ) );
 		add_filter( 'authenticate', array( $this, 'block_native_authentication' ), 30, 3 );
@@ -207,12 +208,29 @@ class Secure_OIDC_Login {
 	}
 
 	/**
+	 * Add hidden field to preserve emergency bypass parameter in login form.
+	 *
+	 * When the login page is accessed with ?native=1, this adds a hidden field
+	 * to ensure the parameter is preserved when the form is submitted via POST.
+	 */
+	public function add_emergency_bypass_field(): void {
+		if ( $this->is_emergency_bypass_active() ) {
+			echo '<input type="hidden" name="native" value="1" />';
+		}
+	}
+
+	/**
 	 * Check if emergency bypass is active via URL parameter.
+	 *
+	 * Checks both GET and POST parameters to handle the case where the login
+	 * form is submitted (POST) after loading the page with ?native=1 (GET).
 	 *
 	 * @return bool True if emergency bypass parameter is present.
 	 */
 	private function is_emergency_bypass_active(): bool {
-		return isset( $_GET['native'] ) && $_GET['native'] === '1';
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- This is a feature flag, not user input
+		return ( isset( $_GET['native'] ) && $_GET['native'] === '1' ) ||
+		       ( isset( $_POST['native'] ) && $_POST['native'] === '1' );
 	}
 
 	/**
