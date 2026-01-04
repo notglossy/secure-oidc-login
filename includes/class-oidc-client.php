@@ -285,7 +285,7 @@ class OIDC_Client {
 		$header_encoded = $tks[0];
 		$header         = json_decode( JWT::urlsafeB64Decode( $header_encoded ), true );
 		// Default to RS256 (asymmetric) if algorithm not specified - most common for OIDC
-		$alg            = isset( $header['alg'] ) ? $header['alg'] : 'RS256';
+		$alg = isset( $header['alg'] ) ? $header['alg'] : 'RS256';
 
 		// IdP compatibility: Some identity providers omit the "alg" field in their JWKS keys
 		// The Firebase JWT library requires it, so we add it based on the JWT header if missing
