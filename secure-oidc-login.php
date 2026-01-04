@@ -3,7 +3,7 @@
  * Plugin Name: Secure OIDC Login
  * Plugin URI: https://github.com/notglossy/secure-oidc-login
  * Description: OpenID Connect (OIDC) authentication plugin for WordPress. Allows users to authenticate using any OIDC-compliant identity provider.
- * Version: 0.2.0-beta
+ * Version: 0.3.0-beta
  * Requires at least: 5.8
  * Tested up to: 6.7
  * Requires PHP: 7.4
@@ -22,7 +22,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'SECURE_OIDC_LOGIN_VERSION', '0.2.0' );
+define( 'SECURE_OIDC_LOGIN_VERSION', '0.3.0' );
 define( 'SECURE_OIDC_LOGIN_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'SECURE_OIDC_LOGIN_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 

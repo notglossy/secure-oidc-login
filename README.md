@@ -326,6 +326,21 @@ Contributions are welcome! Please submit pull requests or open issues on the pro
 
 ## Changelog
 
+### 0.3.0-beta
+- **Security**: Mitigate JWKS cache poisoning vulnerability by reducing cache duration from 1 hour to 15 minutes
+- **Security**: Add explicit nonce validation to settings form for enhanced CSRF protection
+- **Security**: Sanitize redirect_to parameter before validation to prevent XSS attacks
+- **Security**: Fix open redirect vulnerability in OIDC callback handler
+- **Security**: Encrypt stored OIDC tokens (ID tokens and refresh tokens) at rest using AES-256-CBC
+- **Bug Fix**: Fix emergency access bypass not working when submitting login form via POST
+- **DevOps**: Add GitHub Action for automated PHP quality checks (PHPStan level 6, PHPCS)
+
+### 0.2.0-beta
+- **Feature**: Add ability to disable native WordPress login (OIDC-only mode)
+- **Feature**: Add emergency bypass for native login using ?native=1 URL parameter
+- **Feature**: Multi-layer protection (frontend CSS hiding + backend authentication blocking)
+- **Bug Fix**: Fix error message in OIDC-only mode that created navigation loop
+
 ### 0.1.0-beta
 - Initial beta release
 - OIDC authorization code flow with PKCE
