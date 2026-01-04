@@ -25,7 +25,17 @@ class OIDC_Client {
 	/** @var array<string, mixed> Plugin settings from WordPress options */
 	private $options;
 
-	/** @var int JWKS cache duration in seconds (15 minutes to minimize cache poisoning window) */
+	/**
+	 * JWKS cache duration in seconds (15 minutes).
+	 *
+	 * SECURITY: Short cache duration minimizes the window of opportunity for JWKS
+	 * cache poisoning attacks. If an attacker can manipulate the cached JWKS,
+	 * they could inject their own signing keys and forge valid-looking ID tokens.
+	 * The HMAC integrity check (see get_jwks() and verify_jwks_integrity()) prevents
+	 * cache tampering, but a short TTL provides defense-in-depth.
+	 *
+	 * @var int
+	 */
 	const JWKS_CACHE_DURATION = 900;
 
 	/**
@@ -112,13 +122,15 @@ class OIDC_Client {
 			'Content-Type' => 'application/x-www-form-urlencoded',
 		);
 
-		// Confidential clients use HTTP Basic auth per RFC 6749
+		// Confidential clients use HTTP Basic auth per RFC 6749 section 2.3.1
+		// This is the recommended authentication method for confidential clients
+		// as it keeps credentials in headers rather than the request body
 		if ( ! empty( $client_secret ) ) {
 			$credentials              = $client_id . ':' . $client_secret;
 			$headers['Authorization'] = 'Basic ' . base64_encode( $credentials );
 		}
 
-		// Public clients use PKCE for security
+		// Public clients use PKCE for security (no client_secret available)
 		if ( ! empty( $code_verifier ) ) {
 			$token_params['code_verifier'] = $code_verifier;
 		}
@@ -231,8 +243,13 @@ class OIDC_Client {
 			}
 		}
 
-		// Validate c_hash for hybrid flows
+		// SECURITY: Validate c_hash (authorization code hash) for hybrid flows per OIDC Core 3.3.2.11
+		// The c_hash claim prevents token substitution attacks in hybrid flows. If an attacker
+		// intercepts an ID token from a different authorization code exchange, the c_hash will
+		// not match, preventing the token from being accepted. This binds the ID token to the
+		// specific authorization code used in this exchange.
 		if ( null !== $auth_code && isset( $claims['c_hash'] ) ) {
+			// Per spec: c_hash is left-most half of SHA-256 hash, base64url encoded
 			$computed_hash = rtrim( strtr( base64_encode( substr( hash( 'sha256', $auth_code, true ), 0, 16 ) ), '+/', '-_' ), '=' );
 			if ( $claims['c_hash'] !== $computed_hash ) {
 				return new WP_Error( 'invalid_c_hash', 'ID token c_hash does not match authorization code' );
@@ -259,7 +276,7 @@ class OIDC_Client {
 			return $jwks;
 		}
 
-		// Get algorithm from JWT header
+		// Extract algorithm from JWT header to handle IdP compatibility
 		$tks = explode( '.', $jwt );
 		if ( count( $tks ) !== 3 ) {
 			return new WP_Error( 'oidc_error', __( 'Invalid JWT format.', 'secure-oidc-login' ) );
@@ -267,16 +284,18 @@ class OIDC_Client {
 
 		$header_encoded = $tks[0];
 		$header         = json_decode( JWT::urlsafeB64Decode( $header_encoded ), true );
-		$alg            = isset( $header['alg'] ) ? $header['alg'] : 'RS256'; // Default to RS256 for OIDC
+		// Default to RS256 (asymmetric) if algorithm not specified - most common for OIDC
+		$alg            = isset( $header['alg'] ) ? $header['alg'] : 'RS256';
 
-		// Add "alg" parameter to keys if missing (some IdPs don't include it)
+		// IdP compatibility: Some identity providers omit the "alg" field in their JWKS keys
+		// The Firebase JWT library requires it, so we add it based on the JWT header if missing
 		if ( isset( $jwks['keys'] ) && is_array( $jwks['keys'] ) ) {
 			foreach ( $jwks['keys'] as &$key ) {
 				if ( ! isset( $key['alg'] ) ) {
 					$key['alg'] = $alg;
 				}
 			}
-			unset( $key ); // Break reference
+			unset( $key ); // Break reference to avoid unexpected behavior
 		}
 
 		try {
@@ -291,10 +310,13 @@ class OIDC_Client {
 			return json_decode( json_encode( $decoded ), true );
 
 		} catch ( \Firebase\JWT\SignatureInvalidException $e ) {
-			// Signature verification failed - retry once with fresh JWKS (handles key rotation)
+			// Signature verification failed - could be due to IdP key rotation
+			// Key rotation scenario: IdP generates new signing keys and signs tokens with the new key,
+			// but our cached JWKS still contains only the old key. Retry once with fresh JWKS to handle this.
 			if ( $retry ) {
 				$fresh_jwks = $this->get_jwks( true );
 				if ( ! is_wp_error( $fresh_jwks ) ) {
+					// Retry decode with fresh JWKS (retry=false prevents infinite loop)
 					return $this->decode_and_verify_jwt( $jwt, false );
 				}
 			}
@@ -318,8 +340,15 @@ class OIDC_Client {
 	/**
 	 * Fetch JWKS from the IdP with caching and integrity protection.
 	 *
-	 * Implements HMAC-based integrity checks to prevent cache poisoning attacks.
-	 * Uses WordPress authentication salts to generate tamper-proof signatures.
+	 * SECURITY: Implements HMAC-based integrity checks to prevent cache poisoning attacks.
+	 * Cache poisoning threat model: If an attacker can write to the WordPress database
+	 * or object cache, they could replace the cached JWKS with their own signing keys.
+	 * This would allow them to forge valid-looking ID tokens and impersonate any user.
+	 *
+	 * Defense: We store an HMAC signature alongside the cached JWKS. The HMAC uses
+	 * WordPress authentication salts (from wp-config.php) as the key, which are not
+	 * stored in the database. An attacker with database access cannot forge a valid
+	 * HMAC without also compromising the wp-config.php file.
 	 *
 	 * @param bool $force_refresh Force fetching fresh JWKS, bypassing cache.
 	 * @return array<string, mixed>|WP_Error JWKS array or error.
@@ -333,15 +362,15 @@ class OIDC_Client {
 
 		$cache_key = 'oidc_jwks_' . md5( $jwks_uri );
 
-		// Check cache first
+		// Check cache first (unless force refresh requested)
 		if ( ! $force_refresh ) {
 			$cached_data = get_transient( $cache_key );
 			if ( $cached_data !== false && is_array( $cached_data ) ) {
-				// Verify integrity of cached data
+				// SECURITY: Verify HMAC signature to ensure cache hasn't been tampered with
 				if ( $this->verify_jwks_integrity( $cached_data ) ) {
 					return $cached_data['jwks'];
 				}
-				// Cache integrity check failed - delete compromised cache
+				// Cache integrity check failed - delete potentially compromised cache and fetch fresh
 				delete_transient( $cache_key );
 			}
 		}
@@ -391,15 +420,21 @@ class OIDC_Client {
 	/**
 	 * Generate HMAC signature for JWKS data.
 	 *
-	 * Uses WordPress authentication salts from wp-config.php to create
-	 * a site-specific, tamper-proof HMAC signature.
+	 * SECURITY: Uses WordPress authentication salts from wp-config.php to create
+	 * a site-specific, tamper-proof HMAC signature. These salts are not stored in
+	 * the database, so an attacker with database access alone cannot forge valid HMACs.
+	 *
+	 * Threat model: An attacker who compromises the database attempts to inject
+	 * malicious JWKS. Without access to wp-config.php, they cannot generate a valid
+	 * HMAC signature, so the tampered cache will be detected and rejected.
 	 *
 	 * @param array<string, mixed> $jwks The JWKS data to sign.
-	 * @return string HMAC signature.
+	 * @return string HMAC-SHA256 signature (64 hex characters).
 	 */
 	private function generate_jwks_hmac( $jwks ) {
 		$data = wp_json_encode( $jwks );
-		// Use WordPress salts to create a site-specific HMAC key
+		// Concatenate WordPress authentication salts to create HMAC key
+		// These constants are defined in wp-config.php and not stored in the database
 		$key  = defined( 'SECURE_AUTH_KEY' ) ? SECURE_AUTH_KEY : '';
 		$key .= defined( 'SECURE_AUTH_SALT' ) ? SECURE_AUTH_SALT : '';
 		return hash_hmac( 'sha256', $data, $key );
@@ -408,11 +443,12 @@ class OIDC_Client {
 	/**
 	 * Verify integrity of cached JWKS data.
 	 *
-	 * Validates that the cached JWKS has not been tampered with by verifying
-	 * its HMAC signature against the stored data.
+	 * SECURITY: Validates that the cached JWKS has not been tampered with by verifying
+	 * its HMAC signature. Uses hash_equals() for timing-safe comparison to prevent
+	 * timing attacks that could leak signature information.
 	 *
 	 * @param array<string, mixed> $cached_data Cached data containing 'jwks' and 'hmac'.
-	 * @return bool True if integrity check passes, false otherwise.
+	 * @return bool True if integrity check passes, false if tampered or malformed.
 	 */
 	private function verify_jwks_integrity( $cached_data ) {
 		if ( ! isset( $cached_data['jwks'] ) || ! isset( $cached_data['hmac'] ) ) {
@@ -420,6 +456,7 @@ class OIDC_Client {
 		}
 
 		$expected_hmac = $this->generate_jwks_hmac( $cached_data['jwks'] );
+		// Use hash_equals() for timing-safe comparison (prevents timing attacks)
 		return hash_equals( $expected_hmac, $cached_data['hmac'] );
 	}
 

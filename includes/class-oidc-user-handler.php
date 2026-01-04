@@ -41,39 +41,44 @@ class OIDC_User_Handler {
 	/**
 	 * Get an existing WordPress user or create a new one based on OIDC claims.
 	 *
-	 * User lookup priority:
-	 * 1. By OIDC subject identifier (stored in user meta)
-	 * 2. By email address (links existing account to OIDC)
-	 * 3. Create new user (if enabled in settings)
+	 * User lookup strategy and priority (ensures consistent identity mapping):
+	 * 1. By OIDC subject identifier (stored in user meta) - most reliable, IdP guarantees uniqueness
+	 * 2. By email address (links existing account to OIDC) - convenience for existing users
+	 * 3. Create new user (if enabled in settings) - first-time OIDC users
 	 *
 	 * @param array<string, mixed> $id_token_claims Claims from the ID token.
 	 * @param array<string, mixed> $userinfo        Additional claims from userinfo endpoint.
 	 * @return WP_User|WP_Error WordPress user object or error.
 	 */
 	public function get_or_create_user( array $id_token_claims, array $userinfo = array() ) {
-		// Combine claims from both sources (userinfo takes precedence)
+		// Combine claims from both sources (userinfo takes precedence for overlapping keys)
+		// This allows userinfo endpoint to provide more detailed/updated information
 		$claims = array_merge( $id_token_claims, $userinfo );
 
-		// The 'sub' claim is the unique identifier from the IdP
+		// The 'sub' (subject) claim is the unique, persistent identifier from the IdP
+		// It never changes for a user, even if they change email/username at the IdP
 		$subject = isset( $claims['sub'] ) ? $claims['sub'] : null;
 
 		if ( empty( $subject ) ) {
 			return new WP_Error( 'oidc_error', __( 'Missing subject claim in token.', 'secure-oidc-login' ) );
 		}
 
-		// First, try to find user by their OIDC subject identifier
+		// Step 1: Try to find user by their OIDC subject identifier (stored in oidc_subject user meta)
+		// This is the most reliable lookup method as 'sub' is guaranteed unique and immutable
 		$user = $this->get_user_by_oidc_subject( $subject );
 
 		if ( $user ) {
+			// Returning user: Update their profile with latest IdP data
 			$this->update_user_from_claims( $user, $claims );
 			return $user;
 		}
 
-		// Try to find and link existing user by email
+		// Step 2: Try to find and link existing WordPress user by email address
+		// This allows existing WordPress users to seamlessly link to OIDC authentication
 		$email = $this->get_claim_value( $claims, 'email_claim', 'email' );
 
 		if ( ! empty( $email ) ) {
-			// Check if email verification is required
+			// SECURITY: Check if email verification is required before linking accounts
 			$require_verified_email = $this->get_setting( 'require_verified_email' );
 
 			// Default to true if not set (secure by default)
@@ -82,10 +87,19 @@ class OIDC_User_Handler {
 			}
 
 			if ( $require_verified_email ) {
+				// SECURITY: Verify email_verified claim to prevent account takeover attacks.
+				// Threat model: An attacker registers a malicious IdP account using a victim's
+				// email address (without verifying it). If we link accounts based on unverified
+				// emails, the attacker gains access to the victim's WordPress account.
+				// Defense: Require email_verified=true from the IdP before account linking.
+				// NOTE: Some major IdP providers (e.g., certain configurations) may not verify
+				// emails by default. Check your IdP's email verification settings.
 				// Flexible validation: accepts boolean true, string "true"/"1", or integer 1
 				$email_verified = $this->is_email_verified( $claims );
 
 				if ( ! $email_verified ) {
+					// SECURITY WARNING: If this check is disabled, account takeover is possible
+					// through unverified email addresses at the IdP
 					return new WP_Error(
 						'oidc_error',
 						__( 'Cannot link account: email address not verified by identity provider.', 'secure-oidc-login' )
@@ -153,7 +167,13 @@ class OIDC_User_Handler {
 		$user_data = array(
 			'user_login'   => $username,
 			'user_email'   => $email,
-			'user_pass'    => wp_generate_password( 32, true, true ), // Random password (user authenticates via OIDC)
+			// SECURITY: Generate a strong random password that the user will never know or use.
+			// Users authenticate via OIDC only, not passwords. This prevents:
+			// 1. Password-based brute force attacks on OIDC-created accounts
+			// 2. Credential stuffing (reusing passwords from other sites)
+			// 3. Social engineering attacks to obtain passwords
+			// The password is stored in hashed form in the database and provides no value to attackers.
+			'user_pass'    => wp_generate_password( 32, true, true ),
 			'first_name'   => $this->get_claim_value( $claims, 'first_name_claim', 'given_name' ),
 			'last_name'    => $this->get_claim_value( $claims, 'last_name_claim', 'family_name' ),
 			'display_name' => $this->generate_display_name( $claims ),
@@ -233,10 +253,12 @@ class OIDC_User_Handler {
 	 * @return string The generated username.
 	 */
 	private function generate_username( array $claims ): string {
-		// Try the configured username claim first
+		// Step 1: Try the configured username claim first (most IdP-friendly)
+		// This respects the IdP's intended username for the user
 		$username = $this->get_claim_value( $claims, 'username_claim', 'preferred_username' );
 
-		// Fall back to email prefix
+		// Step 2: Fall back to email prefix if username claim is empty
+		// Extract part before @ sign (e.g., "john.doe@example.com" -> "john.doe")
 		if ( empty( $username ) ) {
 			$email = $this->get_claim_value( $claims, 'email_claim', 'email' );
 			if ( ! empty( $email ) ) {
@@ -244,14 +266,19 @@ class OIDC_User_Handler {
 			}
 		}
 
-		// Fall back to subject identifier
+		// Step 3: Fall back to subject identifier if email not available
+		// Use first 8 characters of sub claim to keep username readable
+		// Sub is guaranteed to exist (validated earlier in get_or_create_user)
 		if ( empty( $username ) ) {
 			$username = isset( $claims['sub'] ) ? 'user_' . substr( $claims['sub'], 0, 8 ) : 'oidc_user';
 		}
 
-		// Sanitize for WordPress username requirements
+		// Step 4: Sanitize for WordPress username requirements (alphanumeric, underscore, dash, period, @)
+		// The strict=true parameter removes special characters and ensures compatibility
 		$username = sanitize_user( $username, true );
 
+		// Step 5: Final fallback if sanitization resulted in empty string
+		// This can happen if the username contained only special characters
 		if ( empty( $username ) ) {
 			$username = 'oidc_user_' . wp_generate_password( 6, false );
 		}
@@ -262,13 +289,19 @@ class OIDC_User_Handler {
 	/**
 	 * Ensure a username is unique by appending a counter if necessary.
 	 *
+	 * Handles username collisions when multiple OIDC users would generate the same
+	 * WordPress username (e.g., two users with email john@company1.com and john@company2.com
+	 * both map to username "john"). Appends _1, _2, etc. until a unique username is found.
+	 *
 	 * @param string $username The desired username.
-	 * @return string A unique username.
+	 * @return string A unique username (original or with counter suffix).
 	 */
 	private function ensure_unique_username( $username ) {
 		$original_username = $username;
 		$counter           = 1;
 
+		// Loop until we find an available username
+		// username_exists() checks the wp_users table for existing usernames
 		while ( username_exists( $username ) ) {
 			$username = $original_username . '_' . $counter;
 			++$counter;

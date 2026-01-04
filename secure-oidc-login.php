@@ -22,8 +22,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+// Plugin version constant - used for cache busting and compatibility checks
 define( 'SECURE_OIDC_LOGIN_VERSION', '0.3.0' );
+// Plugin directory path constant - used for including files (has trailing slash)
 define( 'SECURE_OIDC_LOGIN_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
+// Plugin URL constant - used for enqueueing assets (has trailing slash)
 define( 'SECURE_OIDC_LOGIN_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 
 // Load Composer dependencies if not already loaded by another plugin
@@ -119,7 +122,7 @@ class Secure_OIDC_Login {
 		}
 
 		// Fall back to database value
-		$setting = isset( $options[ $option_key ] ) ? (string) $options[ $option_key ] : '';
+		$setting = (string) ( $options[ $option_key ] ?? '' );
 
 		// Allow filtering for advanced use cases
 		return apply_filters( 'secure_oidc_login_setting_' . $option_key, $setting, $option_key );
@@ -186,8 +189,11 @@ class Secure_OIDC_Login {
 		}
 		$login_url = add_query_arg( 'oidc_login', '1', wp_login_url() );
 
-		// Check if native login is disabled
-		$disable_native = ! empty( $options['disable_native_login'] ) && ! $this->is_emergency_bypass_active();
+		// Check if native login is disabled (keep if-then for clarity)
+		$disable_native = false;
+		if ( ! empty( $options['disable_native_login'] ) && ! $this->is_emergency_bypass_active() ) {
+			$disable_native = true;
+		}
 
 		if ( $disable_native ) {
 			// OIDC-only mode: Display button prominently (replaces form fields)
@@ -221,6 +227,11 @@ class Secure_OIDC_Login {
 
 	/**
 	 * Check if emergency bypass is active via URL parameter.
+	 *
+	 * SECURITY WARNING: This bypass mechanism allows administrators to regain
+	 * access if OIDC configuration fails. However, it weakens the OIDC-only
+	 * enforcement and should be used only for emergency access. The bypass
+	 * is not password-protected, so ?native=1 URL is the only barrier.
 	 *
 	 * Checks both GET and POST parameters to handle the case where the login
 	 * form is submitted (POST) after loading the page with ?native=1 (GET).
@@ -341,15 +352,26 @@ class Secure_OIDC_Login {
 			wp_die( __( 'OIDC is not properly configured.', 'secure-oidc-login' ) );
 		}
 
-		// State parameter prevents CSRF attacks
+		// SECURITY: State parameter prevents CSRF attacks by linking the callback
+		// to this specific authorization request. Attackers cannot trick users into
+		// authenticating with an attacker-controlled account (session fixation).
+		// Stored as transient for 5 minutes (300 seconds).
 		$state = wp_generate_password( 32, false );
 		set_transient( 'oidc_state_' . $state, true, 300 );
 
-		// Nonce prevents token replay attacks
+		// SECURITY: Nonce prevents token replay attacks. The nonce is embedded in
+		// the ID token by the IdP and must match our expected value. This ensures
+		// the token was issued in response to our specific authentication request.
+		// Stored as transient for 5 minutes (300 seconds).
 		$nonce = wp_generate_password( 32, false );
 		set_transient( 'oidc_nonce_' . $state, $nonce, 300 );
 
-		// PKCE (Proof Key for Code Exchange) prevents authorization code interception
+		// SECURITY: PKCE (Proof Key for Code Exchange) prevents authorization code
+		// interception attacks. Even if an attacker intercepts the authorization code,
+		// they cannot exchange it for tokens without the code_verifier (which never
+		// leaves this server). This protects public clients and adds defense-in-depth
+		// for confidential clients. Per RFC 7636.
+		// Stored as transient for 5 minutes (300 seconds).
 		$code_verifier = $this->generate_code_verifier();
 		set_transient( 'oidc_code_verifier_' . $state, $code_verifier, 300 );
 		$code_challenge = $this->generate_code_challenge( $code_verifier );
@@ -403,7 +425,12 @@ class Secure_OIDC_Login {
 
 		// Check for errors returned by the IdP
 		if ( ! empty( $_GET['error'] ) ) {
-			$error_description = ! empty( $_GET['error_description'] ) ? sanitize_text_field( $_GET['error_description'] ) : sanitize_text_field( $_GET['error'] );
+			// Keep if-then for nested condition clarity
+			if ( ! empty( $_GET['error_description'] ) ) {
+				$error_description = sanitize_text_field( $_GET['error_description'] );
+			} else {
+				$error_description = sanitize_text_field( $_GET['error'] );
+			}
 			$this->handle_error( $error_description );
 			return;
 		}
@@ -455,12 +482,18 @@ class Secure_OIDC_Login {
 			return;
 		}
 
-		// Store tokens for single logout support (encrypt at rest)
+		// SECURITY: Store tokens encrypted at rest to protect against database compromises.
+		// JWTs contain sensitive user information and session identifiers. If the database
+		// is leaked, unencrypted tokens could allow session hijacking or information disclosure.
+		// We use AES-256-GCM authenticated encryption to ensure both confidentiality and integrity.
 		$options = get_option( 'secure_oidc_login_settings' );
 
+		// Encrypt ID token before storing in user meta
 		$id_token_to_store = $tokens['id_token'];
 		$encrypted_id      = OIDC_Token_Crypto::encrypt( $id_token_to_store );
 		if ( is_wp_error( $encrypted_id ) ) {
+			// Gracefully degrade: if encryption fails, log error but continue authentication
+			// The token won't be encrypted, but single logout will still work
 			OIDC_Token_Crypto::log_error( 'ID token encryption failed: ' . $encrypted_id->get_error_message() );
 		} else {
 			$id_token_to_store = $encrypted_id;
@@ -468,6 +501,7 @@ class Secure_OIDC_Login {
 		update_user_meta( $user->ID, 'oidc_id_token', $id_token_to_store );
 
 		// Persist refresh token only when single logout is enabled
+		// Refresh tokens are more sensitive than ID tokens as they can be used to obtain new access tokens
 		if ( ! empty( $tokens['refresh_token'] ) && ! empty( $options['enable_single_logout'] ) ) {
 			$refresh_token_to_store = $tokens['refresh_token'];
 			$encrypted_refresh      = OIDC_Token_Crypto::encrypt( $refresh_token_to_store );
@@ -560,19 +594,31 @@ class Secure_OIDC_Login {
 	/**
 	 * Generate a cryptographically secure PKCE code verifier.
 	 *
-	 * @return string Base64url-encoded random string.
+	 * Uses base64url encoding (not standard base64) per RFC 7636 section 4.1.
+	 * Base64url uses '-' and '_' instead of '+' and '/' and omits padding '='.
+	 * This makes the verifier URL-safe for transmission in query parameters.
+	 *
+	 * @return string Base64url-encoded random string (43 characters, 256 bits of entropy).
 	 */
 	private function generate_code_verifier() {
+		// Generate 32 random bytes (256 bits)
+		// Base64url encode: replace +/= with -_
 		return rtrim( strtr( base64_encode( random_bytes( 32 ) ), '+/', '-_' ), '=' );
 	}
 
 	/**
 	 * Generate a PKCE code challenge from the verifier using SHA-256.
 	 *
+	 * Uses base64url encoding (not standard base64) per RFC 7636 section 4.2.
+	 * The challenge is sent to the IdP during authorization, while the verifier
+	 * is kept secret and sent during token exchange to prove we initiated the request.
+	 *
 	 * @param string $verifier The code verifier.
-	 * @return string Base64url-encoded SHA-256 hash of the verifier.
+	 * @return string Base64url-encoded SHA-256 hash of the verifier (43 characters).
 	 */
 	private function generate_code_challenge( $verifier ) {
+		// SHA-256 hash the verifier (returns 32 bytes when $binary = true)
+		// Base64url encode: replace +/= with -_
 		return rtrim( strtr( base64_encode( hash( 'sha256', $verifier, true ) ), '+/', '-_' ), '=' );
 	}
 
