@@ -760,15 +760,17 @@ class OIDC_Admin {
 			wp_send_json_error( $response->get_error_message() );
 		}
 
-		$status_code  = wp_remote_retrieve_response_code( $response );
+		$status_code = wp_remote_retrieve_response_code( $response );
 
 		if ( $status_code !== 200 ) {
 			wp_send_json_error( __( 'Failed to fetch discovery document.', 'secure-oidc-login' ) );
 		}
 
-		$body          = wp_remote_retrieve_body( $response );
-		$content_type  = wp_remote_retrieve_header( $response, 'content-type' );
-		$content_type  = false === $content_type ? '' : (string) $content_type;
+		$body         = wp_remote_retrieve_body( $response );
+		$content_type = wp_remote_retrieve_header( $response, 'content-type' );
+		if ( is_array( $content_type ) ) {
+			$content_type = $content_type[0] ?? '';
+		}
 		if ( stripos( $content_type, 'application/json' ) === false ) {
 			wp_send_json_error( __( 'Discovery response was not JSON. Please verify the identity provider configuration.', 'secure-oidc-login' ) );
 		}

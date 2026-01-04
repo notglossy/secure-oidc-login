@@ -152,10 +152,12 @@ class OIDC_Client {
 			);
 		}
 
-		$status_code   = wp_remote_retrieve_response_code( $response );
-		$body          = wp_remote_retrieve_body( $response );
-		$content_type  = wp_remote_retrieve_header( $response, 'content-type' );
-		$content_type  = false === $content_type ? '' : (string) $content_type;
+		$status_code  = wp_remote_retrieve_response_code( $response );
+		$body         = wp_remote_retrieve_body( $response );
+		$content_type = wp_remote_retrieve_header( $response, 'content-type' );
+		if ( is_array( $content_type ) ) {
+			$content_type = $content_type[0] ?? '';
+		}
 
 		if ( stripos( $content_type, 'application/json' ) === false ) {
 			return $this->handle_error(
@@ -509,7 +511,9 @@ class OIDC_Client {
 		$status_code  = wp_remote_retrieve_response_code( $response );
 		$body         = wp_remote_retrieve_body( $response );
 		$content_type = wp_remote_retrieve_header( $response, 'content-type' );
-		$content_type = false === $content_type ? '' : (string) $content_type;
+		if ( is_array( $content_type ) ) {
+			$content_type = $content_type[0] ?? '';
+		}
 
 		if ( stripos( $content_type, 'application/json' ) === false ) {
 			return $this->handle_error(
@@ -590,10 +594,12 @@ class OIDC_Client {
 			);
 		}
 
-		$status_code   = wp_remote_retrieve_response_code( $response );
-		$body          = wp_remote_retrieve_body( $response );
-		$content_type  = wp_remote_retrieve_header( $response, 'content-type' );
-		$content_type  = false === $content_type ? '' : (string) $content_type;
+		$status_code  = wp_remote_retrieve_response_code( $response );
+		$body         = wp_remote_retrieve_body( $response );
+		$content_type = wp_remote_retrieve_header( $response, 'content-type' );
+		if ( is_array( $content_type ) ) {
+			$content_type = $content_type[0] ?? '';
+		}
 
 		if ( stripos( $content_type, 'application/json' ) === false ) {
 			return $this->handle_error(
@@ -653,7 +659,9 @@ class OIDC_Client {
 		$status_code  = wp_remote_retrieve_response_code( $response );
 		$body         = wp_remote_retrieve_body( $response );
 		$content_type = wp_remote_retrieve_header( $response, 'content-type' );
-		$content_type = false === $content_type ? '' : (string) $content_type;
+		if ( is_array( $content_type ) ) {
+			$content_type = $content_type[0] ?? '';
+		}
 
 		if ( stripos( $content_type, 'application/json' ) === false ) {
 			return new WP_Error(
