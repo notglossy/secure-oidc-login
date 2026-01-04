@@ -46,6 +46,41 @@ class OIDC_Client {
 	}
 
 	/**
+	 * Centralized error handling to prevent information disclosure.
+	 *
+	 * Logs detailed error information for debugging while returning generic
+	 * messages to users to prevent leaking sensitive system information.
+	 *
+	 * @param string $context       Error context (e.g., 'token_exchange', 'userinfo').
+	 * @param string $detailed_error Detailed error message for logging.
+	 * @param string $generic_message Generic user-facing error message.
+	 * @return WP_Error WordPress error object with sanitized message.
+	 */
+	private function handle_error( $context, $detailed_error, $generic_message ) {
+		// Log detailed error for debugging (sanitize for log safety)
+		$log_message = sprintf(
+			'OIDC Error [%s]: %s',
+			$context,
+			$detailed_error
+		);
+		error_log( $log_message );
+
+		// If WP_DEBUG is enabled, provide more context (but not full internal details)
+		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+			$debug_message = sprintf(
+				/* translators: 1: Generic error message, 2: Error context */
+				__( '%1$s (Context: %2$s)', 'secure-oidc-login' ),
+				$generic_message,
+				$context
+			);
+			return new WP_Error( 'oidc_error', $debug_message );
+		}
+
+		// Return generic error to users in production
+		return new WP_Error( 'oidc_error', $generic_message );
+	}
+
+	/**
 	 * Exchange an authorization code for access and ID tokens.
 	 *
 	 * Performs the token endpoint request as part of the authorization code flow.
@@ -98,7 +133,11 @@ class OIDC_Client {
 		);
 
 		if ( is_wp_error( $response ) ) {
-			return new WP_Error( 'oidc_error', __( 'Failed to connect to token endpoint: ', 'secure-oidc-login' ) . $response->get_error_message() );
+			return $this->handle_error(
+				'token_exchange',
+				'Failed to connect to token endpoint: ' . $response->get_error_message(),
+				__( 'Authentication failed. Please try again.', 'secure-oidc-login' )
+			);
 		}
 
 		$status_code = wp_remote_retrieve_response_code( $response );
@@ -106,8 +145,18 @@ class OIDC_Client {
 		$tokens      = json_decode( $body, true );
 
 		if ( $status_code !== 200 ) {
-			$error_message = isset( $tokens['error_description'] ) ? $tokens['error_description'] : ( isset( $tokens['error'] ) ? $tokens['error'] : __( 'Token exchange failed.', 'secure-oidc-login' ) );
-			return new WP_Error( 'oidc_error', $error_message );
+			// Log detailed IdP error but show generic message to users
+			$detailed_error = sprintf(
+				'Token exchange failed with status %d. IdP error: %s - %s',
+				$status_code,
+				isset( $tokens['error'] ) ? $tokens['error'] : 'unknown',
+				isset( $tokens['error_description'] ) ? $tokens['error_description'] : 'no description'
+			);
+			return $this->handle_error(
+				'token_exchange',
+				$detailed_error,
+				__( 'Authentication failed. Please try again.', 'secure-oidc-login' )
+			);
 		}
 
 		if ( empty( $tokens['access_token'] ) || empty( $tokens['id_token'] ) ) {
@@ -258,7 +307,11 @@ class OIDC_Client {
 			return new WP_Error( 'oidc_error', __( 'ID token not yet valid.', 'secure-oidc-login' ) );
 
 		} catch ( \Exception $e ) {
-			return new WP_Error( 'oidc_error', __( 'Failed to decode ID token: ', 'secure-oidc-login' ) . $e->getMessage() );
+			return $this->handle_error(
+				'jwt_decode',
+				'Failed to decode ID token: ' . $e->getMessage(),
+				__( 'Invalid authentication token. Please try again.', 'secure-oidc-login' )
+			);
 		}
 	}
 
@@ -302,12 +355,20 @@ class OIDC_Client {
 		);
 
 		if ( is_wp_error( $response ) ) {
-			return new WP_Error( 'oidc_error', __( 'Failed to fetch JWKS: ', 'secure-oidc-login' ) . $response->get_error_message() );
+			return $this->handle_error(
+				'jwks_fetch',
+				'Failed to fetch JWKS: ' . $response->get_error_message(),
+				__( 'Authentication configuration error. Please contact the site administrator.', 'secure-oidc-login' )
+			);
 		}
 
 		$status_code = wp_remote_retrieve_response_code( $response );
 		if ( $status_code !== 200 ) {
-			return new WP_Error( 'oidc_error', __( 'Failed to fetch JWKS. HTTP status: ', 'secure-oidc-login' ) . $status_code );
+			return $this->handle_error(
+				'jwks_fetch',
+				'Failed to fetch JWKS. HTTP status: ' . $status_code,
+				__( 'Authentication configuration error. Please contact the site administrator.', 'secure-oidc-login' )
+			);
 		}
 
 		$body = wp_remote_retrieve_body( $response );
@@ -386,14 +447,22 @@ class OIDC_Client {
 		);
 
 		if ( is_wp_error( $response ) ) {
-			return new WP_Error( 'oidc_error', __( 'Failed to connect to userinfo endpoint: ', 'secure-oidc-login' ) . $response->get_error_message() );
+			return $this->handle_error(
+				'userinfo',
+				'Failed to connect to userinfo endpoint: ' . $response->get_error_message(),
+				__( 'Failed to retrieve user information. Please try again.', 'secure-oidc-login' )
+			);
 		}
 
 		$status_code = wp_remote_retrieve_response_code( $response );
 		$body        = wp_remote_retrieve_body( $response );
 
 		if ( $status_code !== 200 ) {
-			return new WP_Error( 'oidc_error', __( 'Failed to retrieve user info.', 'secure-oidc-login' ) );
+			return $this->handle_error(
+				'userinfo',
+				'Userinfo request failed with status ' . $status_code,
+				__( 'Failed to retrieve user information. Please try again.', 'secure-oidc-login' )
+			);
 		}
 
 		$userinfo = json_decode( $body, true );
@@ -448,7 +517,11 @@ class OIDC_Client {
 		);
 
 		if ( is_wp_error( $response ) ) {
-			return $response;
+			return $this->handle_error(
+				'token_refresh',
+				'Failed to connect to token endpoint: ' . $response->get_error_message(),
+				__( 'Session refresh failed. Please log in again.', 'secure-oidc-login' )
+			);
 		}
 
 		$status_code = wp_remote_retrieve_response_code( $response );
@@ -456,8 +529,18 @@ class OIDC_Client {
 		$tokens      = json_decode( $body, true );
 
 		if ( $status_code !== 200 ) {
-			$error_message = isset( $tokens['error_description'] ) ? $tokens['error_description'] : __( 'Token refresh failed.', 'secure-oidc-login' );
-			return new WP_Error( 'oidc_error', $error_message );
+			// Log detailed IdP error but show generic message to users
+			$detailed_error = sprintf(
+				'Token refresh failed with status %d. IdP error: %s - %s',
+				$status_code,
+				isset( $tokens['error'] ) ? $tokens['error'] : 'unknown',
+				isset( $tokens['error_description'] ) ? $tokens['error_description'] : 'no description'
+			);
+			return $this->handle_error(
+				'token_refresh',
+				$detailed_error,
+				__( 'Session refresh failed. Please log in again.', 'secure-oidc-login' )
+			);
 		}
 
 		return $tokens;
