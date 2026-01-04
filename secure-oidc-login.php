@@ -486,7 +486,8 @@ class Secure_OIDC_Login {
 
 		// Redirect to requested page or admin dashboard
 		// Use wp_validate_redirect() to prevent open redirect vulnerabilities
-		$requested_redirect = ! empty( $_GET['redirect_to'] ) ? $_GET['redirect_to'] : '';
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Redirect URL from OAuth callback
+		$requested_redirect = ! empty( $_GET['redirect_to'] ) ? esc_url_raw( wp_unslash( $_GET['redirect_to'] ) ) : '';
 		$redirect_url       = wp_validate_redirect( $requested_redirect, admin_url() );
 
 		wp_safe_redirect( $redirect_url );
