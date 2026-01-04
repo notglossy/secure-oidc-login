@@ -25,8 +25,8 @@ class OIDC_Client {
 	/** @var array<string, mixed> Plugin settings from WordPress options */
 	private $options;
 
-	/** @var int JWKS cache duration in seconds */
-	const JWKS_CACHE_DURATION = 3600;
+	/** @var int JWKS cache duration in seconds (15 minutes to minimize cache poisoning window) */
+	const JWKS_CACHE_DURATION = 900;
 
 	/**
 	 * Initialize the client with plugin settings.
@@ -263,7 +263,10 @@ class OIDC_Client {
 	}
 
 	/**
-	 * Fetch JWKS from the IdP with caching.
+	 * Fetch JWKS from the IdP with caching and integrity protection.
+	 *
+	 * Implements HMAC-based integrity checks to prevent cache poisoning attacks.
+	 * Uses WordPress authentication salts to generate tamper-proof signatures.
 	 *
 	 * @param bool $force_refresh Force fetching fresh JWKS, bypassing cache.
 	 * @return array<string, mixed>|WP_Error JWKS array or error.
@@ -279,9 +282,14 @@ class OIDC_Client {
 
 		// Check cache first
 		if ( ! $force_refresh ) {
-			$cached_jwks = get_transient( $cache_key );
-			if ( $cached_jwks !== false ) {
-				return $cached_jwks;
+			$cached_data = get_transient( $cache_key );
+			if ( $cached_data !== false && is_array( $cached_data ) ) {
+				// Verify integrity of cached data
+				if ( $this->verify_jwks_integrity( $cached_data ) ) {
+					return $cached_data['jwks'];
+				}
+				// Cache integrity check failed - delete compromised cache
+				delete_transient( $cache_key );
 			}
 		}
 
@@ -309,10 +317,49 @@ class OIDC_Client {
 			return new WP_Error( 'oidc_error', __( 'Invalid JWKS response.', 'secure-oidc-login' ) );
 		}
 
-		// Cache the JWKS
-		set_transient( $cache_key, $jwks, self::JWKS_CACHE_DURATION );
+		// Cache the JWKS with integrity protection
+		$cache_data = array(
+			'jwks' => $jwks,
+			'hmac' => $this->generate_jwks_hmac( $jwks ),
+		);
+		set_transient( $cache_key, $cache_data, self::JWKS_CACHE_DURATION );
 
 		return $jwks;
+	}
+
+	/**
+	 * Generate HMAC signature for JWKS data.
+	 *
+	 * Uses WordPress authentication salts from wp-config.php to create
+	 * a site-specific, tamper-proof HMAC signature.
+	 *
+	 * @param array<string, mixed> $jwks The JWKS data to sign.
+	 * @return string HMAC signature.
+	 */
+	private function generate_jwks_hmac( $jwks ) {
+		$data = wp_json_encode( $jwks );
+		// Use WordPress salts to create a site-specific HMAC key
+		$key  = defined( 'SECURE_AUTH_KEY' ) ? SECURE_AUTH_KEY : '';
+		$key .= defined( 'SECURE_AUTH_SALT' ) ? SECURE_AUTH_SALT : '';
+		return hash_hmac( 'sha256', $data, $key );
+	}
+
+	/**
+	 * Verify integrity of cached JWKS data.
+	 *
+	 * Validates that the cached JWKS has not been tampered with by verifying
+	 * its HMAC signature against the stored data.
+	 *
+	 * @param array<string, mixed> $cached_data Cached data containing 'jwks' and 'hmac'.
+	 * @return bool True if integrity check passes, false otherwise.
+	 */
+	private function verify_jwks_integrity( $cached_data ) {
+		if ( ! isset( $cached_data['jwks'] ) || ! isset( $cached_data['hmac'] ) ) {
+			return false;
+		}
+
+		$expected_hmac = $this->generate_jwks_hmac( $cached_data['jwks'] );
+		return hash_equals( $expected_hmac, $cached_data['hmac'] );
 	}
 
 	/**
