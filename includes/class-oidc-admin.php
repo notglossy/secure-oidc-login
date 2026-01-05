@@ -29,6 +29,35 @@ class OIDC_Admin {
 	}
 
 	/**
+	 * Get maximum length limits for input fields.
+	 *
+	 * Defines reasonable maximum lengths for OIDC configuration fields
+	 * to prevent DoS attacks via large inputs and database bloat.
+	 *
+	 * @return array<string, int> Field name to maximum length mapping.
+	 */
+	private function get_max_lengths(): array {
+		return array(
+			'client_id'              => 255,
+			'client_secret'          => 512,
+			'discovery_url'          => 2048,
+			'authorization_endpoint' => 2048,
+			'token_endpoint'         => 2048,
+			'userinfo_endpoint'      => 2048,
+			'end_session_endpoint'   => 2048,
+			'jwks_uri'               => 2048,
+			'issuer'                 => 512,
+			'scope'                  => 512,
+			'login_button_text'      => 100,
+			'username_claim'         => 100,
+			'email_claim'            => 100,
+			'first_name_claim'       => 100,
+			'last_name_claim'        => 100,
+			'default_role'           => 50,
+		);
+	}
+
+	/**
 	 * Add the settings page to the WordPress admin menu.
 	 */
 	public function add_admin_menu(): void {
@@ -348,7 +377,13 @@ class OIDC_Admin {
 			return get_option( 'secure_oidc_login_settings', array() );
 		}
 
+		// Get maximum length limits for validation
+		$max_lengths = $this->get_max_lengths();
+
 		$sanitized = array();
+
+		// Get existing settings to preserve values when validation fails
+		$existing_settings = get_option( 'secure_oidc_login_settings', array() );
 
 		// Text fields - sanitize as plain text
 		$text_fields = array(
@@ -377,11 +412,47 @@ class OIDC_Admin {
 		$checkbox_fields = array( 'enable_single_logout', 'create_users', 'require_verified_email', 'disable_native_login' );
 
 		foreach ( $text_fields as $field ) {
-			$sanitized[ $field ] = sanitize_text_field( $input[ $field ] ?? '' );
+			$value = sanitize_text_field( $input[ $field ] ?? '' );
+
+			// Validate length if max length is defined for this field
+			if ( isset( $max_lengths[ $field ] ) && strlen( $value ) > $max_lengths[ $field ] ) {
+				add_settings_error(
+					'secure_oidc_login_settings',
+					$field . '_too_long',
+					sprintf(
+						/* translators: 1: field name, 2: maximum length */
+						__( '%1$s exceeds maximum length of %2$d characters.', 'secure-oidc-login' ),
+						ucwords( str_replace( '_', ' ', $field ) ),
+						$max_lengths[ $field ]
+					)
+				);
+				// Preserve the existing value if validation fails
+				$sanitized[ $field ] = $existing_settings[ $field ] ?? '';
+			} else {
+				$sanitized[ $field ] = $value;
+			}
 		}
 
 		foreach ( $url_fields as $field ) {
-			$sanitized[ $field ] = esc_url_raw( $input[ $field ] ?? '' );
+			$value = esc_url_raw( $input[ $field ] ?? '' );
+
+			// Validate length if max length is defined for this field
+			if ( isset( $max_lengths[ $field ] ) && strlen( $value ) > $max_lengths[ $field ] ) {
+				add_settings_error(
+					'secure_oidc_login_settings',
+					$field . '_too_long',
+					sprintf(
+						/* translators: 1: field name, 2: maximum length */
+						__( '%1$s exceeds maximum length of %2$d characters.', 'secure-oidc-login' ),
+						ucwords( str_replace( '_', ' ', $field ) ),
+						$max_lengths[ $field ]
+					)
+				);
+				// Preserve the existing value if validation fails
+				$sanitized[ $field ] = $existing_settings[ $field ] ?? '';
+			} else {
+				$sanitized[ $field ] = $value;
+			}
 		}
 
 		foreach ( $checkbox_fields as $field ) {
@@ -525,8 +596,12 @@ class OIDC_Admin {
 		$env_var   = 'SECURE_OIDC_DISCOVERY_URL';
 		$env_value = getenv( $env_var );
 		$has_env   = false !== $env_value && '' !== $env_value;
+
+		// Get maximum length for discovery_url field
+		$max_lengths = $this->get_max_lengths();
+		$maxlength   = isset( $max_lengths['discovery_url'] ) ? $max_lengths['discovery_url'] : 2048;
 		?>
-		<input type="url" id="discovery_url" class="regular-text" placeholder="https://your-idp.com/.well-known/openid-configuration" value="<?php echo esc_attr( $has_env ? $env_value : '' ); ?>">
+		<input type="url" id="discovery_url" class="regular-text" placeholder="https://your-idp.com/.well-known/openid-configuration" value="<?php echo esc_attr( $has_env ? $env_value : '' ); ?>" maxlength="<?php echo esc_attr( (string) $maxlength ); ?>">
 		<button type="button" id="oidc-discover-btn" class="button"><?php _e( 'Discover', 'secure-oidc-login' ); ?></button>
 		<?php if ( $has_env ) : ?>
 			<p class="description" style="color: #2271b1;">
@@ -563,6 +638,13 @@ class OIDC_Admin {
 			$required = 'required';
 		}
 
+		// Get maximum length for this field (client-side validation)
+		$max_lengths = $this->get_max_lengths();
+		$maxlength   = '';
+		if ( isset( $max_lengths[ $field ] ) ) {
+			$maxlength = ' maxlength="' . esc_attr( (string) $max_lengths[ $field ] ) . '"';
+		}
+
 		// Check if this setting is overridden by environment variable
 		// Environment variables take precedence over database settings (see Secure_OIDC_Login::get_setting)
 		// This allows deployments to use .env files or server configuration instead of storing secrets in the database
@@ -576,11 +658,12 @@ class OIDC_Admin {
 		}
 
 		printf(
-			'<input type="%s" name="secure_oidc_login_settings[%s]" value="%s" class="regular-text" %s%s>',
+			'<input type="%s" name="secure_oidc_login_settings[%s]" value="%s" class="regular-text" %s%s%s>',
 			esc_attr( $type ),
 			esc_attr( $field ),
 			esc_attr( $value ),
 			$required,
+			$maxlength,
 			$is_env_overridden ? ' disabled' : ''
 		);
 
@@ -608,6 +691,13 @@ class OIDC_Admin {
 		$field   = $args['field'];
 		$value   = $options[ $field ] ?? '';
 
+		// Get maximum length for this field (client-side validation)
+		$max_lengths = $this->get_max_lengths();
+		$maxlength   = '';
+		if ( isset( $max_lengths[ $field ] ) ) {
+			$maxlength = ' maxlength="' . esc_attr( (string) $max_lengths[ $field ] ) . '"';
+		}
+
 		// Check if this setting is overridden by environment variable
 		// Environment variables take precedence over database settings (see Secure_OIDC_Login::get_setting)
 		// This is especially useful for secrets like client_secret to avoid storing them in the database
@@ -621,9 +711,10 @@ class OIDC_Admin {
 		}
 
 		printf(
-			'<input type="password" name="secure_oidc_login_settings[%s]" value="%s" class="regular-text"%s>',
+			'<input type="password" name="secure_oidc_login_settings[%s]" value="%s" class="regular-text"%s%s>',
 			esc_attr( $field ),
 			esc_attr( $value ),
+			$maxlength,
 			$is_env_overridden ? ' disabled' : ''
 		);
 
