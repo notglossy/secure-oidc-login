@@ -142,6 +142,7 @@ class Secure_OIDC_Login {
 		add_action( 'wp_logout', array( $this, 'handle_logout' ), 10, 1 );
 		add_action( 'login_head', array( $this, 'hide_native_login_form' ) );
 		add_filter( 'authenticate', array( $this, 'block_native_authentication' ), 30, 3 );
+		add_filter( 'login_errors', array( $this, 'display_login_errors' ) );
 
 		register_activation_hook( __FILE__, array( $this, 'activate' ) );
 		register_deactivation_hook( __FILE__, array( $this, 'deactivate' ) );
@@ -157,6 +158,9 @@ class Secure_OIDC_Login {
 
 		// Handle OIDC callback from identity provider
 		if ( isset( $_GET['oidc_callback'] ) && $_GET['oidc_callback'] === '1' ) {
+			// Start output buffering to prevent any stray output from blocking redirects
+			// The buffer will be automatically discarded when exit is called
+			ob_start();
 			$this->handle_callback();
 		}
 
@@ -333,6 +337,26 @@ class Secure_OIDC_Login {
 			'oidc_native_login_disabled',
 			__( '<strong>ERROR</strong>: Username/password authentication is disabled. Please use the Single Sign-On button above.', 'secure-oidc-login' )
 		);
+	}
+
+	/**
+	 * Display OIDC-related error messages on the login page.
+	 *
+	 * Filters the login_errors to add OIDC authentication errors passed via
+	 * the oidc_error URL parameter. This ensures users see meaningful error
+	 * messages when authentication fails, rather than a blank page or silent failure.
+	 *
+	 * @param string $errors Existing error messages.
+	 * @return string Updated error messages including OIDC errors.
+	 */
+	public function display_login_errors( $errors ) {
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Reading error message from URL parameter
+		if ( ! empty( $_GET['oidc_error'] ) ) {
+			$oidc_error = sanitize_text_field( wp_unslash( $_GET['oidc_error'] ) );
+			$errors    .= '<strong>' . esc_html__( 'SSO Error', 'secure-oidc-login' ) . ':</strong> ';
+			$errors    .= esc_html( $oidc_error ) . '<br />';
+		}
+		return $errors;
 	}
 
 	/**
@@ -523,6 +547,11 @@ class Secure_OIDC_Login {
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Redirect URL from OAuth callback
 		$requested_redirect = ! empty( $_GET['redirect_to'] ) ? esc_url_raw( wp_unslash( $_GET['redirect_to'] ) ) : '';
 		$redirect_url       = wp_validate_redirect( $requested_redirect, admin_url() );
+
+		// Ensure redirect URL is not empty (fallback to admin if wp_validate_redirect returns empty)
+		if ( empty( $redirect_url ) ) {
+			$redirect_url = admin_url();
+		}
 
 		// Use wp_redirect() since we've already validated the URL with wp_validate_redirect()
 		// wp_safe_redirect() can fail in some edge cases even with valid URLs

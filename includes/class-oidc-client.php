@@ -158,6 +158,8 @@ class OIDC_Client {
 		if ( is_array( $content_type ) ) {
 			$content_type = $content_type[0] ?? '';
 		}
+		// Ensure content_type is a string for stripos() in PHP 8+
+		$content_type = (string) $content_type;
 
 		if ( stripos( $content_type, 'application/json' ) === false ) {
 			return $this->handle_error(
@@ -514,6 +516,8 @@ class OIDC_Client {
 		if ( is_array( $content_type ) ) {
 			$content_type = $content_type[0] ?? '';
 		}
+		// Ensure content_type is a string for stripos() in PHP 8+
+		$content_type = (string) $content_type;
 
 		if ( stripos( $content_type, 'application/json' ) === false ) {
 			return $this->handle_error(
@@ -600,6 +604,8 @@ class OIDC_Client {
 		if ( is_array( $content_type ) ) {
 			$content_type = $content_type[0] ?? '';
 		}
+		// Ensure content_type is a string for stripos() in PHP 8+
+		$content_type = (string) $content_type;
 
 		if ( stripos( $content_type, 'application/json' ) === false ) {
 			return $this->handle_error(
@@ -662,6 +668,8 @@ class OIDC_Client {
 		if ( is_array( $content_type ) ) {
 			$content_type = $content_type[0] ?? '';
 		}
+		// Ensure content_type is a string for stripos() in PHP 8+
+		$content_type = (string) $content_type;
 
 		if ( stripos( $content_type, 'application/json' ) === false ) {
 			return new WP_Error(
