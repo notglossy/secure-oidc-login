@@ -771,6 +771,8 @@ class OIDC_Admin {
 		if ( is_array( $content_type ) ) {
 			$content_type = $content_type[0] ?? '';
 		}
+		// Ensure content_type is a string for stripos() in PHP 8+
+		$content_type = (string) $content_type;
 		if ( stripos( $content_type, 'application/json' ) === false ) {
 			wp_send_json_error( __( 'Discovery response was not JSON. Please verify the identity provider configuration.', 'secure-oidc-login' ) );
 		}
