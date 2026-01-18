@@ -6,7 +6,7 @@
  * Version: 0.3.1-beta
  * Requires at least: 5.8
  * Tested up to: 6.7
- * Requires PHP: 7.4
+ * Requires PHP: 8.1
  * Author: Not Glossy
  * Author URI: https://github.com/notglossy
  * License: GPL v3
@@ -201,19 +201,24 @@ class Secure_OIDC_Login {
 
 		if ( $disable_native ) {
 			// OIDC-only mode: Display button prominently (replaces form fields)
-			echo '<p class="oidc-button-container" style="text-align: center;">';
-			echo '<a href="' . esc_url( $login_url ) . '" class="button button-primary button-large" style="width: 100%;">';
-			echo esc_html( $button_text );
-			echo '</a>';
-			echo '</p>';
+			?>
+			<p class="oidc-button-container" style="text-align: center;">
+				<a href="<?php echo esc_url( $login_url ); ?>" class="button button-primary button-large" style="width: 100%;">
+					<?php echo esc_html( $button_text ); ?>
+				</a>
+			</p>
+			<?php
 		} else {
 			// Hybrid mode: Display button as alternative
-			echo '<div style="margin: 20px 0; text-align: center;">';
-			echo '<p style="margin-bottom: 10px;">' . esc_html__( 'Or', 'secure-oidc-login' ) . '</p>';
-			echo '<a href="' . esc_url( $login_url ) . '" class="button button-primary button-large" style="width: 100%;">';
-			echo esc_html( $button_text );
-			echo '</a>';
-			echo '</div>';
+			?>
+			<div style="margin: 20px 0; text-align: center;">
+				<p style="margin-bottom: 10px;"><?php echo esc_html__( 'Or', 'secure-oidc-login' ); ?></p>
+					<a href="<?php echo esc_url( $login_url ); ?>" class="button button-primary button-large" style="width: 100%;">
+						<?php echo esc_html( $button_text ); ?>
+					</a>
+				</p>
+			</div>
+			<?php
 		}
 	}
 
@@ -309,9 +314,9 @@ class Secure_OIDC_Login {
 	 * @param WP_User|WP_Error|null $user     User object or error.
 	 * @param string                $username Username or email.
 	 * @param string                $password Password.
-	 * @return WP_User|WP_Error User object or error.
+	 * @return WP_User|WP_Error|null User object or error.
 	 */
-	public function block_native_authentication( $user, $username, $password ) {
+	public function block_native_authentication( $user, $username, $password ): WP_User|WP_Error|null {
 		if ( empty( $username ) || empty( $password ) ) {
 			return $user;
 		}
@@ -349,7 +354,7 @@ class Secure_OIDC_Login {
 	 * @param string $errors Existing error messages.
 	 * @return string Updated error messages including OIDC errors.
 	 */
-	public function display_login_errors( $errors ) {
+	public function display_login_errors( $errors ): string {
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Reading error message from URL parameter
 		if ( ! empty( $_GET['oidc_error'] ) ) {
 			$oidc_error = sanitize_text_field( wp_unslash( $_GET['oidc_error'] ) );
@@ -627,7 +632,7 @@ class Secure_OIDC_Login {
 	 *
 	 * @return string The callback URL to be registered with the IdP.
 	 */
-	public function get_callback_url() {
+	public function get_callback_url(): string {
 		return add_query_arg( 'oidc_callback', '1', home_url( '/' ) );
 	}
 
@@ -640,7 +645,7 @@ class Secure_OIDC_Login {
 	 *
 	 * @return string Base64url-encoded random string (43 characters, 256 bits of entropy).
 	 */
-	private function generate_code_verifier() {
+	private function generate_code_verifier(): string {
 		// Generate 32 random bytes (256 bits)
 		// Base64url encode: replace +/= with -_
 		return rtrim( strtr( base64_encode( random_bytes( 32 ) ), '+/', '-_' ), '=' );
@@ -656,7 +661,7 @@ class Secure_OIDC_Login {
 	 * @param string $verifier The code verifier.
 	 * @return string Base64url-encoded SHA-256 hash of the verifier (43 characters).
 	 */
-	private function generate_code_challenge( $verifier ) {
+	private function generate_code_challenge( $verifier ): string {
 		// SHA-256 hash the verifier (returns 32 bytes when $binary = true)
 		// Base64url encode: replace +/= with -_
 		return rtrim( strtr( base64_encode( hash( 'sha256', $verifier, true ) ), '+/', '-_' ), '=' );

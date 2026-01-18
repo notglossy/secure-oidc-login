@@ -67,7 +67,7 @@ class OIDC_Config {
 	 * @param array<string, mixed> $config Discovery document data.
 	 * @return OIDC_Config|WP_Error Configuration object or error if validation fails.
 	 */
-	public static function from_array( array $config ) {
+	public static function from_array( array $config ): OIDC_Config|WP_Error {
 		// Validate required fields per OIDC Discovery spec
 		if ( empty( $config['issuer'] ) ) {
 			return new WP_Error( 'oidc_error', __( 'Missing required issuer in discovery document.', 'secure-oidc-login' ) );
@@ -272,7 +272,7 @@ class OIDC_Config {
 	 * @param string $key The configuration key.
 	 * @return mixed The configuration value or null if not present.
 	 */
-	public function get_config_value( string $key ) {
+	public function get_config_value( string $key ): mixed {
 		return $this->raw_config[ $key ] ?? null;
 	}
 

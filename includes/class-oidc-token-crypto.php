@@ -87,7 +87,7 @@ class OIDC_Token_Crypto {
 	 * @param string $plaintext Token string to encrypt.
 	 * @return string|WP_Error Encrypted token with v2 prefix or error.
 	 */
-	public static function encrypt( string $plaintext ) {
+	public static function encrypt( string $plaintext ): string|WP_Error {
 		if ( '' === $plaintext ) {
 			return '';
 		}
@@ -140,7 +140,7 @@ class OIDC_Token_Crypto {
 	 * @param string $value Stored token value (encrypted or plaintext).
 	 * @return string|WP_Error Decrypted token, original plaintext, or error on decrypt failure.
 	 */
-	public static function decrypt_if_needed( string $value ) {
+	public static function decrypt_if_needed( string $value ): string|WP_Error {
 		if ( '' === $value ) {
 			return '';
 		}
@@ -162,7 +162,7 @@ class OIDC_Token_Crypto {
 	 * @param string $value Encrypted token with v2 prefix.
 	 * @return string|WP_Error Decrypted token or error.
 	 */
-	private static function decrypt_v2_sodium( string $value ) {
+	private static function decrypt_v2_sodium( string $value ): string|WP_Error {
 		if ( ! self::is_supported() ) {
 			return new WP_Error(
 				'oidc_encryption_unavailable',
@@ -211,7 +211,7 @@ class OIDC_Token_Crypto {
 	 * @param string $value Encrypted token with v1 prefix.
 	 * @return string|WP_Error Decrypted token or error.
 	 */
-	private static function decrypt_v1_openssl( string $value ) {
+	private static function decrypt_v1_openssl( string $value ): string|WP_Error {
 		if ( ! self::is_openssl_supported() ) {
 			return new WP_Error(
 				'oidc_encryption_unavailable',

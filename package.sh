@@ -56,6 +56,9 @@ cp secure-oidc-login.php "${TEMP_DIR}/"
 # Copy includes directory
 cp -r includes "${TEMP_DIR}/"
 
+# Copy assets directory (JavaScript, CSS)
+cp -r assets "${TEMP_DIR}/"
+
 # Copy vendor directory (production dependencies)
 cp -r vendor "${TEMP_DIR}/"
 

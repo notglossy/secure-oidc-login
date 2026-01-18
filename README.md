@@ -15,7 +15,7 @@ A secure OpenID Connect (OIDC) authentication plugin for WordPress that allows u
 ## Requirements
 
 - WordPress 5.8 or higher
-- PHP 7.4 or higher
+- PHP 8.1 or higher
 - HTTPS enabled (required for secure authentication)
 - Composer (for development and building)
 
@@ -50,7 +50,7 @@ This plugin uses Composer for dependency management. To create a distributable p
 
 ### Prerequisites
 
-- PHP 7.4 or higher
+- PHP 8.1 or higher
 - [Composer](https://getcomposer.org/)
 - `zip` command-line utility
 

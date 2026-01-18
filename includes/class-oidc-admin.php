@@ -26,6 +26,46 @@ class OIDC_Admin {
 		add_action( 'admin_init', array( $this, 'register_settings' ) );
 		add_action( 'admin_notices', array( $this, 'admin_notices' ) );
 		add_action( 'wp_ajax_oidc_discover', array( $this, 'ajax_discover' ) );
+		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_scripts' ) );
+	}
+
+	/**
+	 * Enqueue admin scripts and styles for the settings page.
+	 *
+	 * @param string $hook The current admin page hook.
+	 */
+	public function enqueue_admin_scripts( string $hook ): void {
+		// Only load on our settings page
+		if ( 'settings_page_secure-oidc-login' !== $hook ) {
+			return;
+		}
+
+		// Enqueue the admin settings JavaScript
+		wp_enqueue_script(
+			'oidc-admin-settings',
+			SECURE_OIDC_LOGIN_PLUGIN_URL . 'assets/js/admin-settings.js',
+			array( 'jquery' ),
+			SECURE_OIDC_LOGIN_VERSION,
+			true
+		);
+
+		// Pass dynamic values to JavaScript
+		wp_localize_script(
+			'oidc-admin-settings',
+			'oidcAdminSettings',
+			array(
+				'ajaxUrl' => admin_url( 'admin-ajax.php' ),
+				'nonce'   => wp_create_nonce( 'oidc_discover' ),
+				'i18n'    => array(
+					'enterDiscoveryUrl'      => __( 'Please enter a discovery URL.', 'secure-oidc-login' ),
+					'discovering'            => __( 'Discovering...', 'secure-oidc-login' ),
+					'discover'               => __( 'Discover', 'secure-oidc-login' ),
+					'discoverySuccess'       => __( 'Configuration discovered successfully!', 'secure-oidc-login' ),
+					'discoveryFailed'        => __( 'Discovery failed.', 'secure-oidc-login' ),
+					'discoveryRequestFailed' => __( 'Discovery request failed.', 'secure-oidc-login' ),
+				),
+			)
+		);
 	}
 
 	/**
@@ -481,10 +521,10 @@ class OIDC_Admin {
 			<!-- Display the callback URL that needs to be registered with the IdP -->
 			<div class="notice notice-info">
 				<p>
-					<strong><?php _e( 'Callback URL:', 'secure-oidc-login' ); ?></strong>
+					<strong><?php esc_html_e( 'Callback URL:', 'secure-oidc-login' ); ?></strong>
 					<code><?php echo esc_html( $callback_url ); ?></code>
 				</p>
-				<p class="description"><?php _e( 'Use this URL as the redirect URI when configuring your identity provider.', 'secure-oidc-login' ); ?></p>
+				<p class="description"><?php esc_html_e( 'Use this URL as the redirect URI when configuring your identity provider.', 'secure-oidc-login' ); ?></p>
 			</div>
 
 			<form action="options.php" method="post">
@@ -495,75 +535,6 @@ class OIDC_Admin {
 				?>
 			</form>
 		</div>
-
-		<!-- JavaScript for OIDC discovery auto-population -->
-		<script>
-		jQuery(document).ready(function($) {
-			// Handle click on "Discover" button
-			$('#oidc-discover-btn').on('click', function(e) {
-				e.preventDefault();
-				var discoveryUrl = $('#discovery_url').val();
-
-				// Validate that user entered a discovery URL
-				if (!discoveryUrl) {
-					alert('<?php _e( 'Please enter a discovery URL.', 'secure-oidc-login' ); ?>');
-					return;
-				}
-
-				// Update button state to show discovery in progress
-				$(this).prop('disabled', true).text('<?php _e( 'Discovering...', 'secure-oidc-login' ); ?>');
-
-				// Fetch the OIDC discovery document from the IdP via AJAX
-				// This calls ajax_discover() which fetches .well-known/openid-configuration
-				$.ajax({
-					url: ajaxurl,
-					type: 'POST',
-					data: {
-						action: 'oidc_discover',
-						discovery_url: discoveryUrl,
-						nonce: '<?php echo wp_create_nonce( 'oidc_discover' ); ?>'
-					},
-					success: function(response) {
-						if (response.success) {
-							// Auto-populate endpoint fields from discovery document
-							// Each endpoint is optional in the OIDC spec, so we check before populating
-							var config = response.data;
-							if (config.authorization_endpoint) {
-								$('input[name="secure_oidc_login_settings[authorization_endpoint]"]').val(config.authorization_endpoint);
-							}
-							if (config.token_endpoint) {
-								$('input[name="secure_oidc_login_settings[token_endpoint]"]').val(config.token_endpoint);
-							}
-							if (config.userinfo_endpoint) {
-								$('input[name="secure_oidc_login_settings[userinfo_endpoint]"]').val(config.userinfo_endpoint);
-							}
-							if (config.end_session_endpoint) {
-								$('input[name="secure_oidc_login_settings[end_session_endpoint]"]').val(config.end_session_endpoint);
-							}
-							if (config.jwks_uri) {
-								$('input[name="secure_oidc_login_settings[jwks_uri]"]').val(config.jwks_uri);
-							}
-							if (config.issuer) {
-								$('input[name="secure_oidc_login_settings[issuer]"]').val(config.issuer);
-							}
-							alert('<?php _e( 'Configuration discovered successfully!', 'secure-oidc-login' ); ?>');
-						} else {
-							// Discovery failed - show error message from server
-							alert(response.data || '<?php _e( 'Discovery failed.', 'secure-oidc-login' ); ?>');
-						}
-					},
-					error: function() {
-						// Network error or server error
-						alert('<?php _e( 'Discovery request failed.', 'secure-oidc-login' ); ?>');
-					},
-					complete: function() {
-						// Re-enable button whether success or failure
-						$('#oidc-discover-btn').prop('disabled', false).text('<?php _e( 'Discover', 'secure-oidc-login' ); ?>');
-					}
-				});
-			});
-		});
-		</script>
 		<?php
 	}
 
@@ -602,7 +573,7 @@ class OIDC_Admin {
 		$maxlength   = isset( $max_lengths['discovery_url'] ) ? $max_lengths['discovery_url'] : 2048;
 		?>
 		<input type="url" id="discovery_url" class="regular-text" placeholder="https://your-idp.com/.well-known/openid-configuration" value="<?php echo esc_attr( $has_env ? $env_value : '' ); ?>" maxlength="<?php echo esc_attr( (string) $maxlength ); ?>">
-		<button type="button" id="oidc-discover-btn" class="button"><?php _e( 'Discover', 'secure-oidc-login' ); ?></button>
+		<button type="button" id="oidc-discover-btn" class="button"><?php esc_html_e( 'Discover', 'secure-oidc-login' ); ?></button>
 		<?php if ( $has_env ) : ?>
 			<p class="description" style="color: #2271b1;">
 				<?php
@@ -614,7 +585,7 @@ class OIDC_Admin {
 				?>
 			</p>
 		<?php else : ?>
-			<p class="description"><?php _e( 'Enter your identity provider\'s discovery URL to auto-populate endpoints.', 'secure-oidc-login' ); ?></p>
+			<p class="description"><?php esc_html_e( 'Enter your identity provider\'s discovery URL to auto-populate endpoints.', 'secure-oidc-login' ); ?></p>
 		<?php endif; ?>
 		<?php
 	}
@@ -765,17 +736,14 @@ class OIDC_Admin {
 
 		// Build the dropdown manually to have full control over the name attribute
 		$field_name = 'secure_oidc_login_settings[' . esc_attr( $field ) . ']';
-
-		echo '<select name="' . esc_attr( $field_name ) . '" id="' . esc_attr( $field ) . '">';
-
-		wp_dropdown_roles( $value );
-
-		echo '</select>';
-
-		printf(
-			'<p class="description">%s</p>',
-			esc_html__( 'Role assigned to new users created via OIDC authentication.', 'secure-oidc-login' )
-		);
+		?>
+		<select name="<?php echo esc_attr( $field_name ); ?>" id="<?php echo esc_attr( $field ); ?>">
+			<?php wp_dropdown_roles( $value ); ?>
+		</select>
+		<p class="description">
+			<?php esc_html_e( 'Role assigned to new users created via OIDC authentication.', 'secure-oidc-login' ); ?>
+		</p>
+		<?php
 	}
 
 	/**
@@ -796,9 +764,13 @@ class OIDC_Admin {
 		$token_endpoint         = Secure_OIDC_Login::get_setting( 'token_endpoint', $options );
 
 		if ( empty( $client_id ) || empty( $authorization_endpoint ) || empty( $token_endpoint ) ) {
-			echo '<div class="notice notice-warning"><p>';
-			_e( 'OIDC Authentication is not fully configured. Please fill in the required fields.', 'secure-oidc-login' );
-			echo '</p></div>';
+			?>
+			<div class="notice notice-warning">
+				<p>
+					<?php esc_html_e( 'OIDC Authentication is not fully configured. Please fill in the required fields.', 'secure-oidc-login' ); ?>
+				</p>
+			</div>
+			<?php
 		}
 
 		// Check if native login is disabled
@@ -806,17 +778,28 @@ class OIDC_Admin {
 
 		if ( $disable_native_login ) {
 			if ( empty( $client_id ) || empty( $authorization_endpoint ) || empty( $token_endpoint ) ) {
-				echo '<div class="notice notice-error"><p>';
-				_e( '<strong>WARNING:</strong> Native login is disabled but OIDC is not fully configured. Users may be locked out. Configure OIDC or disable "Disable Native Login" immediately.', 'secure-oidc-login' );
-				echo '</p></div>';
+				?>
+				<div class="notice notice-error">
+					<p>
+						<strong><?php esc_html_e( 'WARNING:', 'secure-oidc-login' ); ?></strong>
+						<?php esc_html_e( 'Native login is disabled but OIDC is not fully configured. Users may be locked out. Configure OIDC or disable "Disable Native Login" immediately.', 'secure-oidc-login' ); ?>
+					</p>
+				</div>
+				<?php
 			} else {
-				echo '<div class="notice notice-info"><p>';
-				printf(
-					/* translators: %s: emergency login URL */
-					__( 'Native login is disabled. Emergency admin access: <code>%s</code>', 'secure-oidc-login' ),
-					esc_html( wp_login_url() . '?native=1' )
-				);
-				echo '</p></div>';
+				?>
+				<div class="notice notice-info">
+					<p>
+						<?php
+						printf(
+							/* translators: %s: emergency login URL */
+							esc_html__( 'Native login is disabled. Emergency admin access: %s', 'secure-oidc-login' ),
+							'<code>' . esc_html( wp_login_url() . '?native=1' ) . '</code>'
+						);
+						?>
+					</p>
+				</div>
+				<?php
 			}
 		}
 	}
