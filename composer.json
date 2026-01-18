@@ -3,7 +3,7 @@
     "description": "OpenID Connect authentication plugin for WordPress",
     "type": "wordpress-plugin",
     "require": {
-        "php": ">=7.4",
+        "php": ">=8.1",
         "firebase/php-jwt": "^6.10"
     },
     "require-dev": {

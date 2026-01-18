@@ -88,7 +88,7 @@ class OIDC_User_Info {
 	 * @param array<string, mixed> $userinfo UserInfo endpoint response data.
 	 * @return OIDC_User_Info|WP_Error UserInfo object or error if validation fails.
 	 */
-	public static function from_array( array $userinfo ) {
+	public static function from_array( array $userinfo ): OIDC_User_Info|WP_Error {
 		// Validate required sub claim
 		if ( empty( $userinfo['sub'] ) ) {
 			return new WP_Error( 'oidc_error', __( 'Missing required sub claim in UserInfo.', 'secure-oidc-login' ) );
@@ -296,7 +296,7 @@ class OIDC_User_Info {
 	 * @param string $claim_name The claim name.
 	 * @return mixed The claim value or null if not present.
 	 */
-	public function get_claim( string $claim_name ) {
+	public function get_claim( string $claim_name ): mixed {
 		return $this->raw_info[ $claim_name ] ?? null;
 	}
 

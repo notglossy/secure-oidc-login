@@ -19,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 class OIDC_User_Handler {
 	/** @var array<string, mixed> Plugin settings from WordPress options */
-	private $options;
+	private array $options;
 
 	/**
 	 * Initialize the handler with plugin settings.
@@ -34,7 +34,7 @@ class OIDC_User_Handler {
 	 * @param string $key The setting key to retrieve.
 	 * @return string The setting value.
 	 */
-	private function get_setting( $key ) {
+	private function get_setting( $key ): string {
 		return Secure_OIDC_Login::get_setting( $key, $this->options );
 	}
 
@@ -50,7 +50,7 @@ class OIDC_User_Handler {
 	 * @param array<string, mixed> $userinfo        Additional claims from userinfo endpoint.
 	 * @return WP_User|WP_Error WordPress user object or error.
 	 */
-	public function get_or_create_user( array $id_token_claims, array $userinfo = array() ) {
+	public function get_or_create_user( array $id_token_claims, array $userinfo = array() ): WP_User|WP_Error {
 		// Combine claims from both sources (userinfo takes precedence for overlapping keys)
 		// This allows userinfo endpoint to provide more detailed/updated information
 		$claims = array_merge( $id_token_claims, $userinfo );
@@ -131,7 +131,7 @@ class OIDC_User_Handler {
 	 * @param string $subject The OIDC subject identifier.
 	 * @return WP_User|null User object or null if not found.
 	 */
-	private function get_user_by_oidc_subject( $subject ) {
+	private function get_user_by_oidc_subject( string $subject ): ?WP_User {
 		$users = get_users(
 			array(
 				'meta_key'   => 'oidc_subject',
@@ -150,7 +150,7 @@ class OIDC_User_Handler {
 	 * @param array<string, mixed>  $claims  The merged OIDC claims.
 	 * @return WP_User|WP_Error New user object or error.
 	 */
-	private function create_user( string $subject, array $claims ) {
+	private function create_user( string $subject, array $claims ): WP_User|WP_Error {
 		$username = $this->generate_username( $claims );
 		$email    = $this->get_claim_value( $claims, 'email_claim', 'email' );
 
@@ -296,7 +296,7 @@ class OIDC_User_Handler {
 	 * @param string $username The desired username.
 	 * @return string A unique username (original or with counter suffix).
 	 */
-	private function ensure_unique_username( $username ) {
+	private function ensure_unique_username( string $username ): string {
 		$original_username = $username;
 		$counter           = 1;
 
@@ -359,7 +359,7 @@ class OIDC_User_Handler {
 	 *
 	 * @return string The role slug.
 	 */
-	private function get_default_role() {
+	private function get_default_role(): string {
 		$role = ! empty( $this->options['default_role'] ) ? $this->options['default_role'] : 'subscriber';
 
 		// Ensure the role exists, fall back to subscriber

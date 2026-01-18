@@ -23,7 +23,7 @@ use Firebase\JWT\Key;
  */
 class OIDC_Client {
 	/** @var array<string, mixed> Plugin settings from WordPress options */
-	private $options;
+	private array $options;
 
 	/**
 	 * JWKS cache duration in seconds (15 minutes).
@@ -51,7 +51,7 @@ class OIDC_Client {
 	 * @param string $key The setting key to retrieve.
 	 * @return string The setting value.
 	 */
-	private function get_setting( $key ) {
+	private function get_setting( $key ): string {
 		return Secure_OIDC_Login::get_setting( $key, $this->options );
 	}
 
@@ -66,7 +66,7 @@ class OIDC_Client {
 	 * @param string $generic_message Generic user-facing error message.
 	 * @return WP_Error WordPress error object with sanitized message.
 	 */
-	private function handle_error( $context, $detailed_error, $generic_message ) {
+	private function handle_error( $context, $detailed_error, $generic_message ): WP_Error {
 		// Log detailed error for debugging (sanitize for log safety)
 		$log_message = sprintf(
 			'OIDC Error [%s]: %s',
@@ -100,7 +100,7 @@ class OIDC_Client {
 	 * @param string|null $code_verifier The PKCE code verifier (optional).
 	 * @return array<string, mixed>|WP_Error Token response array or error.
 	 */
-	public function exchange_code( $code, $code_verifier = null ) {
+	public function exchange_code( string $code, ?string $code_verifier = null ): array|WP_Error {
 		$token_endpoint = $this->get_setting( 'token_endpoint' );
 
 		if ( empty( $token_endpoint ) ) {
@@ -220,7 +220,7 @@ class OIDC_Client {
 	 * @param string|null $auth_code Authorization code for c_hash validation.
 	 * @return array<string, mixed>|WP_Error Decoded claims array or error.
 	 */
-	public function validate_id_token( $id_token, $expected_nonce = null, $auth_code = null ) {
+	public function validate_id_token( string $id_token, ?string $expected_nonce = null, ?string $auth_code = null ): array|WP_Error {
 		// Decode and verify JWT using Firebase JWT library
 		$claims = $this->decode_and_verify_jwt( $id_token );
 		if ( is_wp_error( $claims ) ) {
@@ -288,7 +288,7 @@ class OIDC_Client {
 	 * @param bool   $retry Internal flag to prevent infinite retry loop.
 	 * @return array<string, mixed>|WP_Error Decoded claims array or error.
 	 */
-	private function decode_and_verify_jwt( $jwt, $retry = true ) {
+	private function decode_and_verify_jwt( string $jwt, bool $retry = true ): array|WP_Error {
 		// Get JWKS from IdP
 		$jwks = $this->get_jwks();
 		if ( is_wp_error( $jwks ) ) {
@@ -372,7 +372,7 @@ class OIDC_Client {
 	 * @param bool $force_refresh Force fetching fresh JWKS, bypassing cache.
 	 * @return array<string, mixed>|WP_Error JWKS array or error.
 	 */
-	private function get_jwks( $force_refresh = false ) {
+	private function get_jwks( bool $force_refresh = false ): array|WP_Error {
 		$jwks_uri = $this->get_setting( 'jwks_uri' );
 
 		if ( empty( $jwks_uri ) ) {
@@ -450,7 +450,7 @@ class OIDC_Client {
 	 * @param array<string, mixed> $jwks The JWKS data to sign.
 	 * @return string HMAC-SHA256 signature (64 hex characters).
 	 */
-	private function generate_jwks_hmac( $jwks ) {
+	private function generate_jwks_hmac( array $jwks ): string {
 		$data = wp_json_encode( $jwks );
 		// Concatenate WordPress authentication salts to create HMAC key
 		// These constants are defined in wp-config.php and not stored in the database
@@ -469,7 +469,7 @@ class OIDC_Client {
 	 * @param array<string, mixed> $cached_data Cached data containing 'jwks' and 'hmac'.
 	 * @return bool True if integrity check passes, false if tampered or malformed.
 	 */
-	private function verify_jwks_integrity( $cached_data ) {
+	private function verify_jwks_integrity( array $cached_data ): bool {
 		if ( ! isset( $cached_data['jwks'] ) || ! isset( $cached_data['hmac'] ) ) {
 			return false;
 		}
@@ -485,7 +485,7 @@ class OIDC_Client {
 	 * @param string $access_token The access token for authorization.
 	 * @return array<string, mixed>|WP_Error User info claims array or error.
 	 */
-	public function get_userinfo( $access_token ) {
+	public function get_userinfo( string $access_token ): array|WP_Error {
 		$userinfo_endpoint = $this->get_setting( 'userinfo_endpoint' );
 
 		if ( empty( $userinfo_endpoint ) ) {
@@ -554,7 +554,7 @@ class OIDC_Client {
 	 * @param string $refresh_token The refresh token from a previous token response.
 	 * @return array<string, mixed>|WP_Error New token response array or error.
 	 */
-	public function refresh_token( $refresh_token ) {
+	public function refresh_token( string $refresh_token ): array|WP_Error {
 		$token_endpoint = $this->get_setting( 'token_endpoint' );
 
 		if ( empty( $token_endpoint ) ) {
@@ -648,7 +648,7 @@ class OIDC_Client {
 	 * @param string $issuer_url The base URL of the identity provider.
 	 * @return array<string, mixed>|WP_Error Configuration array or error.
 	 */
-	public function discover( $issuer_url ) {
+	public function discover( string $issuer_url ): array|WP_Error {
 		$discovery_url = rtrim( $issuer_url, '/' ) . '/.well-known/openid-configuration';
 
 		$response = wp_remote_get(
@@ -696,7 +696,7 @@ class OIDC_Client {
 	 *
 	 * @return string The callback URL.
 	 */
-	private function get_callback_url() {
+	private function get_callback_url(): string {
 		return add_query_arg( 'oidc_callback', '1', home_url( '/' ) );
 	}
 }

@@ -67,7 +67,7 @@ class OIDC_Claims {
 	 * @param array<string, mixed> $claims Decoded ID token claims.
 	 * @return OIDC_Claims|WP_Error Claims object or error if validation fails.
 	 */
-	public static function from_array( array $claims ) {
+	public static function from_array( array $claims ): OIDC_Claims|WP_Error {
 		// Validate required claims per OIDC Core spec
 		if ( empty( $claims['sub'] ) ) {
 			return new WP_Error( 'oidc_error', __( 'Missing required sub claim in ID token.', 'secure-oidc-login' ) );
@@ -130,7 +130,7 @@ class OIDC_Claims {
 	 *
 	 * @return string|array<int, string> Single audience or array of audiences.
 	 */
-	public function get_audience() {
+	public function get_audience(): string|array {
 		return $this->aud;
 	}
 
@@ -221,7 +221,7 @@ class OIDC_Claims {
 	 * @param string $claim_name The claim name.
 	 * @return mixed The claim value or null if not present.
 	 */
-	public function get_claim( string $claim_name ) {
+	public function get_claim( string $claim_name ): mixed {
 		return $this->raw_claims[ $claim_name ] ?? null;
 	}
 

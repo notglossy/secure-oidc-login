@@ -21,22 +21,22 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 class OIDC_Token_Response {
 	/** @var string Access token for API authorization */
-	private $access_token;
+	private string $access_token;
 
 	/** @var string ID token containing user claims */
-	private $id_token;
+	private string $id_token;
 
 	/** @var string Token type (usually "Bearer") */
-	private $token_type;
+	private string $token_type;
 
 	/** @var int Token expiration time in seconds */
-	private $expires_in;
+	private int $expires_in;
 
 	/** @var string|null Optional refresh token for getting new access tokens */
-	private $refresh_token;
+	private ?string $refresh_token;
 
 	/** @var string|null Optional scope string */
-	private $scope;
+	private ?string $scope;
 
 	/**
 	 * Create a token response from the IdP response array.
@@ -44,7 +44,7 @@ class OIDC_Token_Response {
 	 * @param array<string, mixed> $response Raw response from token endpoint.
 	 * @return OIDC_Token_Response|WP_Error Token response object or error if validation fails.
 	 */
-	public static function from_array( array $response ) {
+	public static function from_array( array $response ): OIDC_Token_Response|WP_Error {
 		// Validate required fields per OIDC Core spec
 		if ( empty( $response['access_token'] ) ) {
 			return new WP_Error( 'oidc_error', __( 'Missing access_token in token response.', 'secure-oidc-login' ) );
