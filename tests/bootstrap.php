@@ -47,6 +47,10 @@ if (!defined('SECURE_AUTH_SALT')) {
 // Load stubs
 require_once __DIR__ . '/stubs/class-wp-error.php';
 require_once __DIR__ . '/stubs/class-wp-user.php';
+require_once __DIR__ . '/stubs/class-wp-rest-controller.php';
+require_once __DIR__ . '/stubs/class-wp-rest-request.php';
+require_once __DIR__ . '/stubs/class-wp-rest-response.php';
+require_once __DIR__ . '/stubs/class-wp-rest-server.php';
 require_once __DIR__ . '/stubs/class-secure-oidc-login.php';
 
 // Load plugin class files
@@ -58,3 +62,4 @@ require_once dirname(__DIR__) . '/includes/class-oidc-token-crypto.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-admin.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-client.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-user-handler.php';
+require_once dirname(__DIR__) . '/includes/class-oidc-rest-controller.php';
