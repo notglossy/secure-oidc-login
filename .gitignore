@@ -70,3 +70,7 @@ CLAUDE.md
 .phpcs-cache
 .phpcs.cache
 .phpstan/
+
+# PHPUnit
+.phpunit.cache/
+build/coverage/
