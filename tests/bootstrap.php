@@ -46,6 +46,7 @@ if (!defined('SECURE_AUTH_SALT')) {
 
 // Load stubs
 require_once __DIR__ . '/stubs/class-wp-error.php';
+require_once __DIR__ . '/stubs/class-wp-user.php';
 require_once __DIR__ . '/stubs/class-secure-oidc-login.php';
 
 // Load plugin class files
