@@ -741,6 +741,7 @@ class Secure_OIDC_Login {
 			'email_claim'            => 'email',
 			'first_name_claim'       => 'given_name',
 			'last_name_claim'        => 'family_name',
+			'allowed_email_domains'  => '',
 		);
 
 		if ( ! get_option( 'secure_oidc_login_settings' ) ) {

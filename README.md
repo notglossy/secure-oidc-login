@@ -9,6 +9,7 @@ A secure OpenID Connect (OIDC) authentication plugin for WordPress that allows u
 - **PKCE Support**: Implements Proof Key for Code Exchange for enhanced security
 - **User Provisioning**: Automatically create WordPress users on first login
 - **Claim Mapping**: Configurable mapping of OIDC claims to WordPress user fields
+- **Email Domain Filtering**: Restrict authentication to specific email domains for multi-tenant scenarios
 - **Single Logout**: Optional logout from IdP when logging out of WordPress
 - **Secure by Default**: Uses state parameter for CSRF protection and validates all tokens
 
@@ -132,10 +133,65 @@ Navigate to **Settings > OIDC Auth** in your WordPress admin panel.
 | Create Users | Automatically create WordPress users for new OIDC users |
 | Default Role | WordPress role assigned to new users |
 | Require Verified Email | Require the identity provider to verify email addresses before linking/creating accounts. Enabled by default for security. Disable only for trusted IdPs. |
+| Allowed Email Domains | Comma-separated list of allowed email domains (e.g., `example.com,subsidiary.com`). Leave empty to allow all domains. Supports wildcards like `*.example.com` for subdomains. |
 | Username Claim | OIDC claim to use for WordPress username (default: `preferred_username`) |
 | Email Claim | OIDC claim for email address (default: `email`) |
 | First Name Claim | OIDC claim for first name (default: `given_name`) |
 | Last Name Claim | OIDC claim for last name (default: `family_name`) |
+
+### Email Domain Filtering
+
+Email domain filtering provides an additional layer of access control for multi-tenant scenarios where multiple organizations share the same identity provider.
+
+#### Use Cases
+
+- **Subsidiary Control**: Allow only employees from specific subsidiaries (e.g., `example.com,subsidiary.com`)
+- **Vendor Access**: Restrict vendor portal access to approved vendor domains
+- **Department Isolation**: Limit access to specific departments using subdomain wildcards (e.g., `*.hr.example.com`)
+- **Multi-tenant IdP**: Filter users when multiple tenants authenticate through the same IdP
+
+#### Configuration
+
+**Allow all domains (default):**
+Leave the "Allowed Email Domains" field empty.
+
+**Single domain:**
+```
+example.com
+```
+Only users with `@example.com` email addresses can authenticate.
+
+**Multiple domains:**
+```
+example.com,subsidiary.com,partner.org
+```
+Users from any of these domains can authenticate.
+
+**Wildcard subdomains:**
+```
+*.example.com
+```
+Matches both the base domain (`user@example.com`) and all subdomains (`user@dept.example.com`, `user@hr.subsidiary.example.com`, etc.).
+
+**Mixed configuration:**
+```
+example.com,*.subsidiary.com,partner.org
+```
+Allows `@example.com`, any subdomain of `subsidiary.com`, and `@partner.org`.
+
+#### Behavior
+
+- **Empty configuration**: No filtering (all domains allowed)
+- **Case-insensitive**: `Example.COM` and `example.com` are treated identically
+- **Validation timing**: Checked after email verification but before user lookup/creation
+- **Error message**: Users from blocked domains see: "Your email domain (blocked.com) is not authorized to access this site. Please contact your administrator."
+
+#### Security Considerations
+
+- Domain filtering is an **additional layer** beyond email verification, not a replacement
+- Validation happens **server-side** and cannot be bypassed
+- Wildcards only work at the **subdomain level** (`*.example.com`), not TLD level (`example.*`)
+- Use the `SECURE_OIDC_ALLOWED_EMAIL_DOMAINS` environment variable to lock down domains in production without database access
 
 ### Using Environment Variables
 
@@ -160,6 +216,9 @@ For enhanced security in production environments, you can override sensitive set
 **Token Validation:**
 - `SECURE_OIDC_ISSUER` - Overrides the expected Issuer value for JWT validation
 
+**Access Control:**
+- `SECURE_OIDC_ALLOWED_EMAIL_DOMAINS` - Overrides the Allowed Email Domains setting (comma-separated list)
+
 #### Setting Environment Variables
 
 **On your server:**
@@ -168,6 +227,7 @@ For enhanced security in production environments, you can override sensitive set
 export SECURE_OIDC_CLIENT_ID="your-client-id"
 export SECURE_OIDC_CLIENT_SECRET="your-client-secret"
 export SECURE_OIDC_DISCOVERY_URL="https://your-idp.com/.well-known/openid-configuration"
+export SECURE_OIDC_ALLOWED_EMAIL_DOMAINS="example.com,subsidiary.com"
 ```
 
 **Using .env file (with a WordPress .env loader):**
@@ -176,6 +236,7 @@ export SECURE_OIDC_DISCOVERY_URL="https://your-idp.com/.well-known/openid-config
 SECURE_OIDC_CLIENT_ID=your-client-id
 SECURE_OIDC_CLIENT_SECRET=your-client-secret
 SECURE_OIDC_DISCOVERY_URL=https://your-idp.com/.well-known/openid-configuration
+SECURE_OIDC_ALLOWED_EMAIL_DOMAINS=example.com,subsidiary.com
 ```
 
 **Using Docker (docker-compose.yml):**
@@ -187,6 +248,7 @@ services:
       SECURE_OIDC_CLIENT_ID: "your-client-id"
       SECURE_OIDC_CLIENT_SECRET: "your-client-secret"
       SECURE_OIDC_DISCOVERY_URL: "https://your-idp.com/.well-known/openid-configuration"
+      SECURE_OIDC_ALLOWED_EMAIL_DOMAINS: "example.com,subsidiary.com"
 ```
 
 **Using Kubernetes ConfigMap/Secret:**
@@ -297,7 +359,9 @@ add_action('secure_oidc_login_user_created', function($user_id, $claims) {
 
 3. **"User does not exist"**: Enable "Create Users" in the plugin settings, or manually create the user in WordPress first.
 
-4. **Login button not appearing**: Ensure Client ID and Authorization Endpoint are configured.
+4. **"Your email domain is not authorized"**: The user's email domain is not in the allowed list. Check the "Allowed Email Domains" setting or `SECURE_OIDC_ALLOWED_EMAIL_DOMAINS` environment variable. Wildcards like `*.example.com` can be used to allow all subdomains.
+
+5. **Login button not appearing**: Ensure Client ID and Authorization Endpoint are configured.
 
 ### Debug Mode
 

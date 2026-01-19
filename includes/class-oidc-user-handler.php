@@ -107,6 +107,18 @@ class OIDC_User_Handler {
 				}
 			}
 
+			// Check if email domain is allowed
+			if ( ! $this->is_email_domain_allowed( $email ) ) {
+				return new WP_Error(
+					'oidc_domain_not_allowed',
+					sprintf(
+						/* translators: %s: email domain */
+						__( 'Your email domain (%s) is not authorized to access this site. Please contact your administrator.', 'secure-oidc-login' ),
+						esc_html( substr( $email, strpos( $email, '@' ) + 1 ) )
+					)
+				);
+			}
+
 			$user = get_user_by( 'email', $email );
 
 			if ( $user ) {
@@ -403,6 +415,54 @@ class OIDC_User_Handler {
 		}
 
 		// Unknown type - reject for safety
+		return false;
+	}
+
+	/**
+	 * Check if an email address matches allowed domains.
+	 *
+	 * @param string $email Email address to validate.
+	 * @return bool True if allowed, false otherwise.
+	 */
+	private function is_email_domain_allowed( string $email ): bool {
+		$allowed_domains = $this->get_setting( 'allowed_email_domains' );
+
+		// If no domains configured, allow all
+		if ( empty( trim( $allowed_domains ) ) ) {
+			return true;
+		}
+
+		// Extract domain from email
+		$email_parts = explode( '@', $email );
+		if ( count( $email_parts ) !== 2 ) {
+			return false;
+		}
+		$email_domain = strtolower( trim( $email_parts[1] ) );
+
+		// Parse allowed domains list
+		$domain_list = array_map( 'trim', explode( ',', $allowed_domains ) );
+		$domain_list = array_map( 'strtolower', $domain_list );
+
+		foreach ( $domain_list as $allowed_domain ) {
+			if ( empty( $allowed_domain ) ) {
+				continue;
+			}
+
+			// Handle wildcard subdomain matching
+			if ( strpos( $allowed_domain, '*.' ) === 0 ) {
+				$base_domain = substr( $allowed_domain, 2 );
+				// Match exact domain or any subdomain
+				if ( $email_domain === $base_domain || str_ends_with( $email_domain, '.' . $base_domain ) ) {
+					return true;
+				}
+			} else {
+				// Exact domain match
+				if ( $email_domain === $allowed_domain ) {
+					return true;
+				}
+			}
+		}
+
 		return false;
 	}
 }

@@ -93,6 +93,7 @@ class OIDC_Admin {
 			'first_name_claim'       => 100,
 			'last_name_claim'        => 100,
 			'default_role'           => 50,
+			'allowed_email_domains'  => 512,
 		);
 	}
 
@@ -382,6 +383,18 @@ class OIDC_Admin {
 				'default' => 'family_name',
 			)
 		);
+
+		add_settings_field(
+			'allowed_email_domains',
+			__( 'Allowed Email Domains', 'secure-oidc-login' ),
+			array( $this, 'render_text_field' ),
+			'secure-oidc-login',
+			'oidc_user_section',
+			array(
+				'field'       => 'allowed_email_domains',
+				'description' => __( 'Comma-separated list of allowed email domains (e.g., example.com,subsidiary.com). Leave empty to allow all domains. Supports wildcards like *.example.com for subdomains.', 'secure-oidc-login' ),
+			)
+		);
 	}
 
 	/**
@@ -436,6 +449,7 @@ class OIDC_Admin {
 			'last_name_claim',
 			'default_role',
 			'issuer',
+			'allowed_email_domains',
 		);
 
 		// URL fields - validate and sanitize as URLs
@@ -498,7 +512,60 @@ class OIDC_Admin {
 			$sanitized[ $field ] = ! empty( $input[ $field ] );
 		}
 
+		// Validate allowed_email_domains format
+		if ( ! empty( $sanitized['allowed_email_domains'] ) ) {
+			$validation = $this->validate_domain_list( $sanitized['allowed_email_domains'] );
+			if ( is_wp_error( $validation ) ) {
+				add_settings_error(
+					'secure_oidc_login_settings',
+					'invalid_allowed_domains',
+					$validation->get_error_message()
+				);
+				$sanitized['allowed_email_domains'] = $existing_settings['allowed_email_domains'] ?? '';
+			}
+		}
+
 		return $sanitized;
+	}
+
+	/**
+	 * Validate allowed email domains format.
+	 *
+	 * @param string $domains Comma-separated domain list.
+	 * @return true|WP_Error True if valid, WP_Error otherwise.
+	 */
+	private function validate_domain_list( string $domains ): bool|WP_Error {
+		if ( empty( trim( $domains ) ) ) {
+			return true;
+		}
+
+		$domain_list = array_map( 'trim', explode( ',', $domains ) );
+
+		foreach ( $domain_list as $domain ) {
+			if ( empty( $domain ) ) {
+				continue;
+			}
+
+			// Remove wildcard prefix for validation
+			$domain_to_check = $domain;
+			if ( strpos( $domain, '*.' ) === 0 ) {
+				$domain_to_check = substr( $domain, 2 );
+			}
+
+			// Validate domain format (basic check)
+			if ( ! preg_match( '/^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?)*$/i', $domain_to_check ) ) {
+				return new WP_Error(
+					'invalid_domain_format',
+					sprintf(
+						/* translators: %s: invalid domain */
+						__( 'Invalid domain format: %s', 'secure-oidc-login' ),
+						esc_html( $domain )
+					)
+				);
+			}
+		}
+
+		return true;
 	}
 
 	/**
@@ -810,6 +877,29 @@ class OIDC_Admin {
 				</div>
 				<?php
 			}
+		}
+
+		// Show info notice if domain filtering is active
+		$allowed_domains = Secure_OIDC_Login::get_setting( 'allowed_email_domains', $options );
+		if ( ! empty( $allowed_domains ) ) {
+			$is_env_override = ( false !== getenv( 'SECURE_OIDC_ALLOWED_EMAIL_DOMAINS' ) && '' !== getenv( 'SECURE_OIDC_ALLOWED_EMAIL_DOMAINS' ) );
+			?>
+			<div class="notice notice-info">
+				<p>
+					<strong><?php esc_html_e( 'Email Domain Filtering Active', 'secure-oidc-login' ); ?></strong>
+					<?php
+					printf(
+						/* translators: %s: comma-separated list of domains */
+						esc_html__( 'Only users with email addresses from these domains can authenticate: %s', 'secure-oidc-login' ),
+						'<code>' . esc_html( $allowed_domains ) . '</code>'
+					);
+					?>
+					<?php if ( $is_env_override ) : ?>
+						<br><em><?php esc_html_e( '(Configured via SECURE_OIDC_ALLOWED_EMAIL_DOMAINS environment variable)', 'secure-oidc-login' ); ?></em>
+					<?php endif; ?>
+				</p>
+			</div>
+			<?php
 		}
 	}
 }
