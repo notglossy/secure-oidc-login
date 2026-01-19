@@ -13,6 +13,7 @@ use Brain\Monkey\Functions;
 use OIDC_User_Handler;
 use SecureOIDCLogin\Tests\OIDCTestCase;
 use WP_Error;
+use WP_User;
 
 /**
  * Tests for the OIDC_User_Handler class.
@@ -427,5 +428,382 @@ class OIDCUserHandlerTest extends OIDCTestCase
         $result = $reflection->invoke($this->handler, 'johndoe');
 
         $this->assertSame('johndoe_1', $result);
+    }
+
+    /**
+     * Test get_or_create_user finds existing user by OIDC subject.
+     */
+    public function testGetOrCreateUserFindsExistingUserBySubject(): void
+    {
+        $claims = $this->getSampleClaims();
+
+        // Mock existing user
+        $existingUser = new WP_User(42, 'existinguser', 'existing@example.com');
+
+        Functions\when('get_users')->justReturn([$existingUser]);
+        Functions\when('get_user_by')->alias(function($field, $value) use ($existingUser) {
+            return $field === 'ID' && $value === 42 ? $existingUser : false;
+        });
+
+        $result = $this->handler->get_or_create_user($claims);
+
+        $this->assertSame($existingUser, $result);
+    }
+
+    /**
+     * Test get_or_create_user links existing WordPress user by email.
+     */
+    public function testGetOrCreateUserLinksExistingUserByEmail(): void
+    {
+        $claims = $this->getSampleClaims();
+        $claims['email_verified'] = true;
+
+        // Mock: no user found by subject
+        Functions\when('get_users')->justReturn([]);
+
+        // Mock: existing user found by email
+        $existingUser = new WP_User(99, 'testuser', $claims['email']);
+
+        Functions\when('get_user_by')->alias(function($field, $value) use ($existingUser, $claims) {
+            if ($field === 'email' && $value === $claims['email']) {
+                return $existingUser;
+            }
+            if ($field === 'ID' && $value === 99) {
+                return $existingUser;
+            }
+            return false;
+        });
+
+        $result = $this->handler->get_or_create_user($claims);
+
+        $this->assertSame($existingUser, $result);
+    }
+
+    /**
+     * Test get_or_create_user creates new user successfully.
+     */
+    public function testGetOrCreateUserCreatesNewUserSuccessfully(): void
+    {
+        $claims = $this->getSampleClaims();
+        $claims['email_verified'] = true;
+
+        Functions\when('get_users')->justReturn([]);
+        Functions\when('get_user_by')->alias(function($field, $value) {
+            if ($field === 'ID' && $value === 1) {
+                return new WP_User(1, 'newuser', 'test@example.com');
+            }
+            return false;
+        });
+        Functions\when('is_email')->justReturn(true);
+        Functions\when('sanitize_user')->alias(fn($username) => $username);
+
+        $result = $this->handler->get_or_create_user($claims);
+
+        $this->assertIsObject($result);
+        $this->assertSame(1, $result->ID);
+    }
+
+    /**
+     * Test get_or_create_user merges userinfo with id_token_claims.
+     */
+    public function testGetOrCreateUserMergesUserinfoWithIdTokenClaims(): void
+    {
+        $idTokenClaims = [
+            'sub' => 'user123',
+            'email' => 'old@example.com',
+            'email_verified' => true,
+        ];
+
+        $userinfo = [
+            'email' => 'new@example.com',
+            'name' => 'Updated Name',
+        ];
+
+        Functions\when('get_users')->justReturn([]);
+        Functions\when('get_user_by')->alias(function($field, $value) {
+            if ($field === 'ID' && $value === 1) {
+                return new WP_User(1, 'mergeduser', 'new@example.com');
+            }
+            return false;
+        });
+        Functions\when('is_email')->justReturn(true);
+        Functions\when('sanitize_user')->alias(fn($username) => $username);
+
+        // Userinfo email should take precedence
+        $result = $this->handler->get_or_create_user($idTokenClaims, $userinfo);
+
+        $this->assertIsObject($result);
+    }
+
+    /**
+     * Test create_user returns error when email is missing.
+     */
+    public function testCreateUserReturnsErrorWhenEmailMissing(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'create_users' => true,
+            'require_verified_email' => true,
+            'email_claim' => 'email',
+        ]);
+        Functions\when('get_users')->justReturn([]);
+        Functions\when('get_user_by')->justReturn(false);
+
+        $claims = ['sub' => 'user123']; // No email
+
+        $handler = new OIDC_User_Handler();
+        $result = $handler->get_or_create_user($claims);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertStringContainsString('Email is required', $result->get_error_message());
+    }
+
+    /**
+     * Test create_user returns error when email is invalid.
+     */
+    public function testCreateUserReturnsErrorWhenEmailInvalid(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'create_users' => true,
+            'require_verified_email' => false,
+            'email_claim' => 'email',
+        ]);
+        Functions\when('get_users')->justReturn([]);
+        Functions\when('get_user_by')->justReturn(false);
+        Functions\when('is_email')->justReturn(false);
+
+        $claims = [
+            'sub' => 'user123',
+            'email' => 'not-an-email',
+        ];
+
+        $handler = new OIDC_User_Handler();
+        $result = $handler->get_or_create_user($claims);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertStringContainsString('Invalid email', $result->get_error_message());
+    }
+
+    /**
+     * Test create_user returns error when wp_insert_user fails.
+     */
+    public function testCreateUserReturnsErrorWhenInsertFails(): void
+    {
+        Functions\when('get_users')->justReturn([]);
+        Functions\when('get_user_by')->justReturn(false);
+        Functions\when('is_email')->justReturn(true);
+        Functions\when('sanitize_user')->alias(fn($username) => $username);
+        Functions\when('wp_insert_user')->justReturn(
+            new WP_Error('insert_failed', 'Database error')
+        );
+
+        $claims = $this->getSampleClaims();
+        $claims['email_verified'] = true;
+
+        $result = $this->handler->get_or_create_user($claims);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('insert_failed', $result->get_error_code());
+    }
+
+    /**
+     * Test generate_display_name with only first name.
+     */
+    public function testGenerateDisplayNameWithOnlyFirstName(): void
+    {
+        $reflection = new \ReflectionMethod(OIDC_User_Handler::class, 'generate_display_name');
+        $reflection->setAccessible(true);
+
+        $claims = ['given_name' => 'John'];
+
+        $result = $reflection->invoke($this->handler, $claims);
+
+        $this->assertSame('John', $result);
+    }
+
+    /**
+     * Test generate_display_name with only last name.
+     */
+    public function testGenerateDisplayNameWithOnlyLastName(): void
+    {
+        $reflection = new \ReflectionMethod(OIDC_User_Handler::class, 'generate_display_name');
+        $reflection->setAccessible(true);
+
+        $claims = ['family_name' => 'Doe'];
+
+        $result = $reflection->invoke($this->handler, $claims);
+
+        $this->assertSame('Doe', $result);
+    }
+
+    /**
+     * Test generate_display_name falls back to username when no names.
+     */
+    public function testGenerateDisplayNameFallsBackToUsername(): void
+    {
+        $reflection = new \ReflectionMethod(OIDC_User_Handler::class, 'generate_display_name');
+        $reflection->setAccessible(true);
+
+        $claims = ['preferred_username' => 'johndoe'];
+
+        $result = $reflection->invoke($this->handler, $claims);
+
+        $this->assertSame('johndoe', $result);
+    }
+
+    /**
+     * Test get_default_role returns subscriber for invalid role.
+     */
+    public function testGetDefaultRoleReturnsSubscriberForInvalidRole(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'default_role' => 'invalid_role',
+        ]);
+        Functions\when('get_role')->alias(function($role) {
+            return $role === 'subscriber' ? new \stdClass() : null;
+        });
+
+        $handler = new OIDC_User_Handler();
+        $reflection = new \ReflectionMethod(OIDC_User_Handler::class, 'get_default_role');
+        $reflection->setAccessible(true);
+
+        $result = $reflection->invoke($handler);
+
+        $this->assertSame('subscriber', $result);
+    }
+
+    /**
+     * Test get_default_role returns valid custom role.
+     */
+    public function testGetDefaultRoleReturnsValidCustomRole(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'default_role' => 'editor',
+        ]);
+        Functions\when('get_role')->alias(function($role) {
+            return $role === 'editor' ? new \stdClass() : null;
+        });
+
+        $handler = new OIDC_User_Handler();
+        $reflection = new \ReflectionMethod(OIDC_User_Handler::class, 'get_default_role');
+        $reflection->setAccessible(true);
+
+        $result = $reflection->invoke($handler);
+
+        $this->assertSame('editor', $result);
+    }
+
+    /**
+     * Test is_email_verified returns false for unknown type.
+     */
+    public function testIsEmailVerifiedReturnsFalseForUnknownType(): void
+    {
+        $reflection = new \ReflectionMethod(OIDC_User_Handler::class, 'is_email_verified');
+        $reflection->setAccessible(true);
+
+        $this->assertFalse($reflection->invoke($this->handler, ['email_verified' => []]));
+        $this->assertFalse($reflection->invoke($this->handler, ['email_verified' => new \stdClass()]));
+    }
+
+    /**
+     * Test email verification defaults to required when not set.
+     */
+    public function testEmailVerificationDefaultsToRequiredWhenNotSet(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'create_users' => true,
+            // require_verified_email not set - should default to true
+        ]);
+        Functions\when('get_users')->justReturn([]);
+        Functions\when('get_user_by')->justReturn(false);
+
+        $claims = $this->getSampleClaims();
+        $claims['email_verified'] = false; // Not verified
+
+        $handler = new OIDC_User_Handler();
+        $result = $handler->get_or_create_user($claims);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertStringContainsString('email address not verified', $result->get_error_message());
+    }
+
+    /**
+     * Test generate_username sanitizes special characters.
+     */
+    public function testGenerateUsernameSanitizesSpecialCharacters(): void
+    {
+        Functions\when('sanitize_user')->alias(function($username) {
+            // Simulate WordPress sanitization removing special chars
+            return preg_replace('/[^a-zA-Z0-9._@-]/', '', $username);
+        });
+
+        $reflection = new \ReflectionMethod(OIDC_User_Handler::class, 'generate_username');
+        $reflection->setAccessible(true);
+
+        $claims = ['preferred_username' => 'john#doe!'];
+
+        $result = $reflection->invoke($this->handler, $claims);
+
+        $this->assertSame('johndoe', $result);
+    }
+
+    /**
+     * Test generate_username uses random password when sanitization results in empty string.
+     */
+    public function testGenerateUsernameUsesRandomWhenSanitizationEmpty(): void
+    {
+        Functions\when('sanitize_user')->justReturn('');
+        Functions\when('wp_generate_password')->justReturn('abc123');
+
+        $reflection = new \ReflectionMethod(OIDC_User_Handler::class, 'generate_username');
+        $reflection->setAccessible(true);
+
+        $claims = ['preferred_username' => '###'];
+
+        $result = $reflection->invoke($this->handler, $claims);
+
+        $this->assertSame('oidc_user_abc123', $result);
+    }
+
+    /**
+     * Test get_claim_value with custom claim mapping.
+     */
+    public function testGetClaimValueWithCustomMapping(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'email_claim' => 'custom_email_field',
+        ]);
+
+        $handler = new OIDC_User_Handler();
+        $reflection = new \ReflectionMethod(OIDC_User_Handler::class, 'get_claim_value');
+        $reflection->setAccessible(true);
+
+        $claims = [
+            'email' => 'standard@example.com',
+            'custom_email_field' => 'custom@example.com',
+        ];
+
+        $result = $reflection->invoke($handler, $claims, 'email_claim', 'email');
+
+        $this->assertSame('custom@example.com', $result);
+    }
+
+    /**
+     * Test ensure_unique_username with multiple collisions.
+     */
+    public function testEnsureUniqueUsernameWithMultipleCollisions(): void
+    {
+        $callCount = 0;
+        Functions\when('username_exists')->alias(function ($username) use (&$callCount) {
+            $callCount++;
+            // First 3 checks return true (username exists), fourth returns false
+            return $callCount <= 3;
+        });
+
+        $reflection = new \ReflectionMethod(OIDC_User_Handler::class, 'ensure_unique_username');
+        $reflection->setAccessible(true);
+
+        $result = $reflection->invoke($this->handler, 'johndoe');
+
+        $this->assertSame('johndoe_3', $result);
     }
 }
