@@ -3,7 +3,7 @@
  * Plugin Name: Secure OIDC Login
  * Plugin URI: https://github.com/notglossy/secure-oidc-login
  * Description: OpenID Connect (OIDC) authentication plugin for WordPress. Allows users to authenticate using any OIDC-compliant identity provider.
- * Version: 0.3.1-beta
+ * Version: 0.5.0-beta
  * Requires at least: 5.8
  * Tested up to: 6.7
  * Requires PHP: 8.1
@@ -23,7 +23,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 // Plugin version constant - used for cache busting and compatibility checks
-define( 'SECURE_OIDC_LOGIN_VERSION', '0.3.1' );
+define( 'SECURE_OIDC_LOGIN_VERSION', '0.5.0' );
 // Plugin directory path constant - used for including files (has trailing slash)
 define( 'SECURE_OIDC_LOGIN_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 // Plugin URL constant - used for enqueueing assets (has trailing slash)
@@ -56,6 +56,7 @@ require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-client.php';
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-admin.php';
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-user-handler.php';
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-token-crypto.php';
+require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-rest-controller.php';
 
 /**
  * Main plugin class implementing OpenID Connect authentication for WordPress.
@@ -137,6 +138,7 @@ class Secure_OIDC_Login {
 		$this->user_handler = new OIDC_User_Handler();
 
 		add_action( 'init', array( $this, 'init' ) );
+		add_action( 'rest_api_init', array( $this, 'register_rest_routes' ) );
 		add_action( 'login_form', array( $this, 'add_login_button' ) );
 		add_action( 'login_form', array( $this, 'add_emergency_bypass_field' ) );
 		add_action( 'wp_logout', array( $this, 'handle_logout' ), 10, 1 );
@@ -168,6 +170,18 @@ class Secure_OIDC_Login {
 		if ( isset( $_GET['oidc_login'] ) && $_GET['oidc_login'] === '1' ) {
 			$this->initiate_login();
 		}
+	}
+
+	/**
+	 * Register REST API routes.
+	 *
+	 * Instantiates the REST controller and registers its routes.
+	 *
+	 * @since 0.6.0
+	 */
+	public function register_rest_routes(): void {
+		$controller = new OIDC_REST_Controller();
+		$controller->register_routes();
 	}
 
 	/**
@@ -237,17 +251,26 @@ class Secure_OIDC_Login {
 	/**
 	 * Check if emergency bypass is active via URL parameter.
 	 *
-	 * SECURITY WARNING: This bypass mechanism allows administrators to regain
-	 * access if OIDC configuration fails. However, it weakens the OIDC-only
-	 * enforcement and should be used only for emergency access. The bypass
-	 * is not password-protected, so ?native=1 URL is the only barrier.
+	 * SECURITY: This bypass mechanism allows administrators to regain access
+	 * if OIDC configuration fails. The bypass is controlled by the environment
+	 * variable SECURE_OIDC_ENABLE_EMERGENCY_BYPASS which must be set to 'true'
+	 * to enable the bypass functionality. This is disabled by default.
 	 *
+	 * When enabled, the ?native=1 URL parameter allows native WordPress login.
 	 * Checks both GET and POST parameters to handle the case where the login
 	 * form is submitted (POST) after loading the page with ?native=1 (GET).
 	 *
-	 * @return bool True if emergency bypass parameter is present.
+	 * @since 0.5.0 Requires SECURE_OIDC_ENABLE_EMERGENCY_BYPASS=true to function.
+	 *
+	 * @return bool True if emergency bypass is enabled and parameter is present.
 	 */
 	private function is_emergency_bypass_active(): bool {
+		// SECURITY: Emergency bypass must be explicitly enabled via environment variable
+		$bypass_enabled = getenv( 'SECURE_OIDC_ENABLE_EMERGENCY_BYPASS' );
+		if ( false === $bypass_enabled || 'true' !== strtolower( (string) $bypass_enabled ) ) {
+			return false;
+		}
+
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- This is a feature flag, not user input
 		return ( isset( $_GET['native'] ) && $_GET['native'] === '1' ) ||
 				( isset( $_POST['native'] ) && $_POST['native'] === '1' );
@@ -514,32 +537,35 @@ class Secure_OIDC_Login {
 		// SECURITY: Store tokens encrypted at rest to protect against database compromises.
 		// JWTs contain sensitive user information and session identifiers. If the database
 		// is leaked, unencrypted tokens could allow session hijacking or information disclosure.
-		// We use AES-256-GCM authenticated encryption to ensure both confidentiality and integrity.
+		// We use Sodium ChaCha20-Poly1305-IETF authenticated encryption for confidentiality and integrity.
+		// SECURITY: Authentication FAILS if encryption fails - we never store plaintext tokens.
 		$options = get_option( 'secure_oidc_login_settings' );
 
 		// Encrypt ID token before storing in user meta
-		$id_token_to_store = $tokens['id_token'];
-		$encrypted_id      = OIDC_Token_Crypto::encrypt( $id_token_to_store );
+		$encrypted_id = OIDC_Token_Crypto::encrypt( $tokens['id_token'] );
 		if ( is_wp_error( $encrypted_id ) ) {
-			// Gracefully degrade: if encryption fails, log error but continue authentication
-			// The token won't be encrypted, but single logout will still work
+			// SECURITY: Fail authentication if encryption fails - never store plaintext tokens
 			OIDC_Token_Crypto::log_error( 'ID token encryption failed: ' . $encrypted_id->get_error_message() );
-		} else {
-			$id_token_to_store = $encrypted_id;
+			$this->handle_error(
+				__( 'Authentication failed: Unable to securely store session tokens. Please contact your administrator.', 'secure-oidc-login' )
+			);
+			return;
 		}
-		update_user_meta( $user->ID, 'oidc_id_token', $id_token_to_store );
+		update_user_meta( $user->ID, 'oidc_id_token', $encrypted_id );
 
 		// Persist refresh token only when single logout is enabled
 		// Refresh tokens are more sensitive than ID tokens as they can be used to obtain new access tokens
 		if ( ! empty( $tokens['refresh_token'] ) && ! empty( $options['enable_single_logout'] ) ) {
-			$refresh_token_to_store = $tokens['refresh_token'];
-			$encrypted_refresh      = OIDC_Token_Crypto::encrypt( $refresh_token_to_store );
+			$encrypted_refresh = OIDC_Token_Crypto::encrypt( $tokens['refresh_token'] );
 			if ( is_wp_error( $encrypted_refresh ) ) {
+				// SECURITY: Fail authentication if encryption fails - never store plaintext tokens
 				OIDC_Token_Crypto::log_error( 'Refresh token encryption failed: ' . $encrypted_refresh->get_error_message() );
-			} else {
-				$refresh_token_to_store = $encrypted_refresh;
+				$this->handle_error(
+					__( 'Authentication failed: Unable to securely store session tokens. Please contact your administrator.', 'secure-oidc-login' )
+				);
+				return;
 			}
-			update_user_meta( $user->ID, 'oidc_refresh_token', $refresh_token_to_store );
+			update_user_meta( $user->ID, 'oidc_refresh_token', $encrypted_refresh );
 		}
 
 		// Establish WordPress session

@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0-beta] - 2026-01-18
+
+### Security
+- **[Critical]** Emergency bypass now requires environment variable `SECURE_OIDC_ENABLE_EMERGENCY_BYPASS=true` to function (disabled by default)
+- **[High]** Token encryption now fails authentication if encryption fails instead of degrading to plaintext storage
+- **[High]** Added inline security warning when email verification is disabled in settings
+- **[Medium]** Removed legacy plaintext token support - users with old tokens must re-authenticate
+- **[Medium]** Added SSRF protection to discovery endpoint with URL validation
+- **[Low]** Added logging for JWKS cache HMAC verification failures to detect salt rotation or tampering
+
+### Added
+- New environment variable `SECURE_OIDC_ENABLE_EMERGENCY_BYPASS` to control emergency bypass availability
+- New environment variable `SECURE_OIDC_ALLOW_LOCAL_DISCOVERY_URLS` to allow internal IPs for discovery (intranet deployments)
+- New environment variable `SECURE_OIDC_ALLOW_INSECURE_DISCOVERY` to allow HTTP discovery URLs (testing only)
+
+### Changed
+- Token encryption is now mandatory - authentication fails if Sodium encryption is unavailable
+- Discovery endpoint now requires HTTPS by default and blocks internal/private IP addresses
+- Plaintext tokens in database will now cause decryption errors (users must re-authenticate)
+
+### Breaking Changes
+- Emergency bypass (`?native=1`) is disabled by default - set `SECURE_OIDC_ENABLE_EMERGENCY_BYPASS=true` to enable
+- Users with plaintext tokens stored before encryption was enabled must log in again
+- Discovery endpoint blocks internal IPs and HTTP by default (use environment variables to override for intranet deployments)
+
+## [0.4.0-beta] - 2026-01-18
+
+### Changed
+- **Cryptography improvement** - Migrated token encryption from OpenSSL to libsodium (Sodium) for better security and modern PHP integration
+- Added comprehensive type declarations to all class properties and method parameters (PHP 8.1+ feature)
+
+### Improved
+- Enhanced code quality and IDE support through proper type hints
+
 ## [0.3.1-beta] - 2026-01-04
 
 ### Fixed
@@ -53,7 +87,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Flexible email verification
 - PHPStan level 6 compliance
 
-[Unreleased]: https://github.com/notglossy/secure-oidc-login/compare/v0.3.1-beta...HEAD
+[Unreleased]: https://github.com/notglossy/secure-oidc-login/compare/v0.5.0-beta...HEAD
+[0.5.0-beta]: https://github.com/notglossy/secure-oidc-login/compare/v0.4.0-beta...v0.5.0-beta
+[0.4.0-beta]: https://github.com/notglossy/secure-oidc-login/compare/v0.3.1-beta...v0.4.0-beta
 [0.3.1-beta]: https://github.com/notglossy/secure-oidc-login/compare/v0.3.0-beta...v0.3.1-beta
 [0.3.0-beta]: https://github.com/notglossy/secure-oidc-login/compare/v0.2.0-beta...v0.3.0-beta
 [0.2.0-beta]: https://github.com/notglossy/secure-oidc-login/compare/v0.1.0-beta...v0.2.0-beta

@@ -26,50 +26,49 @@
 			var $button = $(this);
 			$button.prop('disabled', true).text(oidcAdminSettings.i18n.discovering);
 
-			// Fetch the OIDC discovery document from the IdP via AJAX
-			// This calls ajax_discover() which fetches .well-known/openid-configuration
+			// Fetch the OIDC discovery document from the IdP via REST API
+			// This calls OIDC_REST_Controller::discover() which fetches .well-known/openid-configuration
 			$.ajax({
-				url: oidcAdminSettings.ajaxUrl,
-				type: 'POST',
+				url: oidcAdminSettings.restUrl,
+				method: 'POST',
 				data: {
-					action: 'oidc_discover',
-					discovery_url: discoveryUrl,
-					nonce: oidcAdminSettings.nonce
+					discovery_url: discoveryUrl
 				},
-				success: function(response) {
-					if (response.success) {
-						// Auto-populate endpoint fields from discovery document
-						// Each endpoint is optional in the OIDC spec, so we check before populating
-						var config = response.data;
-
-						if (config.authorization_endpoint) {
-							$('input[name="secure_oidc_login_settings[authorization_endpoint]"]').val(config.authorization_endpoint);
-						}
-						if (config.token_endpoint) {
-							$('input[name="secure_oidc_login_settings[token_endpoint]"]').val(config.token_endpoint);
-						}
-						if (config.userinfo_endpoint) {
-							$('input[name="secure_oidc_login_settings[userinfo_endpoint]"]').val(config.userinfo_endpoint);
-						}
-						if (config.end_session_endpoint) {
-							$('input[name="secure_oidc_login_settings[end_session_endpoint]"]').val(config.end_session_endpoint);
-						}
-						if (config.jwks_uri) {
-							$('input[name="secure_oidc_login_settings[jwks_uri]"]').val(config.jwks_uri);
-						}
-						if (config.issuer) {
-							$('input[name="secure_oidc_login_settings[issuer]"]').val(config.issuer);
-						}
-
-						alert(oidcAdminSettings.i18n.discoverySuccess);
-					} else {
-						// Discovery failed - show error message from server
-						alert(response.data || oidcAdminSettings.i18n.discoveryFailed);
+				beforeSend: function(xhr) {
+					xhr.setRequestHeader('X-WP-Nonce', oidcAdminSettings.restNonce);
+				},
+				success: function(config) {
+					// REST API returns data directly (no {success, data} wrapper)
+					// Auto-populate endpoint fields from discovery document
+					// Each endpoint is optional in the OIDC spec, so we check before populating
+					if (config.authorization_endpoint) {
+						$('input[name="secure_oidc_login_settings[authorization_endpoint]"]').val(config.authorization_endpoint);
 					}
+					if (config.token_endpoint) {
+						$('input[name="secure_oidc_login_settings[token_endpoint]"]').val(config.token_endpoint);
+					}
+					if (config.userinfo_endpoint) {
+						$('input[name="secure_oidc_login_settings[userinfo_endpoint]"]').val(config.userinfo_endpoint);
+					}
+					if (config.end_session_endpoint) {
+						$('input[name="secure_oidc_login_settings[end_session_endpoint]"]').val(config.end_session_endpoint);
+					}
+					if (config.jwks_uri) {
+						$('input[name="secure_oidc_login_settings[jwks_uri]"]').val(config.jwks_uri);
+					}
+					if (config.issuer) {
+						$('input[name="secure_oidc_login_settings[issuer]"]').val(config.issuer);
+					}
+
+					alert(oidcAdminSettings.i18n.discoverySuccess);
 				},
-				error: function() {
-					// Network error or server error
-					alert(oidcAdminSettings.i18n.discoveryRequestFailed);
+				error: function(xhr) {
+					// REST API returns error message in responseJSON.message
+					var errorMessage = oidcAdminSettings.i18n.discoveryFailed;
+					if (xhr.responseJSON && xhr.responseJSON.message) {
+						errorMessage = xhr.responseJSON.message;
+					}
+					alert(errorMessage);
 				},
 				complete: function() {
 					// Re-enable button whether success or failure

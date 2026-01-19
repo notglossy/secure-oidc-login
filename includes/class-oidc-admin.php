@@ -25,7 +25,6 @@ class OIDC_Admin {
 		add_action( 'admin_menu', array( $this, 'add_admin_menu' ) );
 		add_action( 'admin_init', array( $this, 'register_settings' ) );
 		add_action( 'admin_notices', array( $this, 'admin_notices' ) );
-		add_action( 'wp_ajax_oidc_discover', array( $this, 'ajax_discover' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_scripts' ) );
 	}
 
@@ -54,9 +53,9 @@ class OIDC_Admin {
 			'oidc-admin-settings',
 			'oidcAdminSettings',
 			array(
-				'ajaxUrl' => admin_url( 'admin-ajax.php' ),
-				'nonce'   => wp_create_nonce( 'oidc_discover' ),
-				'i18n'    => array(
+				'restUrl'   => rest_url( 'secure-oidc-login/v1/discover' ),
+				'restNonce' => wp_create_nonce( 'wp_rest' ),
+				'i18n'      => array(
 					'enterDiscoveryUrl'      => __( 'Please enter a discovery URL.', 'secure-oidc-login' ),
 					'discovering'            => __( 'Discovering...', 'secure-oidc-login' ),
 					'discover'               => __( 'Discover', 'secure-oidc-login' ),
@@ -713,6 +712,16 @@ class OIDC_Admin {
 		$field   = $args['field'];
 		$checked = isset( $options[ $field ] ) && $options[ $field ] ? 'checked' : '';
 
+		// SECURITY WARNING: Show inline warning when email verification is disabled
+		if ( 'require_verified_email' === $field && ! $checked ) {
+			?>
+			<div class="notice notice-warning inline" style="margin: 0 0 10px 0; padding: 8px 12px;">
+				<strong><?php esc_html_e( 'Security Warning:', 'secure-oidc-login' ); ?></strong>
+				<?php esc_html_e( 'Disabling email verification may allow account takeover attacks. Only disable if your identity provider does not support email verification claims (e.g., certain Azure AD configurations).', 'secure-oidc-login' ); ?>
+			</div>
+			<?php
+		}
+
 		printf(
 			'<input type="checkbox" name="secure_oidc_login_settings[%s]" value="1" %s>',
 			esc_attr( $field ),
@@ -802,61 +811,5 @@ class OIDC_Admin {
 				<?php
 			}
 		}
-	}
-
-	/**
-	 * Handle AJAX request for OIDC discovery.
-	 *
-	 * Fetches the OpenID Provider Configuration document from the
-	 * well-known endpoint and returns it as JSON.
-	 */
-	public function ajax_discover(): void {
-		check_ajax_referer( 'oidc_discover', 'nonce' );
-
-		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_send_json_error( __( 'Permission denied.', 'secure-oidc-login' ) );
-		}
-
-		$discovery_url = esc_url_raw( $_POST['discovery_url'] ?? '' );
-
-		if ( empty( $discovery_url ) ) {
-			wp_send_json_error( __( 'Discovery URL is required.', 'secure-oidc-login' ) );
-		}
-
-		// Append well-known path if not already present
-		if ( strpos( $discovery_url, '.well-known/openid-configuration' ) === false ) {
-			$discovery_url = rtrim( $discovery_url, '/' ) . '/.well-known/openid-configuration';
-		}
-
-		$response = wp_remote_get( $discovery_url, array( 'timeout' => 30 ) );
-
-		if ( is_wp_error( $response ) ) {
-			wp_send_json_error( $response->get_error_message() );
-		}
-
-		$status_code = wp_remote_retrieve_response_code( $response );
-
-		if ( $status_code !== 200 ) {
-			wp_send_json_error( __( 'Failed to fetch discovery document.', 'secure-oidc-login' ) );
-		}
-
-		$body         = wp_remote_retrieve_body( $response );
-		$content_type = wp_remote_retrieve_header( $response, 'content-type' );
-		if ( is_array( $content_type ) ) {
-			$content_type = $content_type[0] ?? '';
-		}
-		// Ensure content_type is a string for stripos() in PHP 8+
-		$content_type = (string) $content_type;
-		if ( stripos( $content_type, 'application/json' ) === false ) {
-			wp_send_json_error( __( 'Discovery response was not JSON. Please verify the identity provider configuration.', 'secure-oidc-login' ) );
-		}
-
-		$config = json_decode( $body, true );
-
-		if ( ! $config ) {
-			wp_send_json_error( __( 'Invalid discovery response.', 'secure-oidc-login' ) );
-		}
-
-		wp_send_json_success( $config );
 	}
 }
