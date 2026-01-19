@@ -57,7 +57,7 @@ class OIDC_REST_Controller extends WP_REST_Controller {
 	/**
 	 * Check if the current user has permission to perform discovery.
 	 *
-	 * @param WP_REST_Request $request The REST request.
+	 * @param WP_REST_Request<array<string, mixed>> $request The REST request.
 	 * @return bool|WP_Error True if allowed, WP_Error otherwise.
 	 */
 	public function discover_permissions_check( WP_REST_Request $request ): bool|WP_Error {
@@ -74,9 +74,9 @@ class OIDC_REST_Controller extends WP_REST_Controller {
 	/**
 	 * Validate the discovery URL format.
 	 *
-	 * @param mixed           $value   The URL value.
-	 * @param WP_REST_Request $request The REST request.
-	 * @param string          $param   The parameter name.
+	 * @param mixed                                  $value   The URL value.
+	 * @param WP_REST_Request<array<string, mixed>> $request The REST request.
+	 * @param string                                 $param   The parameter name.
 	 * @return bool True if valid, false otherwise.
 	 */
 	public function validate_discovery_url_format( mixed $value, WP_REST_Request $request, string $param ): bool {
@@ -98,7 +98,7 @@ class OIDC_REST_Controller extends WP_REST_Controller {
 	 * Fetches the OpenID Provider Configuration document from the
 	 * well-known endpoint and returns it as JSON.
 	 *
-	 * @param WP_REST_Request $request The REST request.
+	 * @param WP_REST_Request<array<string, mixed>> $request The REST request.
 	 * @return WP_REST_Response|WP_Error The discovery document or error.
 	 */
 	public function discover( WP_REST_Request $request ): WP_REST_Response|WP_Error {
