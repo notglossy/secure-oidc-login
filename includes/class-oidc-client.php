@@ -389,8 +389,11 @@ class OIDC_Client {
 				if ( $this->verify_jwks_integrity( $cached_data ) ) {
 					return $cached_data['jwks'];
 				}
-				// Cache integrity check failed - delete potentially compromised cache and fetch fresh
+				// SECURITY: Cache integrity check failed - could be salt rotation or tampering
+				// Log this event for monitoring and fetch fresh JWKS from IdP
+				error_log( '[Secure OIDC Login] JWKS cache HMAC verification failed - fetching fresh keys from IdP. This may indicate WordPress salt rotation or cache tampering.' );
 				delete_transient( $cache_key );
+				// Fall through to fetch fresh JWKS
 			}
 		}
 

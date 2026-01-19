@@ -127,18 +127,21 @@ class OIDC_Token_Crypto {
 	}
 
 	/**
-	 * Decrypt a stored token if it is encrypted. Legacy plaintext values are returned as-is.
+	 * Decrypt a stored token if it is encrypted.
 	 *
 	 * SECURITY: Handles backward compatibility with multiple encryption versions:
 	 * - v2 (current): Sodium ChaCha20-Poly1305-IETF
 	 * - v1 (legacy): OpenSSL AES-256-GCM
-	 * - No prefix (legacy): Plaintext tokens from before encryption was added
 	 *
-	 * SECURITY IMPLICATION: This allows unencrypted tokens to be used, which reduces
-	 * protection against database leaks. Admins should rotate tokens after enabling encryption.
+	 * SECURITY: Plaintext tokens are NO LONGER SUPPORTED as of v0.5.0.
+	 * Users with legacy plaintext tokens must re-authenticate to generate
+	 * properly encrypted tokens. This change prevents database leak attacks
+	 * from exposing sensitive session tokens.
 	 *
-	 * @param string $value Stored token value (encrypted or plaintext).
-	 * @return string|WP_Error Decrypted token, original plaintext, or error on decrypt failure.
+	 * @since 0.5.0 Plaintext tokens are rejected - users must re-authenticate.
+	 *
+	 * @param string $value Stored token value (must be encrypted).
+	 * @return string|WP_Error Decrypted token or error on decrypt failure.
 	 */
 	public static function decrypt_if_needed( string $value ): string|WP_Error {
 		if ( '' === $value ) {
@@ -151,8 +154,13 @@ class OIDC_Token_Crypto {
 		} elseif ( strpos( $value, self::PREFIX_V1 ) === 0 ) {
 			return self::decrypt_v1_openssl( $value );
 		} else {
-			// Legacy plaintext value - return as-is for backward compatibility
-			return $value;
+			// SECURITY: Plaintext tokens are no longer supported as of v0.5.0
+			// Users must re-authenticate to generate properly encrypted tokens
+			self::log_error( 'Plaintext token rejected - user must re-authenticate for encrypted token storage.' );
+			return new WP_Error(
+				'oidc_plaintext_token_rejected',
+				__( 'Your session has expired. Please log in again.', 'secure-oidc-login' )
+			);
 		}
 	}
 
