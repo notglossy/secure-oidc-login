@@ -317,9 +317,24 @@ class OIDC_Client {
 			// Convert JWKS to Key objects using Firebase JWT library
 			$keys = JWK::parseKeySet( $jwks );
 
+			// SECURITY: Set clock skew tolerance for JWT validation
+			// This accommodates time differences between IdP and WordPress server
+			// Default: 15 seconds (reduced from 5 minutes for better security)
+			// Override with SECURE_OIDC_JWT_LEEWAY environment variable (in seconds)
+			$leeway = 15; // Default: 15 seconds
+			$env_leeway = getenv( 'SECURE_OIDC_JWT_LEEWAY' );
+			if ( false !== $env_leeway && '' !== $env_leeway ) {
+				$parsed_leeway = filter_var( $env_leeway, FILTER_VALIDATE_INT );
+				if ( false !== $parsed_leeway && $parsed_leeway > 0 && $parsed_leeway <= 600 ) {
+					$leeway = $parsed_leeway;
+				} else {
+					error_log( '[Secure OIDC Login] Invalid SECURE_OIDC_JWT_LEEWAY value: ' . $env_leeway . '. Using default 15 seconds.' );
+				}
+			}
+			JWT::$leeway = $leeway;
+
 			// Decode and verify JWT (automatically validates signature, exp, nbf, iat)
-			JWT::$leeway = 300; // 5 minutes clock skew tolerance
-			$decoded     = JWT::decode( $jwt, $keys );
+			$decoded = JWT::decode( $jwt, $keys );
 
 			// Convert stdClass to array for consistency with existing code
 			return json_decode( json_encode( $decoded ), true );

@@ -17,9 +17,13 @@ This security audit evaluates the Secure OIDC Login WordPress plugin, which impl
 |----------|-------|-------------|
 | Critical | 0 | No critical vulnerabilities found |
 | High | 0 | ~~TOCTOU in SSRF protection~~ - **FIXED** (now uses wp_safe_remote_get) |
-| Medium | 2 | JWT clock skew tolerance, missing rate limiting |
+| Medium | 1 | Missing rate limiting |
 | Low | 3 | Information leakage in logs, algorithm compatibility concerns |
 | Informational | 4 | Suggested hardening measures |
+
+**Recently Fixed:**
+- ✅ SSRF TOCTOU vulnerability - Now uses `wp_safe_remote_get()` with integrated validation
+- ✅ JWT clock skew reduced from 5 minutes to 15 seconds (configurable via `SECURE_OIDC_JWT_LEEWAY`)
 
 ---
 
@@ -101,24 +105,27 @@ The plugin implements numerous security best practices:
 
 ### MEDIUM SEVERITY
 
-#### 2. JWT Clock Skew Tolerance May Be Too Generous
+#### 2. ~~JWT Clock Skew Tolerance May Be Too Generous~~ - FIXED
 
-**Location:** `class-oidc-client.php:319`
+**Location:** `class-oidc-client.php:324-334`
 
-**Issue:** The JWT library is configured with a 5-minute (300 seconds) clock skew tolerance:
+**Status:** ✅ **RESOLVED** - Reduced to 15 seconds with environment variable override.
 
-```php
-JWT::$leeway = 300; // 5 minutes clock skew tolerance
+**Original Issue:** The JWT library was configured with a 5-minute (300 seconds) clock skew tolerance, extending the window for token replay attacks.
+
+**Fix Applied:**
+- **Default reduced to 15 seconds** - Balances security with clock sync tolerance
+- **Configurable via `SECURE_OIDC_JWT_LEEWAY`** - Environment variable in seconds
+- **Maximum cap of 600 seconds** - Prevents misconfiguration
+- **Validation with error logging** - Invalid values fallback to 15 seconds
+
+**Usage:**
+```bash
+# In .env or server configuration
+SECURE_OIDC_JWT_LEEWAY=30  # 30 seconds for poorly synced servers
 ```
 
-While this accommodates poorly synchronized servers, it extends the window for token replay attacks. A stolen token remains valid for up to 5 minutes beyond its stated expiration.
-
-**Impact:** Extended attack window for token theft/replay.
-
-**Recommendation:**
-- Consider reducing to 60-120 seconds
-- Document the trade-off for administrators
-- Consider making this configurable via environment variable
+**Security improvement:** Stolen tokens now have a much smaller replay window (15 seconds vs 5 minutes)
 
 ---
 
@@ -310,7 +317,7 @@ The implementation correctly follows:
 ### Priority 2 (Address Soon)
 
 2. **Add rate limiting** to authentication endpoints
-3. **Reduce JWT clock skew** to 60-120 seconds
+3. ~~**Reduce JWT clock skew**~~ - ✅ **FIXED** - Now 15 seconds (configurable via `SECURE_OIDC_JWT_LEEWAY`)
 4. **Mask PII in logs** or implement structured logging
 
 ### Priority 3 (Consider for Hardening)
