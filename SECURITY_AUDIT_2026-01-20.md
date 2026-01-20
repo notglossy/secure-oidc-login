@@ -16,7 +16,7 @@ This security audit evaluates the Secure OIDC Login WordPress plugin, which impl
 | Severity | Count | Description |
 |----------|-------|-------------|
 | Critical | 0 | No critical vulnerabilities found |
-| High | 1 | Time-of-check-time-of-use (TOCTOU) in DNS resolution for SSRF protection |
+| High | 0 | ~~TOCTOU in SSRF protection~~ - **FIXED** (now uses wp_safe_remote_get) |
 | Medium | 2 | JWT clock skew tolerance, missing rate limiting |
 | Low | 3 | Information leakage in logs, algorithm compatibility concerns |
 | Informational | 4 | Suggested hardening measures |
@@ -79,30 +79,23 @@ The plugin implements numerous security best practices:
 
 ### HIGH SEVERITY
 
-#### 1. TOCTOU Race Condition in SSRF Protection
+#### 1. ~~TOCTOU Race Condition in SSRF Protection~~ - FIXED
 
-**Location:** `class-oidc-rest-controller.php:225-240`
+**Location:** `class-oidc-rest-controller.php`
 
-**Issue:** The SSRF protection performs DNS resolution to check if a hostname resolves to a private IP address. However, there's a time-of-check-time-of-use (TOCTOU) vulnerability where:
+**Status:** ✅ **RESOLVED** - Refactored to use WordPress built-in SSRF protection.
 
-1. `gethostbyname()` resolves the hostname to a public IP (passes check)
-2. Attacker's DNS responds differently on second query
-3. `wp_remote_get()` resolves to a private IP (SSRF successful)
+**Original Issue:** The SSRF protection performed DNS resolution separately from the HTTP request, creating a TOCTOU vulnerability where DNS rebinding attacks could bypass the check.
 
-```php
-// Check happens here
-$ip = gethostbyname( $host );
-// ... validation ...
+**Fix Applied:**
+- Now uses `wp_safe_remote_get()` which provides integrated SSRF protection
+- Pre-validates with `wp_http_validate_url()` for clear error messages
+- WordPress validates both the initial URL and redirect destinations
+- Blocks private IPs, non-standard ports, and embedded credentials
 
-// Actual request happens later - DNS may return different result
-$response = wp_remote_get( $discovery_url, array( 'timeout' => 30 ) );
-```
-
-**Impact:** An attacker with control over DNS could bypass SSRF protections to access internal services.
-
-**Recommendation:**
-- Use `wp_http_validate_url()` which resolves and pins the IP
-- Or implement DNS pinning by passing the resolved IP directly to the HTTP request
+**For Intranet IdPs:** Administrators can use WordPress filters:
+- `http_request_host_is_external` - Allow specific internal hosts
+- `http_allowed_safe_ports` - Allow additional ports
 
 ---
 
@@ -312,7 +305,7 @@ The implementation correctly follows:
 
 ### Priority 1 (Address Before Production)
 
-1. **Fix SSRF TOCTOU vulnerability** - Implement DNS pinning or use `wp_http_validate_url()`
+1. ~~**Fix SSRF TOCTOU vulnerability**~~ - ✅ **FIXED** - Now uses `wp_safe_remote_get()`
 
 ### Priority 2 (Address Soon)
 
