@@ -432,7 +432,7 @@ class OIDC_Client {
 			'jwks' => $jwks,
 			'hmac' => $this->generate_jwks_hmac( $jwks ),
 		);
-		$cached = set_transient( $cache_key, $cache_data, self::JWKS_CACHE_DURATION );
+		$cached     = set_transient( $cache_key, $cache_data, self::JWKS_CACHE_DURATION );
 
 		if ( false === $cached ) {
 			error_log( '[Secure OIDC Login] Failed to cache JWKS - this may indicate database issues or object cache problems. Authentication will continue but performance may be impacted.' );

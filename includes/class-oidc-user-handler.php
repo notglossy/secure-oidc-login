@@ -110,7 +110,7 @@ class OIDC_User_Handler {
 			// Check if email domain is allowed
 			if ( ! $this->is_email_domain_allowed( $email ) ) {
 				// SECURITY: Log domain filtering rejections for security auditing
-				$domain = substr( $email, strpos( $email, '@' ) + 1 );
+				$domain  = substr( $email, strpos( $email, '@' ) + 1 );
 				$log_msg = sprintf(
 					'OIDC authentication blocked: email domain not allowed (email: %s, domain: %s, subject: %s)',
 					$email,

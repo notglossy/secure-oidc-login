@@ -67,7 +67,7 @@ class OIDC_REST_Controller extends WP_REST_Controller {
 			$log_msg      = sprintf(
 				'Unauthorized OIDC discovery API access attempt (user_id: %d, user_login: %s, ip: %s)',
 				$current_user->ID,
-				$current_user->user_login ?: 'anonymous',
+				$current_user->user_login ? $current_user->user_login : 'anonymous',
 				$_SERVER['REMOTE_ADDR'] ?? 'unknown'
 			);
 			error_log( '[Secure OIDC Login] ' . $log_msg );
