@@ -45,6 +45,12 @@ class OIDCRestControllerTest extends OIDCTestCase
                 return $parsed !== false ? $parsed : null;
             },
             'is_wp_error' => static fn($thing) => $thing instanceof WP_Error,
+            'wp_get_current_user' => static function() {
+                $user = new \stdClass();
+                $user->ID = 0;
+                $user->user_login = '';
+                return $user;
+            },
         ]);
 
         $this->controller = new OIDC_REST_Controller();

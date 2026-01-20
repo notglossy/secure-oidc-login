@@ -499,11 +499,10 @@ class OIDCClientTest extends OIDCTestCase
     }
 
     /**
-     * Test handle_error returns generic message in production mode.
+     * Test handle_error always returns generic messages to prevent information disclosure.
      */
-    public function testHandleErrorReturnsGenericMessageInProduction(): void
+    public function testHandleErrorReturnsGenericMessage(): void
     {
-        // WP_DEBUG is not defined or false (production mode)
         $reflection = new \ReflectionClass(OIDC_Client::class);
         $method = $reflection->getMethod('handle_error');
         $method->setAccessible(true);
@@ -517,35 +516,35 @@ class OIDCClientTest extends OIDCTestCase
 
         $this->assertInstanceOf(WP_Error::class, $result);
         $this->assertSame('Generic user-facing message', $result->get_error_message());
-        // Should NOT contain detailed error or context in production
+        // Should NEVER contain detailed error or context
         $this->assertStringNotContainsString('sensitive info', $result->get_error_message());
         $this->assertStringNotContainsString('test_context', $result->get_error_message());
     }
 
     /**
-     * Test handle_error includes context in WP_DEBUG mode.
+     * Test handle_error with different error contexts.
      */
-    public function testHandleErrorIncludesContextInDebugMode(): void
+    public function testHandleErrorWithDifferentContexts(): void
     {
-        if (!defined('WP_DEBUG')) {
-            define('WP_DEBUG', true);
-        }
-
         $reflection = new \ReflectionClass(OIDC_Client::class);
         $method = $reflection->getMethod('handle_error');
         $method->setAccessible(true);
 
-        $result = $method->invoke(
-            $this->client,
-            'jwt_decode',
-            'JWT signature verification failed',
-            'Authentication failed'
-        );
+        $contexts = [
+            ['jwt_decode', 'JWT signature verification failed', 'Authentication failed'],
+            ['token_exchange', 'HTTP 500 from IdP', 'Token exchange failed'],
+            ['userinfo', 'Connection timeout', 'Failed to retrieve user information'],
+        ];
 
-        $this->assertInstanceOf(WP_Error::class, $result);
-        // In debug mode, should include context
-        $this->assertStringContainsString('jwt_decode', $result->get_error_message());
-        $this->assertStringContainsString('Authentication failed', $result->get_error_message());
+        foreach ($contexts as [$context, $detailed, $generic]) {
+            $result = $method->invoke($this->client, $context, $detailed, $generic);
+
+            $this->assertInstanceOf(WP_Error::class, $result);
+            $this->assertSame($generic, $result->get_error_message());
+            // Should never contain context or detailed error
+            $this->assertStringNotContainsString($context, $result->get_error_message());
+            $this->assertStringNotContainsString($detailed, $result->get_error_message());
+        }
     }
 
     /**
