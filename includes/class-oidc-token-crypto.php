@@ -122,6 +122,7 @@ class OIDC_Token_Crypto {
 			return self::PREFIX_V2 . $payload;
 
 		} catch ( Exception $e ) {
+			self::log_error( 'Token encryption failed: ' . $e->getMessage() );
 			return new WP_Error( 'oidc_encryption_failed', __( 'Failed to encrypt token.', 'secure-oidc-login' ) );
 		}
 	}
@@ -209,6 +210,7 @@ class OIDC_Token_Crypto {
 			return $plaintext;
 
 		} catch ( Exception $e ) {
+			self::log_error( 'Token decryption (v2) failed: ' . $e->getMessage() );
 			return new WP_Error( 'oidc_decryption_failed', __( 'Failed to decrypt token.', 'secure-oidc-login' ) );
 		}
 	}
@@ -257,6 +259,7 @@ class OIDC_Token_Crypto {
 			return $plaintext;
 
 		} catch ( Exception $e ) {
+			self::log_error( 'Token decryption (v1) failed: ' . $e->getMessage() );
 			return new WP_Error( 'oidc_decryption_failed', __( 'Failed to decrypt token.', 'secure-oidc-login' ) );
 		}
 	}

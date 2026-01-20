@@ -62,6 +62,16 @@ class OIDC_REST_Controller extends WP_REST_Controller {
 	 */
 	public function discover_permissions_check( WP_REST_Request $request ): bool|WP_Error {
 		if ( ! current_user_can( 'manage_options' ) ) {
+			// SECURITY: Log unauthorized API access attempts for security auditing
+			$current_user = wp_get_current_user();
+			$log_msg      = sprintf(
+				'Unauthorized OIDC discovery API access attempt (user_id: %d, user_login: %s, ip: %s)',
+				$current_user->ID,
+				$current_user->user_login ?: 'anonymous',
+				$_SERVER['REMOTE_ADDR'] ?? 'unknown'
+			);
+			error_log( '[Secure OIDC Login] ' . $log_msg );
+
 			return new WP_Error(
 				'rest_forbidden',
 				__( 'You do not have permission to perform OIDC discovery.', 'secure-oidc-login' ),

@@ -109,12 +109,22 @@ class OIDC_User_Handler {
 
 			// Check if email domain is allowed
 			if ( ! $this->is_email_domain_allowed( $email ) ) {
+				// SECURITY: Log domain filtering rejections for security auditing
+				$domain = substr( $email, strpos( $email, '@' ) + 1 );
+				$log_msg = sprintf(
+					'OIDC authentication blocked: email domain not allowed (email: %s, domain: %s, subject: %s)',
+					$email,
+					$domain,
+					$subject
+				);
+				error_log( '[Secure OIDC Login] ' . $log_msg );
+
 				return new WP_Error(
 					'oidc_domain_not_allowed',
 					sprintf(
 						/* translators: %s: email domain */
 						__( 'Your email domain (%s) is not authorized to access this site. Please contact your administrator.', 'secure-oidc-login' ),
-						esc_html( substr( $email, strpos( $email, '@' ) + 1 ) )
+						esc_html( $domain )
 					)
 				);
 			}
@@ -123,7 +133,25 @@ class OIDC_User_Handler {
 
 			if ( $user ) {
 				// Link this WordPress account to the OIDC identity
-				update_user_meta( $user->ID, 'oidc_subject', $subject );
+				// CRITICAL: If metadata storage fails, authentication should fail
+				// Without the oidc_subject link, future logins will fail or create duplicate accounts
+				$subject_stored = update_user_meta( $user->ID, 'oidc_subject', $subject );
+
+				if ( false === $subject_stored ) {
+					$error_msg = sprintf(
+						'Failed to link OIDC identity to existing user (user_id: %d, email: %s, subject: %s)',
+						$user->ID,
+						$email,
+						$subject
+					);
+					error_log( '[Secure OIDC Login] ' . $error_msg );
+
+					return new WP_Error(
+						'oidc_metadata_storage_failed',
+						__( 'Failed to link your identity. Please contact the site administrator.', 'secure-oidc-login' )
+					);
+				}
+
 				$this->update_user_from_claims( $user, $claims );
 				return $user;
 			}
@@ -199,8 +227,29 @@ class OIDC_User_Handler {
 		}
 
 		// Store OIDC metadata for future authentication
-		update_user_meta( $user_id, 'oidc_subject', $subject );
-		update_user_meta( $user_id, 'oidc_created', true );
+		// CRITICAL: If metadata storage fails, delete the user to prevent orphaned accounts
+		$subject_stored = update_user_meta( $user_id, 'oidc_subject', $subject );
+		$created_stored = update_user_meta( $user_id, 'oidc_created', true );
+
+		if ( false === $subject_stored || false === $created_stored ) {
+			// Rollback: Delete the user we just created since OIDC metadata couldn't be stored
+			// Without this metadata, the user cannot authenticate via OIDC on future logins
+			require_once ABSPATH . 'wp-admin/includes/user.php';
+			wp_delete_user( $user_id );
+
+			$error_msg = sprintf(
+				'Failed to store OIDC metadata for user (subject: %s, oidc_subject stored: %s, oidc_created stored: %s)',
+				$subject,
+				$subject_stored ? 'true' : 'false',
+				$created_stored ? 'true' : 'false'
+			);
+			error_log( '[Secure OIDC Login] ' . $error_msg );
+
+			return new WP_Error(
+				'oidc_metadata_storage_failed',
+				__( 'Failed to create user account. Please contact the site administrator.', 'secure-oidc-login' )
+			);
+		}
 
 		/**
 		 * Fires after a new user is created via OIDC authentication.
@@ -210,7 +259,25 @@ class OIDC_User_Handler {
 		 */
 		do_action( 'secure_oidc_login_user_created', $user_id, $claims );
 
-		return get_user_by( 'ID', $user_id );
+		// Retrieve the created user object
+		$user = get_user_by( 'ID', $user_id );
+
+		// Handle edge case: user was deleted between creation and retrieval (race condition or hook interference)
+		if ( false === $user ) {
+			$error_msg = sprintf(
+				'User object not found after creation (user_id: %d, subject: %s). This may indicate a race condition or problematic action hook.',
+				$user_id,
+				$subject
+			);
+			error_log( '[Secure OIDC Login] ' . $error_msg );
+
+			return new WP_Error(
+				'oidc_user_retrieval_failed',
+				__( 'Failed to retrieve user account after creation. Please contact the site administrator.', 'secure-oidc-login' )
+			);
+		}
+
+		return $user;
 	}
 
 	/**
@@ -241,7 +308,18 @@ class OIDC_User_Handler {
 
 		// Only call wp_update_user if we have fields to update
 		if ( count( $user_data ) > 1 ) {
-			wp_update_user( $user_data );
+			$update_result = wp_update_user( $user_data );
+
+			// Log failures for debugging, but don't block authentication
+			// Profile updates are not critical - the user can still authenticate
+			if ( is_wp_error( $update_result ) ) {
+				$error_msg = sprintf(
+					'Failed to update user profile from OIDC claims (user_id: %d, error: %s)',
+					$user->ID,
+					$update_result->get_error_message()
+				);
+				error_log( '[Secure OIDC Login] ' . $error_msg );
+			}
 		}
 
 		/**

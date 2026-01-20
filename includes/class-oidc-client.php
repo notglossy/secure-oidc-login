@@ -61,6 +61,11 @@ class OIDC_Client {
 	 * Logs detailed error information for debugging while returning generic
 	 * messages to users to prevent leaking sensitive system information.
 	 *
+	 * SECURITY: Always returns generic user-facing messages regardless of WP_DEBUG.
+	 * Detailed error context is logged to error_log for administrator debugging.
+	 * This prevents information disclosure through WP_Error objects that may be
+	 * displayed to end users in REST API responses or login screens.
+	 *
 	 * @param string $context       Error context (e.g., 'token_exchange', 'userinfo').
 	 * @param string $detailed_error Detailed error message for logging.
 	 * @param string $generic_message Generic user-facing error message.
@@ -75,18 +80,7 @@ class OIDC_Client {
 		);
 		error_log( $log_message );
 
-		// If WP_DEBUG is enabled, provide more context (but not full internal details)
-		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-			$debug_message = sprintf(
-				/* translators: 1: Generic error message, 2: Error context */
-				__( '%1$s (Context: %2$s)', 'secure-oidc-login' ),
-				$generic_message,
-				$context
-			);
-			return new WP_Error( 'oidc_error', $debug_message );
-		}
-
-		// Return generic error to users in production
+		// Always return generic error to users to prevent information disclosure
 		return new WP_Error( 'oidc_error', $generic_message );
 	}
 
@@ -392,7 +386,11 @@ class OIDC_Client {
 				// SECURITY: Cache integrity check failed - could be salt rotation or tampering
 				// Log this event for monitoring and fetch fresh JWKS from IdP
 				error_log( '[Secure OIDC Login] JWKS cache HMAC verification failed - fetching fresh keys from IdP. This may indicate WordPress salt rotation or cache tampering.' );
-				delete_transient( $cache_key );
+
+				$deleted = delete_transient( $cache_key );
+				if ( false === $deleted ) {
+					error_log( '[Secure OIDC Login] Failed to delete compromised JWKS cache - this may indicate database issues.' );
+				}
 				// Fall through to fetch fresh JWKS
 			}
 		}
@@ -434,7 +432,11 @@ class OIDC_Client {
 			'jwks' => $jwks,
 			'hmac' => $this->generate_jwks_hmac( $jwks ),
 		);
-		set_transient( $cache_key, $cache_data, self::JWKS_CACHE_DURATION );
+		$cached = set_transient( $cache_key, $cache_data, self::JWKS_CACHE_DURATION );
+
+		if ( false === $cached ) {
+			error_log( '[Secure OIDC Login] Failed to cache JWKS - this may indicate database issues or object cache problems. Authentication will continue but performance may be impacted.' );
+		}
 
 		return $jwks;
 	}
