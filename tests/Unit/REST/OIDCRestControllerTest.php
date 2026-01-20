@@ -36,13 +36,30 @@ class OIDCRestControllerTest extends OIDCTestCase
         Functions\stubs([
             'register_rest_route' => true,
             'esc_url_raw' => static fn($url) => $url,
-            'wp_remote_get' => static fn($url, $args) => ['body' => '{}', 'response' => ['code' => 200]],
+            'wp_safe_remote_get' => static fn($url, $args) => ['body' => '{}', 'response' => ['code' => 200]],
+            'wp_safe_remote_get' => static fn($url, $args) => ['body' => '{}', 'response' => ['code' => 200]],
             'wp_remote_retrieve_response_code' => static fn($response) => $response['response']['code'] ?? 200,
             'wp_remote_retrieve_body' => static fn($response) => $response['body'] ?? '',
             'wp_remote_retrieve_header' => static fn($response, $header) => 'application/json',
             'wp_parse_url' => static function($url) {
                 $parsed = parse_url($url);
                 return $parsed !== false ? $parsed : null;
+            },
+            'wp_http_validate_url' => static function($url) {
+                // Simulate WordPress validation - block private IPs
+                $parsed = parse_url($url);
+                if (!$parsed || empty($parsed['host'])) {
+                    return false;
+                }
+                $host = $parsed['host'];
+                // Block localhost and private IPs
+                if (in_array($host, ['localhost', '127.0.0.1', '::1'])) {
+                    return false;
+                }
+                if (preg_match('/^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)/', $host)) {
+                    return false;
+                }
+                return $url;
             },
             'is_wp_error' => static fn($thing) => $thing instanceof WP_Error,
             'wp_get_current_user' => static function() {
@@ -154,7 +171,10 @@ class OIDCRestControllerTest extends OIDCTestCase
     {
         $discoveryDoc = $this->getSampleOIDCConfig();
 
-        Functions\when('wp_remote_get')->justReturn([
+        // Mock wp_http_validate_url to accept the URL
+        Functions\when('wp_http_validate_url')->justReturn('https://idp.example.com/.well-known/openid-configuration');
+
+        Functions\when('wp_safe_remote_get')->justReturn([
             'body' => json_encode($discoveryDoc),
             'response' => ['code' => 200]
         ]);
@@ -176,7 +196,10 @@ class OIDCRestControllerTest extends OIDCTestCase
     {
         $requestedUrl = null;
 
-        Functions\when('wp_remote_get')->alias(function($url, $args) use (&$requestedUrl) {
+        // Mock wp_http_validate_url to accept the URL
+        Functions\when('wp_http_validate_url')->alias(fn($url) => $url);
+
+        Functions\when('wp_safe_remote_get')->alias(function($url, $args) use (&$requestedUrl) {
             $requestedUrl = $url;
             return [
                 'body' => json_encode($this->getSampleOIDCConfig()),
@@ -199,7 +222,10 @@ class OIDCRestControllerTest extends OIDCTestCase
     {
         $requestedUrl = null;
 
-        Functions\when('wp_remote_get')->alias(function($url, $args) use (&$requestedUrl) {
+        // Mock wp_http_validate_url to accept the URL
+        Functions\when('wp_http_validate_url')->alias(fn($url) => $url);
+
+        Functions\when('wp_safe_remote_get')->alias(function($url, $args) use (&$requestedUrl) {
             $requestedUrl = $url;
             return [
                 'body' => json_encode($this->getSampleOIDCConfig()),
@@ -221,7 +247,10 @@ class OIDCRestControllerTest extends OIDCTestCase
      */
     public function testDiscoverReturnsErrorOnHttpFailure(): void
     {
-        Functions\when('wp_remote_get')->justReturn(new WP_Error('http_error', 'Connection failed'));
+        // Mock wp_http_validate_url to accept the URL
+        Functions\when('wp_http_validate_url')->alias(fn($url) => $url);
+
+        Functions\when('wp_safe_remote_get')->justReturn(new WP_Error('http_error', 'Connection failed'));
 
         $request = $this->createMock(WP_REST_Request::class);
         $request->method('get_param')->willReturn('https://idp.example.com');
@@ -237,7 +266,10 @@ class OIDCRestControllerTest extends OIDCTestCase
      */
     public function testDiscoverReturnsErrorOnNon200Status(): void
     {
-        Functions\when('wp_remote_get')->justReturn([
+        // Mock wp_http_validate_url to accept the URL
+        Functions\when('wp_http_validate_url')->alias(fn($url) => $url);
+
+        Functions\when('wp_safe_remote_get')->justReturn([
             'body' => '{"error": "not_found"}',
             'response' => ['code' => 404]
         ]);
@@ -257,7 +289,10 @@ class OIDCRestControllerTest extends OIDCTestCase
      */
     public function testDiscoverReturnsErrorOnHtmlResponse(): void
     {
-        Functions\when('wp_remote_get')->justReturn([
+        // Mock wp_http_validate_url to accept the URL
+        Functions\when('wp_http_validate_url')->alias(fn($url) => $url);
+
+        Functions\when('wp_safe_remote_get')->justReturn([
             'body' => '<html><body>Not Found</body></html>',
             'response' => ['code' => 200]
         ]);
@@ -278,7 +313,10 @@ class OIDCRestControllerTest extends OIDCTestCase
      */
     public function testDiscoverReturnsErrorOnInvalidJson(): void
     {
-        Functions\when('wp_remote_get')->justReturn([
+        // Mock wp_http_validate_url to accept the URL
+        Functions\when('wp_http_validate_url')->alias(fn($url) => $url);
+
+        Functions\when('wp_safe_remote_get')->justReturn([
             'body' => 'not valid json {[',
             'response' => ['code' => 200]
         ]);
@@ -315,6 +353,9 @@ class OIDCRestControllerTest extends OIDCTestCase
     {
         putenv('SECURE_OIDC_ALLOW_INSECURE_DISCOVERY=true');
 
+        // Mock wp_http_validate_url to return the URL (valid)
+        Functions\when('wp_http_validate_url')->justReturn('http://idp.example.com');
+
         $reflection = new \ReflectionClass(OIDC_REST_Controller::class);
         $method = $reflection->getMethod('validate_discovery_url_ssrf');
         $method->setAccessible(true);
@@ -338,8 +379,8 @@ class OIDCRestControllerTest extends OIDCTestCase
         $result = $method->invoke($this->controller, 'https://localhost:8080');
 
         $this->assertInstanceOf(WP_Error::class, $result);
-        // localhost resolves to 127.0.0.1 which fails private IP check first
-        $this->assertSame('local_url_blocked', $result->get_error_code());
+        // localhost is explicitly blocked before wp_http_validate_url check
+        $this->assertSame('localhost_blocked', $result->get_error_code());
     }
 
     /**
@@ -347,6 +388,9 @@ class OIDCRestControllerTest extends OIDCTestCase
      */
     public function testValidateDiscoveryUrlSsrfBlocksLoopbackIpByDefault(): void
     {
+        // Mock wp_http_validate_url to return false for loopback IP
+        Functions\when('wp_http_validate_url')->justReturn(false);
+
         $reflection = new \ReflectionClass(OIDC_REST_Controller::class);
         $method = $reflection->getMethod('validate_discovery_url_ssrf');
         $method->setAccessible(true);
@@ -354,8 +398,8 @@ class OIDCRestControllerTest extends OIDCTestCase
         $result = $method->invoke($this->controller, 'https://127.0.0.1:8080');
 
         $this->assertInstanceOf(WP_Error::class, $result);
-        // Loopback IP fails private IP range check
-        $this->assertSame('local_url_blocked', $result->get_error_code());
+        // wp_http_validate_url blocks this
+        $this->assertSame('url_validation_failed', $result->get_error_code());
     }
 
     /**
@@ -363,6 +407,9 @@ class OIDCRestControllerTest extends OIDCTestCase
      */
     public function testValidateDiscoveryUrlSsrfBlocksPrivateIpByDefault(): void
     {
+        // Mock wp_http_validate_url to return false for private IPs
+        Functions\when('wp_http_validate_url')->justReturn(false);
+
         $reflection = new \ReflectionClass(OIDC_REST_Controller::class);
         $method = $reflection->getMethod('validate_discovery_url_ssrf');
         $method->setAccessible(true);
@@ -377,24 +424,23 @@ class OIDCRestControllerTest extends OIDCTestCase
         foreach ($privateIps as $url) {
             $result = $method->invoke($this->controller, $url);
             $this->assertInstanceOf(WP_Error::class, $result, "Failed to block: $url");
-            $this->assertSame('local_url_blocked', $result->get_error_code());
+            $this->assertSame('url_validation_failed', $result->get_error_code());
         }
     }
 
     /**
-     * Test validate_discovery_url_ssrf allows local IPs with environment variable.
+     * Test validate_discovery_url_ssrf allows valid URLs when wp_http_validate_url passes.
      */
-    public function testValidateDiscoveryUrlSsrfAllowsLocalIpsWithEnvVar(): void
+    public function testValidateDiscoveryUrlSsrfAllowsValidUrls(): void
     {
-        putenv('SECURE_OIDC_ALLOW_LOCAL_DISCOVERY_URLS=true');
+        // Mock wp_http_validate_url to return the URL (valid)
+        Functions\when('wp_http_validate_url')->justReturn('https://192.168.1.1');
 
         $reflection = new \ReflectionClass(OIDC_REST_Controller::class);
         $method = $reflection->getMethod('validate_discovery_url_ssrf');
         $method->setAccessible(true);
 
         $result = $method->invoke($this->controller, 'https://192.168.1.1');
-
-        putenv('SECURE_OIDC_ALLOW_LOCAL_DISCOVERY_URLS'); // Clear env var
 
         $this->assertTrue($result);
     }
@@ -404,6 +450,9 @@ class OIDCRestControllerTest extends OIDCTestCase
      */
     public function testValidateDiscoveryUrlSsrfAcceptsPublicHttpsUrl(): void
     {
+        // Mock wp_http_validate_url to return the URL (valid)
+        Functions\when('wp_http_validate_url')->justReturn('https://idp.example.com');
+
         $reflection = new \ReflectionClass(OIDC_REST_Controller::class);
         $method = $reflection->getMethod('validate_discovery_url_ssrf');
         $method->setAccessible(true);
