@@ -472,6 +472,160 @@ class OIDCAdminTest extends OIDCTestCase
     }
 
     /**
+     * Test render_text_field disables client_id when unsafe mode disabled.
+     */
+    public function testRenderTextFieldDisablesClientIdWithoutUnsafeMode(): void
+    {
+        Functions\when('get_option')->justReturn(['client_id' => 'test-id']);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+        Functions\when('esc_html__')->alias(fn($v, $d) => $v);
+        Functions\when('__')->alias(fn($v, $d) => $v);
+
+        // Ensure unsafe mode is disabled
+        putenv('SECURE_OIDC_ALLOW_UNSAFE');
+        putenv('SECURE_OIDC_CLIENT_ID');
+
+        ob_start();
+        $this->admin->render_text_field(['field' => 'client_id', 'required' => true]);
+        $output = ob_get_clean();
+
+        $this->assertStringContainsString('disabled', $output);
+        $this->assertStringContainsString('SECURE_OIDC_ALLOW_UNSAFE', $output);
+    }
+
+    /**
+     * Test render_text_field enables client_id when unsafe mode enabled.
+     */
+    public function testRenderTextFieldEnablesClientIdWithUnsafeMode(): void
+    {
+        Functions\when('get_option')->justReturn(['client_id' => 'test-id']);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+        Functions\when('esc_html__')->alias(fn($v, $d) => $v);
+        Functions\when('__')->alias(fn($v, $d) => $v);
+
+        // Enable unsafe mode
+        putenv('SECURE_OIDC_ALLOW_UNSAFE=true');
+        putenv('SECURE_OIDC_CLIENT_ID');
+
+        ob_start();
+        $this->admin->render_text_field(['field' => 'client_id', 'required' => true]);
+        $output = ob_get_clean();
+
+        $this->assertStringNotContainsString(' disabled', $output);
+        $this->assertStringContainsString('Warning:', $output);
+
+        // Clean up
+        putenv('SECURE_OIDC_ALLOW_UNSAFE');
+    }
+
+    /**
+     * Test render_text_field shows override message when env var set.
+     */
+    public function testRenderTextFieldShowsEnvVarOverrideMessage(): void
+    {
+        Functions\when('get_option')->justReturn([]);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+        Functions\when('esc_html__')->alias(fn($v, $d) => $v);
+        Functions\when('__')->alias(fn($v, $d) => $v);
+
+        // Set env var
+        putenv('SECURE_OIDC_CLIENT_ID=env-client-id');
+
+        ob_start();
+        $this->admin->render_text_field(['field' => 'client_id', 'required' => true]);
+        $output = ob_get_clean();
+
+        $this->assertStringContainsString('disabled', $output);
+        $this->assertStringContainsString('overridden by', $output);
+
+        // Clean up
+        putenv('SECURE_OIDC_CLIENT_ID');
+    }
+
+    /**
+     * Test render_password_field disables client_secret when unsafe mode disabled.
+     */
+    public function testRenderPasswordFieldDisablesClientSecretWithoutUnsafeMode(): void
+    {
+        Functions\when('get_option')->justReturn(['client_secret' => 'test-secret']);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+        Functions\when('esc_html__')->alias(fn($v, $d) => $v);
+        Functions\when('__')->alias(fn($v, $d) => $v);
+
+        // Ensure unsafe mode is disabled
+        putenv('SECURE_OIDC_ALLOW_UNSAFE');
+        putenv('SECURE_OIDC_CLIENT_SECRET');
+
+        ob_start();
+        $this->admin->render_password_field(['field' => 'client_secret']);
+        $output = ob_get_clean();
+
+        $this->assertStringContainsString('disabled', $output);
+        $this->assertStringContainsString('SECURE_OIDC_ALLOW_UNSAFE', $output);
+    }
+
+    /**
+     * Test render_password_field enables client_secret when unsafe mode enabled.
+     */
+    public function testRenderPasswordFieldEnablesClientSecretWithUnsafeMode(): void
+    {
+        Functions\when('get_option')->justReturn(['client_secret' => 'test-secret']);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+        Functions\when('esc_html__')->alias(fn($v, $d) => $v);
+        Functions\when('__')->alias(fn($v, $d) => $v);
+
+        // Enable unsafe mode
+        putenv('SECURE_OIDC_ALLOW_UNSAFE=true');
+        putenv('SECURE_OIDC_CLIENT_SECRET');
+
+        ob_start();
+        $this->admin->render_password_field(['field' => 'client_secret']);
+        $output = ob_get_clean();
+
+        $this->assertStringNotContainsString(' disabled', $output);
+        $this->assertStringContainsString('Warning:', $output);
+
+        // Clean up
+        putenv('SECURE_OIDC_ALLOW_UNSAFE');
+    }
+
+    /**
+     * Test sanitize_settings preserves existing credentials when unsafe mode disabled.
+     */
+    public function testSanitizeSettingsPreservesExistingCredentialsWithoutUnsafeMode(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'client_id' => 'existing-client-id',
+            'client_secret' => 'existing-client-secret',
+        ]);
+        Functions\when('current_user_can')->justReturn(true);
+        Functions\when('wp_verify_nonce')->justReturn(true);
+
+        // Ensure unsafe mode is disabled
+        putenv('SECURE_OIDC_ALLOW_UNSAFE');
+        putenv('SECURE_OIDC_CLIENT_ID');
+        putenv('SECURE_OIDC_CLIENT_SECRET');
+
+        $_POST['_wpnonce'] = 'valid-nonce';
+
+        $input = [
+            'client_id' => 'new-client-id',
+            'client_secret' => 'new-client-secret',
+        ];
+
+        $result = $this->admin->sanitize_settings($input);
+
+        // Should preserve existing values, not accept new ones
+        $this->assertSame('existing-client-id', $result['client_id']);
+        $this->assertSame('existing-client-secret', $result['client_secret']);
+    }
+
+    /**
      * Test sanitize_settings handles checkbox fields.
      */
     public function testSanitizeSettingsHandlesCheckboxFields(): void
