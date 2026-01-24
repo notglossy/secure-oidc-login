@@ -24,8 +24,86 @@ class OIDC_Admin {
 	public function __construct() {
 		add_action( 'admin_menu', array( $this, 'add_admin_menu' ) );
 		add_action( 'admin_init', array( $this, 'register_settings' ) );
+		add_action( 'admin_init', array( $this, 'handle_credential_deletion' ) );
 		add_action( 'admin_notices', array( $this, 'admin_notices' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_scripts' ) );
+	}
+
+	/**
+	 * Check if unsafe database storage mode is explicitly enabled.
+	 *
+	 * When SECURE_OIDC_ALLOW_UNSAFE=true is set, administrators can store
+	 * client credentials in the WordPress database. This is less secure than
+	 * using environment variables but may be necessary in some hosting environments.
+	 *
+	 * @return bool True if unsafe mode is enabled.
+	 */
+	private function is_unsafe_mode_enabled(): bool {
+		$allow_unsafe = getenv( 'SECURE_OIDC_ALLOW_UNSAFE' );
+		return false !== $allow_unsafe && 'true' === strtolower( $allow_unsafe );
+	}
+
+	/**
+	 * Check if credentials are set via environment variables.
+	 *
+	 * @return bool True if both client_id and client_secret are set via env vars.
+	 */
+	private function has_env_credentials(): bool {
+		$has_client_id     = false !== getenv( 'SECURE_OIDC_CLIENT_ID' ) && '' !== getenv( 'SECURE_OIDC_CLIENT_ID' );
+		$has_client_secret = false !== getenv( 'SECURE_OIDC_CLIENT_SECRET' ) && '' !== getenv( 'SECURE_OIDC_CLIENT_SECRET' );
+		return $has_client_id && $has_client_secret;
+	}
+
+	/**
+	 * Check if credentials are stored in the database.
+	 *
+	 * @return bool True if client_id or client_secret exists in database options.
+	 */
+	private function has_database_credentials(): bool {
+		$options = get_option( 'secure_oidc_login_settings', array() );
+		return ( ! empty( $options['client_id'] ) || ! empty( $options['client_secret'] ) );
+	}
+
+	/**
+	 * Handle credential deletion form submission.
+	 *
+	 * Processes the nonce-protected form for removing client credentials from database.
+	 */
+	public function handle_credential_deletion(): void {
+		// Check if deletion was requested
+		if ( ! isset( $_POST['secure_oidc_delete_credentials'] ) ) {
+			return;
+		}
+
+		// Verify user capability
+		if ( ! current_user_can( 'manage_options' ) ) {
+			return;
+		}
+
+		// Verify nonce
+		if ( ! isset( $_POST['_wpnonce_delete_credentials'] ) ||
+			! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['_wpnonce_delete_credentials'] ) ), 'secure_oidc_delete_credentials' ) ) {
+			add_settings_error(
+				'secure_oidc_login_settings',
+				'nonce_verification_failed',
+				__( 'Security verification failed. Please try again.', 'secure-oidc-login' ),
+				'error'
+			);
+			return;
+		}
+
+		// Remove credentials from database
+		$options = get_option( 'secure_oidc_login_settings', array() );
+		$options['client_id']     = '';
+		$options['client_secret'] = '';
+		update_option( 'secure_oidc_login_settings', $options );
+
+		add_settings_error(
+			'secure_oidc_login_settings',
+			'credentials_deleted',
+			__( 'Client credentials have been removed from the database.', 'secure-oidc-login' ),
+			'success'
+		);
 	}
 
 	/**
@@ -464,8 +542,30 @@ class OIDC_Admin {
 		// Boolean checkbox fields
 		$checkbox_fields = array( 'enable_single_logout', 'create_users', 'require_verified_email', 'disable_native_login' );
 
+		// Credential fields that require special security handling
+		$credential_fields = array( 'client_id', 'client_secret' );
+
 		foreach ( $text_fields as $field ) {
 			$value = sanitize_text_field( $input[ $field ] ?? '' );
+
+			// SECURITY: Block saving credentials unless unsafe mode is explicitly enabled
+			// or the field is being set via environment variable
+			if ( in_array( $field, $credential_fields, true ) ) {
+				$env_var           = 'SECURE_OIDC_' . strtoupper( $field );
+				$is_env_overridden = false !== getenv( $env_var ) && '' !== getenv( $env_var );
+
+				// If env var is set, don't allow database storage (ignore input)
+				if ( $is_env_overridden ) {
+					$sanitized[ $field ] = '';
+					continue;
+				}
+
+				// If unsafe mode is not enabled, preserve existing value and block new values
+				if ( ! $this->is_unsafe_mode_enabled() ) {
+					$sanitized[ $field ] = $existing_settings[ $field ] ?? '';
+					continue;
+				}
+			}
 
 			// Validate length if max length is defined for this field
 			if ( isset( $max_lengths[ $field ] ) && strlen( $value ) > $max_lengths[ $field ] ) {
@@ -694,6 +794,26 @@ class OIDC_Admin {
 			$is_env_overridden = true;
 		}
 
+		// Special handling for client_id field - requires explicit opt-in for database storage
+		$is_credential_field = ( 'client_id' === $field );
+		$is_disabled         = $is_env_overridden;
+		$description_message = '';
+
+		if ( $is_credential_field && ! $is_env_overridden ) {
+			// For client_id without env var: check if unsafe mode is enabled
+			if ( ! $this->is_unsafe_mode_enabled() ) {
+				$is_disabled         = true;
+				$description_message = sprintf(
+					/* translators: %s: environment variable name */
+					__( 'Set via %s environment variable, or set SECURE_OIDC_ALLOW_UNSAFE=true to enable database storage.', 'secure-oidc-login' ),
+					esc_html( $env_var )
+				);
+			} else {
+				// Unsafe mode is enabled - show security warning
+				$description_message = __( 'Warning: Storing credentials in the database is less secure than using environment variables.', 'secure-oidc-login' );
+			}
+		}
+
 		printf(
 			'<input type="%s" name="secure_oidc_login_settings[%s]" value="%s" class="regular-text" %s%s%s>',
 			esc_attr( $type ),
@@ -701,7 +821,7 @@ class OIDC_Admin {
 			esc_attr( $value ),
 			$required,
 			$maxlength,
-			$is_env_overridden ? ' disabled' : ''
+			$is_disabled ? ' disabled' : ''
 		);
 
 		if ( $is_env_overridden ) {
@@ -713,6 +833,9 @@ class OIDC_Admin {
 					esc_html( $env_var )
 				)
 			);
+		} elseif ( $is_credential_field && ! empty( $description_message ) ) {
+			$style = $this->is_unsafe_mode_enabled() ? 'color: #b32d2e;' : 'color: #2271b1;';
+			printf( '<p class="description" style="%s">%s</p>', esc_attr( $style ), esc_html( $description_message ) );
 		} elseif ( isset( $args['description'] ) ) {
 			printf( '<p class="description">%s</p>', esc_html( $args['description'] ) );
 		}
@@ -747,12 +870,32 @@ class OIDC_Admin {
 			$is_env_overridden = true;
 		}
 
+		// Special handling for client_secret field - requires explicit opt-in for database storage
+		$is_credential_field = ( 'client_secret' === $field );
+		$is_disabled         = $is_env_overridden;
+		$description_message = '';
+
+		if ( $is_credential_field && ! $is_env_overridden ) {
+			// For client_secret without env var: check if unsafe mode is enabled
+			if ( ! $this->is_unsafe_mode_enabled() ) {
+				$is_disabled         = true;
+				$description_message = sprintf(
+					/* translators: %s: environment variable name */
+					__( 'Set via %s environment variable, or set SECURE_OIDC_ALLOW_UNSAFE=true to enable database storage.', 'secure-oidc-login' ),
+					esc_html( $env_var )
+				);
+			} else {
+				// Unsafe mode is enabled - show security warning
+				$description_message = __( 'Warning: Storing client secrets in the database is a security risk. Use environment variables in production.', 'secure-oidc-login' );
+			}
+		}
+
 		printf(
 			'<input type="password" name="secure_oidc_login_settings[%s]" value="%s" class="regular-text"%s%s>',
 			esc_attr( $field ),
 			esc_attr( $value ),
 			$maxlength,
-			$is_env_overridden ? ' disabled' : ''
+			$is_disabled ? ' disabled' : ''
 		);
 
 		if ( $is_env_overridden ) {
@@ -764,6 +907,9 @@ class OIDC_Admin {
 					esc_html( $env_var )
 				)
 			);
+		} elseif ( $is_credential_field && ! empty( $description_message ) ) {
+			$style = $this->is_unsafe_mode_enabled() ? 'color: #b32d2e;' : 'color: #2271b1;';
+			printf( '<p class="description" style="%s">%s</p>', esc_attr( $style ), esc_html( $description_message ) );
 		} elseif ( isset( $args['description'] ) ) {
 			printf( '<p class="description">%s</p>', esc_html( $args['description'] ) );
 		}
@@ -833,6 +979,34 @@ class OIDC_Admin {
 		}
 
 		$options = get_option( 'secure_oidc_login_settings', array() );
+
+		// SECURITY: Show error if credentials are stored in database
+		if ( $this->has_database_credentials() ) {
+			?>
+			<div class="notice notice-error">
+				<p>
+					<strong><?php esc_html_e( 'Security Warning:', 'secure-oidc-login' ); ?></strong>
+					<?php esc_html_e( 'Client credentials are stored in the database. This is a security risk. For production environments, use environment variables (SECURE_OIDC_CLIENT_ID and SECURE_OIDC_CLIENT_SECRET) and remove the stored credentials.', 'secure-oidc-login' ); ?>
+				</p>
+				<form method="post" action="" style="margin-top: 10px;">
+					<?php wp_nonce_field( 'secure_oidc_delete_credentials', '_wpnonce_delete_credentials' ); ?>
+					<input type="submit" name="secure_oidc_delete_credentials" class="button button-secondary" value="<?php esc_attr_e( 'Remove Stored Credentials', 'secure-oidc-login' ); ?>" onclick="return confirm('<?php esc_attr_e( 'Are you sure you want to remove the stored client credentials from the database? Make sure you have configured environment variables first.', 'secure-oidc-login' ); ?>');">
+				</form>
+			</div>
+			<?php
+		}
+
+		// SECURITY: Show warning if unsafe mode is enabled
+		if ( $this->is_unsafe_mode_enabled() && ! $this->has_env_credentials() ) {
+			?>
+			<div class="notice notice-warning">
+				<p>
+					<strong><?php esc_html_e( 'Unsafe Mode Active:', 'secure-oidc-login' ); ?></strong>
+					<?php esc_html_e( 'SECURE_OIDC_ALLOW_UNSAFE is enabled, allowing client credentials to be stored in the database. This is not recommended for production environments. Configure SECURE_OIDC_CLIENT_ID and SECURE_OIDC_CLIENT_SECRET environment variables instead.', 'secure-oidc-login' ); ?>
+				</p>
+			</div>
+			<?php
+		}
 
 		// Check for required settings, including environment variables
 		$client_id              = Secure_OIDC_Login::get_setting( 'client_id', $options );
