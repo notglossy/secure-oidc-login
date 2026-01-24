@@ -26,6 +26,13 @@ class OIDC_Client {
 	private array $options;
 
 	/**
+	 * Flag to prevent logging weak salt warnings multiple times per request.
+	 *
+	 * @var bool
+	 */
+	private static bool $has_logged_salt_warning = false;
+
+	/**
 	 * JWKS cache duration in seconds (15 minutes).
 	 *
 	 * SECURITY: Short cache duration minimizes the window of opportunity for JWKS
@@ -460,6 +467,58 @@ class OIDC_Client {
 	}
 
 	/**
+	 * Check if WordPress authentication salts are strong enough for HMAC key derivation.
+	 *
+	 * SECURITY: Logs a warning if SECURE_AUTH_KEY or SECURE_AUTH_SALT are weak, empty,
+	 * or set to the WordPress default placeholder. Weak salts reduce the security of
+	 * the JWKS cache integrity protection, potentially allowing cache poisoning attacks.
+	 *
+	 * A salt is considered weak if:
+	 * - The constant is not defined
+	 * - The value is empty
+	 * - The value contains the WordPress default placeholder: "put your unique phrase here"
+	 * - The value is shorter than 32 characters (insufficient entropy)
+	 *
+	 * @return void
+	 */
+	private function check_salt_strength(): void {
+		// Only warn once per request to avoid log spam.
+		if ( self::$has_logged_salt_warning ) {
+			return;
+		}
+
+		$weak_salts          = array();
+		$default_placeholder = 'put your unique phrase here';
+
+		// Check SECURE_AUTH_KEY.
+		if ( ! defined( 'SECURE_AUTH_KEY' ) ||
+			SECURE_AUTH_KEY === '' ||
+			stripos( SECURE_AUTH_KEY, $default_placeholder ) !== false ||
+			strlen( SECURE_AUTH_KEY ) < 32 ) {
+			$weak_salts[] = 'SECURE_AUTH_KEY';
+		}
+
+		// Check SECURE_AUTH_SALT.
+		if ( ! defined( 'SECURE_AUTH_SALT' ) ||
+			SECURE_AUTH_SALT === '' ||
+			stripos( SECURE_AUTH_SALT, $default_placeholder ) !== false ||
+			strlen( SECURE_AUTH_SALT ) < 32 ) {
+			$weak_salts[] = 'SECURE_AUTH_SALT';
+		}
+
+		if ( ! empty( $weak_salts ) ) {
+			error_log(
+				'[Secure OIDC Login] Security warning: Weak WordPress salts detected (' .
+				implode( ', ', $weak_salts ) .
+				'). JWKS cache integrity protection is weakened. ' .
+				'Please configure strong, unique values in wp-config.php. ' .
+				'See: https://api.wordpress.org/secret-key/1.1/salt/'
+			);
+			self::$has_logged_salt_warning = true;
+		}
+	}
+
+	/**
 	 * Generate HMAC signature for JWKS data.
 	 *
 	 * SECURITY: Uses WordPress authentication salts from wp-config.php to create
@@ -474,6 +533,9 @@ class OIDC_Client {
 	 * @return string HMAC-SHA256 signature (64 hex characters).
 	 */
 	private function generate_jwks_hmac( array $jwks ): string {
+		// Check salt strength and log warning if weak (once per request).
+		$this->check_salt_strength();
+
 		$data = wp_json_encode( $jwks );
 		// Concatenate WordPress authentication salts to create HMAC key
 		// These constants are defined in wp-config.php and not stored in the database
