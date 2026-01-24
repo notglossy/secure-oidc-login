@@ -79,22 +79,22 @@ class OIDC_Rate_Limiter {
 	/**
 	 * Get integer from environment variable with validation.
 	 *
-	 * @param string $var_name Environment variable name.
-	 * @param int    $default  Default value if not set or invalid.
-	 * @param int    $min      Minimum allowed value.
-	 * @param int    $max      Maximum allowed value.
+	 * @param string $var_name      Environment variable name.
+	 * @param int    $default_value Default value if not set or invalid.
+	 * @param int    $min           Minimum allowed value.
+	 * @param int    $max           Maximum allowed value.
 	 * @return int Validated integer value.
 	 */
-	private function get_env_int( string $var_name, int $default, int $min, int $max ): int {
+	private function get_env_int( string $var_name, int $default_value, int $min, int $max ): int {
 		$env_value = getenv( $var_name );
 		if ( false === $env_value || '' === $env_value ) {
-			return $default;
+			return $default_value;
 		}
 
 		$parsed = filter_var( $env_value, FILTER_VALIDATE_INT );
 		if ( false === $parsed || $parsed < $min || $parsed > $max ) {
-			error_log( "[Secure OIDC Login] Invalid {$var_name} value: {$env_value}. Using default {$default}." );
-			return $default;
+			error_log( "[Secure OIDC Login] Invalid {$var_name} value: {$env_value}. Using default {$default_value}." );
+			return $default_value;
 		}
 
 		return $parsed;
@@ -326,8 +326,8 @@ class OIDC_Rate_Limiter {
 	 * @return int|false Timestamp when lockout expires, or false if not locked out.
 	 */
 	public function get_lockout_expiry( string $action ) {
-		$ip_address  = $this->get_client_ip();
-		$lockout_key = $this->get_lockout_key( $action, $ip_address );
+		$ip_address   = $this->get_client_ip();
+		$lockout_key  = $this->get_lockout_key( $action, $ip_address );
 		$lockout_time = get_transient( $lockout_key );
 
 		if ( false === $lockout_time ) {
