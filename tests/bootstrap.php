@@ -44,6 +44,19 @@ if (!defined('SECURE_AUTH_SALT')) {
     define('SECURE_AUTH_SALT', 'test-secure-auth-salt-for-unit-tests-only');
 }
 
+// Define WordPress time constants for rate limiter
+if (!defined('MINUTE_IN_SECONDS')) {
+    define('MINUTE_IN_SECONDS', 60);
+}
+
+if (!defined('HOUR_IN_SECONDS')) {
+    define('HOUR_IN_SECONDS', 3600);
+}
+
+if (!defined('DAY_IN_SECONDS')) {
+    define('DAY_IN_SECONDS', 86400);
+}
+
 // Load stubs
 require_once __DIR__ . '/stubs/class-wp-error.php';
 require_once __DIR__ . '/stubs/class-wp-user.php';
@@ -63,3 +76,4 @@ require_once dirname(__DIR__) . '/includes/class-oidc-admin.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-client.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-user-handler.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-rest-controller.php';
+require_once dirname(__DIR__) . '/includes/class-oidc-rate-limiter.php';

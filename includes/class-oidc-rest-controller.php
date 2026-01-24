@@ -31,6 +31,20 @@ class OIDC_REST_Controller extends WP_REST_Controller {
 	protected $namespace = 'secure-oidc-login/v1';
 
 	/**
+	 * Rate limiter instance.
+	 *
+	 * @var OIDC_Rate_Limiter
+	 */
+	private $rate_limiter;
+
+	/**
+	 * Constructor - Initialize rate limiter.
+	 */
+	public function __construct() {
+		$this->rate_limiter = new OIDC_Rate_Limiter();
+	}
+
+	/**
 	 * Register REST API routes.
 	 */
 	public function register_routes(): void {
@@ -121,6 +135,30 @@ class OIDC_REST_Controller extends WP_REST_Controller {
 	 * @return WP_REST_Response|WP_Error The discovery document or error.
 	 */
 	public function discover( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+		// SECURITY: Check rate limit to prevent discovery endpoint abuse
+		if ( $this->rate_limiter->is_rate_limited( 'discovery' ) ) {
+			$expiry = $this->rate_limiter->get_lockout_expiry( 'discovery' );
+			if ( false !== $expiry ) {
+				$wait_time = $expiry - time();
+				$error_msg = sprintf(
+					/* translators: %d: number of seconds */
+					__( 'Too many discovery requests. Please wait %d seconds before trying again.', 'secure-oidc-login' ),
+					$wait_time
+				);
+			} else {
+				$error_msg = __( 'Too many discovery requests. Please try again later.', 'secure-oidc-login' );
+			}
+
+			return new WP_Error(
+				'rate_limit_exceeded',
+				$error_msg,
+				array( 'status' => 429 )
+			);
+		}
+
+		// Record this discovery attempt
+		$this->rate_limiter->record_attempt( 'discovery' );
+
 		$discovery_url = $request->get_param( 'discovery_url' );
 
 		// Append well-known path if not already present

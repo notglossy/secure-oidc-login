@@ -37,7 +37,6 @@ class OIDCRestControllerTest extends OIDCTestCase
             'register_rest_route' => true,
             'esc_url_raw' => static fn($url) => $url,
             'wp_safe_remote_get' => static fn($url, $args) => ['body' => '{}', 'response' => ['code' => 200]],
-            'wp_safe_remote_get' => static fn($url, $args) => ['body' => '{}', 'response' => ['code' => 200]],
             'wp_remote_retrieve_response_code' => static fn($response) => $response['response']['code'] ?? 200,
             'wp_remote_retrieve_body' => static fn($response) => $response['body'] ?? '',
             'wp_remote_retrieve_header' => static fn($response, $header) => 'application/json',
@@ -68,6 +67,13 @@ class OIDCRestControllerTest extends OIDCTestCase
                 $user->user_login = '';
                 return $user;
             },
+            // Rate limiter stubs
+            'wp_salt' => 'test-salt-value',
+            'get_transient' => false,
+            'set_transient' => true,
+            'delete_transient' => true,
+            'sanitize_text_field' => static fn($str) => $str,
+            'getenv' => false,
         ]);
 
         $this->controller = new OIDC_REST_Controller();
@@ -351,7 +357,13 @@ class OIDCRestControllerTest extends OIDCTestCase
      */
     public function testValidateDiscoveryUrlSsrfAllowsHttpWithEnvVar(): void
     {
-        putenv('SECURE_OIDC_ALLOW_INSECURE_DISCOVERY=true');
+        // Override getenv stub to return true for the allow insecure env var
+        Functions\when('getenv')->alias(function ($var) {
+            if ($var === 'SECURE_OIDC_ALLOW_INSECURE_DISCOVERY') {
+                return 'true';
+            }
+            return false;
+        });
 
         // Mock wp_http_validate_url to return the URL (valid)
         Functions\when('wp_http_validate_url')->justReturn('http://idp.example.com');
@@ -361,8 +373,6 @@ class OIDCRestControllerTest extends OIDCTestCase
         $method->setAccessible(true);
 
         $result = $method->invoke($this->controller, 'http://idp.example.com');
-
-        putenv('SECURE_OIDC_ALLOW_INSECURE_DISCOVERY'); // Clear env var
 
         $this->assertTrue($result);
     }
