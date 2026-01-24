@@ -24,7 +24,7 @@ if (!defined('ABSPATH')) {
 }
 
 if (!defined('SECURE_OIDC_LOGIN_VERSION')) {
-    define('SECURE_OIDC_LOGIN_VERSION', '0.5.0');
+    define('SECURE_OIDC_LOGIN_VERSION', '0.6.0');
 }
 
 if (!defined('SECURE_OIDC_LOGIN_PLUGIN_DIR')) {

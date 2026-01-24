@@ -17,6 +17,8 @@ A secure OpenID Connect (OIDC) authentication plugin for WordPress that allows u
 - **Email Domain Filtering**: Restrict authentication to specific email domains for multi-tenant scenarios
 - **Single Logout**: Optional logout from IdP when logging out of WordPress
 - **Secure by Default**: Uses state parameter for CSRF protection and validates all tokens
+- **Rate Limiting**: IP-based rate limiting protects against brute force and DoS attacks
+- **SSRF Protection**: All HTTP requests use WordPress's safe remote functions to prevent server-side request forgery
 
 ## Requirements
 
@@ -224,6 +226,14 @@ For enhanced security in production environments, you can override sensitive set
 **Access Control:**
 - `SECURE_OIDC_ALLOWED_EMAIL_DOMAINS` - Overrides the Allowed Email Domains setting (comma-separated list)
 
+**Rate Limiting:**
+- `SECURE_OIDC_RATE_LIMIT_ATTEMPTS` - Maximum attempts before lockout (1-100, default: 10)
+- `SECURE_OIDC_RATE_LIMIT_WINDOW` - Time window in seconds (60-3600, default: 300)
+- `SECURE_OIDC_RATE_LIMIT_LOCKOUT` - Lockout duration in seconds (60-86400, default: 900)
+
+**JWT Validation:**
+- `SECURE_OIDC_JWT_LEEWAY` - Clock skew tolerance in seconds (1-600, default: 15)
+
 #### Setting Environment Variables
 
 **On your server:**
@@ -284,6 +294,53 @@ When environment variables are set:
 - **12-Factor Compliance**: Follows best practices for modern web applications
 - **Easy Rotation**: Update credentials without modifying database or code
 - **Backward Compatible**: Existing installations continue to work unchanged; removing environment variables automatically falls back to database values
+
+### Rate Limiting
+
+The plugin includes built-in rate limiting to protect against brute force attacks and denial of service. Rate limiting is enabled by default with sensible limits.
+
+#### Default Configuration
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Attempts | 10 | Maximum login/callback attempts before lockout |
+| Window | 5 minutes | Time window for counting attempts |
+| Lockout | 15 minutes | Duration of lockout after exceeding limit |
+
+#### Customizing Rate Limits
+
+Configure via environment variables:
+
+```bash
+# Allow 5 attempts per 2 minutes, with 30-minute lockout
+export SECURE_OIDC_RATE_LIMIT_ATTEMPTS=5
+export SECURE_OIDC_RATE_LIMIT_WINDOW=120
+export SECURE_OIDC_RATE_LIMIT_LOCKOUT=1800
+```
+
+#### Rate Limited Endpoints
+
+- **Login initiation** (`?oidc_login=1`) - Prevents state exhaustion attacks
+- **Callback handler** (`?oidc_callback=1`) - Prevents callback flooding
+- **Discovery REST endpoint** (`/wp-json/secure-oidc-login/v1/discover`) - Prevents endpoint abuse
+
+Rate limits are tracked per IP address and automatically clear on successful authentication.
+
+### Reverse Proxy / Load Balancer Configuration
+
+If your WordPress site runs behind a reverse proxy (nginx, CloudFlare, AWS ALB, etc.), you need to enable proxy header trust so rate limiting uses the correct client IP:
+
+```php
+// wp-config.php
+define( 'SECURE_OIDC_TRUST_PROXY_HEADERS', true );
+```
+
+When enabled, the plugin checks these headers in order:
+1. `X-Real-IP`
+2. `X-Forwarded-For` (first IP in the list)
+3. `Client-IP`
+
+**Security Warning:** Only enable this if your server is actually behind a trusted proxy. These headers can be spoofed by attackers if requests reach your server directly.
 
 ## Provider-Specific Configuration
 
@@ -353,6 +410,9 @@ add_action('secure_oidc_login_user_created', function($user_id, $claims) {
 - **Email verification** is required by default before linking/creating accounts - disable only for trusted IdPs
 - Client secrets are stored in the WordPress database (consider using environment variables for sensitive deployments)
 - Environment variables can be used to keep credentials out of the database entirely
+- **Rate limiting** protects all authentication endpoints against brute force and DoS attacks
+- **SSRF protection** via `wp_safe_remote_get/post` blocks requests to internal IPs and non-standard ports
+- For intranet identity providers, use the `http_request_host_is_external` WordPress filter
 
 ## Troubleshooting
 
@@ -367,6 +427,18 @@ add_action('secure_oidc_login_user_created', function($user_id, $claims) {
 4. **"Your email domain is not authorized"**: The user's email domain is not in the allowed list. Check the "Allowed Email Domains" setting or `SECURE_OIDC_ALLOWED_EMAIL_DOMAINS` environment variable. Wildcards like `*.example.com` can be used to allow all subdomains.
 
 5. **Login button not appearing**: Ensure Client ID and Authorization Endpoint are configured.
+
+6. **"Too many login attempts"**: You've been rate limited. Wait for the lockout period to expire (default: 15 minutes) or adjust rate limit settings via environment variables.
+
+7. **"Discovery URL was blocked for security reasons"**: The IdP URL points to a private IP or uses a non-standard port. For intranet IdPs, add a filter:
+   ```php
+   add_filter('http_request_host_is_external', function($external, $host) {
+       if ($host === 'idp.internal.company.com') {
+           return true;
+       }
+       return $external;
+   }, 10, 2);
+   ```
 
 ### Debug Mode
 
