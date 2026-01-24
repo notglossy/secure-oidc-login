@@ -518,4 +518,78 @@ class OIDCRestControllerTest extends OIDCTestCase
         // Should fail SSRF validation before making HTTP request
         $this->assertContains($result->get_error_code(), ['https_required', 'localhost_blocked']);
     }
+
+    /**
+     * Test discover returns 429 when rate limited.
+     */
+    public function testDiscoverReturns429WhenRateLimited(): void
+    {
+        // Create a storage array for transients that persists across calls
+        $transients = [];
+
+        // Override transient functions to actually track attempts
+        Functions\when('get_transient')->alias(function ($key) use (&$transients) {
+            return $transients[$key] ?? false;
+        });
+
+        Functions\when('set_transient')->alias(function ($key, $value, $expiration) use (&$transients) {
+            $transients[$key] = $value;
+            return true;
+        });
+
+        Functions\when('delete_transient')->alias(function ($key) use (&$transients) {
+            unset($transients[$key]);
+            return true;
+        });
+
+        // Mock valid URL validation
+        Functions\when('wp_http_validate_url')->justReturn('https://idp.example.com/.well-known/openid-configuration');
+
+        Functions\when('wp_safe_remote_get')->justReturn([
+            'body' => json_encode($this->getSampleOIDCConfig()),
+            'response' => ['code' => 200]
+        ]);
+
+        $request = $this->createMock(WP_REST_Request::class);
+        $request->method('get_param')->willReturn('https://idp.example.com');
+
+        // Make 10 requests to hit the rate limit
+        for ($i = 0; $i < 10; $i++) {
+            $controller = new OIDC_REST_Controller();
+            $controller->discover($request);
+        }
+
+        // The 11th request should be rate limited
+        $controller = new OIDC_REST_Controller();
+        $result = $controller->discover($request);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('rate_limit_exceeded', $result->get_error_code());
+
+        $errorData = $result->get_error_data();
+        $this->assertSame(429, $errorData['status']);
+    }
+
+    /**
+     * Test discover proceeds normally when not rate limited.
+     */
+    public function testDiscoverProceedsWhenNotRateLimited(): void
+    {
+        // Mock valid URL validation
+        Functions\when('wp_http_validate_url')->justReturn('https://idp.example.com/.well-known/openid-configuration');
+
+        Functions\when('wp_safe_remote_get')->justReturn([
+            'body' => json_encode($this->getSampleOIDCConfig()),
+            'response' => ['code' => 200]
+        ]);
+
+        $request = $this->createMock(WP_REST_Request::class);
+        $request->method('get_param')->willReturn('https://idp.example.com');
+
+        // First request should succeed
+        $result = $this->controller->discover($request);
+
+        $this->assertInstanceOf(WP_REST_Response::class, $result);
+        $this->assertSame(200, $result->get_status());
+    }
 }

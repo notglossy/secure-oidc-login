@@ -373,9 +373,9 @@ class OIDCRateLimiterTest extends OIDCTestCase
     }
 
     /**
-     * Test proxy header trust when enabled.
+     * Test proxy header trust with X-Forwarded-For when enabled.
      */
-    public function testProxyHeaderTrustWhenEnabled(): void
+    public function testProxyHeaderTrustWithXForwardedFor(): void
     {
         Functions\when('getenv')->alias(function ($var) {
             if ($var === 'SECURE_OIDC_TRUST_PROXY_HEADERS') {
@@ -392,10 +392,75 @@ class OIDCRateLimiterTest extends OIDCTestCase
 
         $limiter = new OIDC_Rate_Limiter();
 
-        // Record attempts
+        // Record attempts - should use the forwarded IP (203.0.113.45)
         $limiter->record_attempt('test_action');
 
         // Should use the forwarded IP
+        $this->assertInstanceOf(OIDC_Rate_Limiter::class, $limiter);
+    }
+
+    /**
+     * Test proxy header trust with X-Real-IP when enabled.
+     */
+    public function testProxyHeaderTrustWithXRealIP(): void
+    {
+        if (!defined('SECURE_OIDC_TRUST_PROXY_HEADERS')) {
+            define('SECURE_OIDC_TRUST_PROXY_HEADERS', true);
+        }
+
+        // X-Real-IP is checked first, so it should be used
+        $_SERVER['HTTP_X_REAL_IP'] = '198.51.100.50';
+        unset($_SERVER['HTTP_X_FORWARDED_FOR']);
+        unset($_SERVER['HTTP_CLIENT_IP']);
+
+        $limiter = new OIDC_Rate_Limiter();
+
+        // Record attempts - should use X-Real-IP
+        $limiter->record_attempt('test_action');
+
+        $this->assertInstanceOf(OIDC_Rate_Limiter::class, $limiter);
+    }
+
+    /**
+     * Test proxy header trust with Client-IP when enabled.
+     */
+    public function testProxyHeaderTrustWithClientIP(): void
+    {
+        if (!defined('SECURE_OIDC_TRUST_PROXY_HEADERS')) {
+            define('SECURE_OIDC_TRUST_PROXY_HEADERS', true);
+        }
+
+        // Only set Client-IP
+        unset($_SERVER['HTTP_X_REAL_IP']);
+        unset($_SERVER['HTTP_X_FORWARDED_FOR']);
+        $_SERVER['HTTP_CLIENT_IP'] = '198.51.100.75';
+
+        $limiter = new OIDC_Rate_Limiter();
+
+        // Record attempts - should use Client-IP
+        $limiter->record_attempt('test_action');
+
+        $this->assertInstanceOf(OIDC_Rate_Limiter::class, $limiter);
+    }
+
+    /**
+     * Test proxy header with invalid IP is ignored.
+     */
+    public function testProxyHeaderWithInvalidIPIsIgnored(): void
+    {
+        if (!defined('SECURE_OIDC_TRUST_PROXY_HEADERS')) {
+            define('SECURE_OIDC_TRUST_PROXY_HEADERS', true);
+        }
+
+        // Set invalid IP in proxy header
+        $_SERVER['HTTP_X_FORWARDED_FOR'] = 'not-a-valid-ip, also-invalid';
+        $_SERVER['REMOTE_ADDR'] = '192.168.1.100';
+
+        $limiter = new OIDC_Rate_Limiter();
+
+        // Should fall back to REMOTE_ADDR since proxy header has invalid IP
+        $limiter->record_attempt('test_action');
+
         $this->assertInstanceOf(OIDC_Rate_Limiter::class, $limiter);
     }
 

@@ -321,7 +321,7 @@ class OIDC_Client {
 			// This accommodates time differences between IdP and WordPress server
 			// Default: 15 seconds (reduced from 5 minutes for better security)
 			// Override with SECURE_OIDC_JWT_LEEWAY environment variable (in seconds)
-			$leeway = 15; // Default: 15 seconds
+			$leeway     = 15; // Default: 15 seconds
 			$env_leeway = getenv( 'SECURE_OIDC_JWT_LEEWAY' );
 			if ( false !== $env_leeway && '' !== $env_leeway ) {
 				$parsed_leeway = filter_var( $env_leeway, FILTER_VALIDATE_INT );
