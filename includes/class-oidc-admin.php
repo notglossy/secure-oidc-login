@@ -24,7 +24,7 @@ class OIDC_Admin {
 	public function __construct() {
 		add_action( 'admin_menu', array( $this, 'add_admin_menu' ) );
 		add_action( 'admin_init', array( $this, 'register_settings' ) );
-		add_action( 'admin_init', array( $this, 'handle_credential_deletion' ) );
+		add_action( 'admin_post_secure_oidc_delete_credentials', array( $this, 'handle_credential_deletion' ) );
 		add_action( 'admin_notices', array( $this, 'admin_notices' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_scripts' ) );
 	}
@@ -68,42 +68,32 @@ class OIDC_Admin {
 	 * Handle credential deletion form submission.
 	 *
 	 * Processes the nonce-protected form for removing client credentials from database.
+	 * This is called via admin-post.php action handler.
 	 */
 	public function handle_credential_deletion(): void {
-		// Check if deletion was requested
-		if ( ! isset( $_POST['secure_oidc_delete_credentials'] ) ) {
-			return;
-		}
-
 		// Verify user capability
 		if ( ! current_user_can( 'manage_options' ) ) {
-			return;
+			wp_die( esc_html__( 'You do not have permission to perform this action.', 'secure-oidc-login' ) );
 		}
 
 		// Verify nonce
-		if ( ! isset( $_POST['_wpnonce_delete_credentials'] ) ||
-			! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['_wpnonce_delete_credentials'] ) ), 'secure_oidc_delete_credentials' ) ) {
-			add_settings_error(
-				'secure_oidc_login_settings',
-				'nonce_verification_failed',
-				__( 'Security verification failed. Please try again.', 'secure-oidc-login' ),
-				'error'
-			);
-			return;
+		if ( ! isset( $_POST['_wpnonce'] ) ||
+			! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['_wpnonce'] ) ), 'secure_oidc_delete_credentials' ) ) {
+			wp_die( esc_html__( 'Security verification failed. Please try again.', 'secure-oidc-login' ) );
 		}
 
 		// Remove credentials from database
-		$options = get_option( 'secure_oidc_login_settings', array() );
+		$options                  = get_option( 'secure_oidc_login_settings', array() );
 		$options['client_id']     = '';
 		$options['client_secret'] = '';
 		update_option( 'secure_oidc_login_settings', $options );
 
-		add_settings_error(
-			'secure_oidc_login_settings',
-			'credentials_deleted',
-			__( 'Client credentials have been removed from the database.', 'secure-oidc-login' ),
-			'success'
-		);
+		// Store success message in transient for display after redirect
+		set_transient( 'secure_oidc_credentials_deleted', true, 30 );
+
+		// Redirect back to settings page
+		wp_safe_redirect( admin_url( 'options-general.php?page=secure-oidc-login' ) );
+		exit;
 	}
 
 	/**
@@ -980,6 +970,16 @@ class OIDC_Admin {
 
 		$options = get_option( 'secure_oidc_login_settings', array() );
 
+		// Show success message if credentials were just deleted
+		if ( get_transient( 'secure_oidc_credentials_deleted' ) ) {
+			delete_transient( 'secure_oidc_credentials_deleted' );
+			?>
+			<div class="notice notice-success is-dismissible">
+				<p><?php esc_html_e( 'Client credentials have been removed from the database.', 'secure-oidc-login' ); ?></p>
+			</div>
+			<?php
+		}
+
 		// SECURITY: Show error if credentials are stored in database
 		if ( $this->has_database_credentials() ) {
 			?>
@@ -988,9 +988,10 @@ class OIDC_Admin {
 					<strong><?php esc_html_e( 'Security Warning:', 'secure-oidc-login' ); ?></strong>
 					<?php esc_html_e( 'Client credentials are stored in the database. This is a security risk. For production environments, use environment variables (SECURE_OIDC_CLIENT_ID and SECURE_OIDC_CLIENT_SECRET) and remove the stored credentials.', 'secure-oidc-login' ); ?>
 				</p>
-				<form method="post" action="" style="margin-top: 10px;">
-					<?php wp_nonce_field( 'secure_oidc_delete_credentials', '_wpnonce_delete_credentials' ); ?>
-					<input type="submit" name="secure_oidc_delete_credentials" class="button button-secondary" value="<?php esc_attr_e( 'Remove Stored Credentials', 'secure-oidc-login' ); ?>" onclick="return confirm('<?php esc_attr_e( 'Are you sure you want to remove the stored client credentials from the database? Make sure you have configured environment variables first.', 'secure-oidc-login' ); ?>');">
+				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin-top: 10px;">
+					<input type="hidden" name="action" value="secure_oidc_delete_credentials">
+					<?php wp_nonce_field( 'secure_oidc_delete_credentials' ); ?>
+					<input type="submit" class="button button-secondary" value="<?php esc_attr_e( 'Remove Stored Credentials', 'secure-oidc-login' ); ?>" onclick="return confirm('<?php esc_attr_e( 'Are you sure you want to remove the stored client credentials from the database? Make sure you have configured environment variables first.', 'secure-oidc-login' ); ?>');">
 				</form>
 			</div>
 			<?php
