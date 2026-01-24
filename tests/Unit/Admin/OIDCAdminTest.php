@@ -228,16 +228,401 @@ class OIDCAdminTest extends OIDCTestCase
         $_POST['_wpnonce'] = 'valid-nonce';
 
         $input = [
-            'client_id' => 'test-client-id',
             'scope' => 'openid email profile',
             'login_button_text' => 'Sign In with SSO',
         ];
 
         $result = $this->admin->sanitize_settings($input);
 
-        $this->assertSame('test-client-id', $result['client_id']);
         $this->assertSame('openid email profile', $result['scope']);
         $this->assertSame('Sign In with SSO', $result['login_button_text']);
+    }
+
+    /**
+     * Test is_unsafe_mode_enabled returns false by default.
+     */
+    public function testIsUnsafeModeEnabledReturnsFalseByDefault(): void
+    {
+        $reflection = new \ReflectionMethod(OIDC_Admin::class, 'is_unsafe_mode_enabled');
+        $reflection->setAccessible(true);
+
+        // Ensure env var is not set
+        putenv('SECURE_OIDC_ALLOW_UNSAFE');
+        $result = $reflection->invoke($this->admin);
+        $this->assertFalse($result);
+    }
+
+    /**
+     * Test is_unsafe_mode_enabled returns true when explicitly enabled.
+     */
+    public function testIsUnsafeModeEnabledReturnsTrueWhenSet(): void
+    {
+        $reflection = new \ReflectionMethod(OIDC_Admin::class, 'is_unsafe_mode_enabled');
+        $reflection->setAccessible(true);
+
+        putenv('SECURE_OIDC_ALLOW_UNSAFE=true');
+        $result = $reflection->invoke($this->admin);
+        $this->assertTrue($result);
+
+        // Clean up
+        putenv('SECURE_OIDC_ALLOW_UNSAFE');
+    }
+
+    /**
+     * Test is_unsafe_mode_enabled is case-insensitive.
+     */
+    public function testIsUnsafeModeEnabledIsCaseInsensitive(): void
+    {
+        $reflection = new \ReflectionMethod(OIDC_Admin::class, 'is_unsafe_mode_enabled');
+        $reflection->setAccessible(true);
+
+        putenv('SECURE_OIDC_ALLOW_UNSAFE=TRUE');
+        $result = $reflection->invoke($this->admin);
+        $this->assertTrue($result);
+
+        putenv('SECURE_OIDC_ALLOW_UNSAFE=True');
+        $result = $reflection->invoke($this->admin);
+        $this->assertTrue($result);
+
+        // Clean up
+        putenv('SECURE_OIDC_ALLOW_UNSAFE');
+    }
+
+    /**
+     * Test has_env_credentials returns false when no env vars set.
+     */
+    public function testHasEnvCredentialsReturnsFalseWhenNotSet(): void
+    {
+        $reflection = new \ReflectionMethod(OIDC_Admin::class, 'has_env_credentials');
+        $reflection->setAccessible(true);
+
+        putenv('SECURE_OIDC_CLIENT_ID');
+        putenv('SECURE_OIDC_CLIENT_SECRET');
+
+        $result = $reflection->invoke($this->admin);
+        $this->assertFalse($result);
+    }
+
+    /**
+     * Test has_env_credentials returns true when both env vars set.
+     */
+    public function testHasEnvCredentialsReturnsTrueWhenBothSet(): void
+    {
+        $reflection = new \ReflectionMethod(OIDC_Admin::class, 'has_env_credentials');
+        $reflection->setAccessible(true);
+
+        putenv('SECURE_OIDC_CLIENT_ID=test-client-id');
+        putenv('SECURE_OIDC_CLIENT_SECRET=test-client-secret');
+
+        $result = $reflection->invoke($this->admin);
+        $this->assertTrue($result);
+
+        // Clean up
+        putenv('SECURE_OIDC_CLIENT_ID');
+        putenv('SECURE_OIDC_CLIENT_SECRET');
+    }
+
+    /**
+     * Test has_env_credentials returns false when only one env var set.
+     */
+    public function testHasEnvCredentialsReturnsFalseWhenOnlyOneSet(): void
+    {
+        $reflection = new \ReflectionMethod(OIDC_Admin::class, 'has_env_credentials');
+        $reflection->setAccessible(true);
+
+        putenv('SECURE_OIDC_CLIENT_ID=test-client-id');
+        putenv('SECURE_OIDC_CLIENT_SECRET');
+
+        $result = $reflection->invoke($this->admin);
+        $this->assertFalse($result);
+
+        putenv('SECURE_OIDC_CLIENT_ID');
+        putenv('SECURE_OIDC_CLIENT_SECRET=test-client-secret');
+
+        $result = $reflection->invoke($this->admin);
+        $this->assertFalse($result);
+
+        // Clean up
+        putenv('SECURE_OIDC_CLIENT_ID');
+        putenv('SECURE_OIDC_CLIENT_SECRET');
+    }
+
+    /**
+     * Test sanitize_settings blocks credentials when unsafe mode disabled.
+     */
+    public function testSanitizeSettingsBlocksCredentialsWithoutUnsafeMode(): void
+    {
+        Functions\when('get_option')->justReturn([]);
+        Functions\when('current_user_can')->justReturn(true);
+        Functions\when('wp_verify_nonce')->justReturn(true);
+
+        // Ensure unsafe mode is disabled
+        putenv('SECURE_OIDC_ALLOW_UNSAFE');
+        putenv('SECURE_OIDC_CLIENT_ID');
+        putenv('SECURE_OIDC_CLIENT_SECRET');
+
+        $_POST['_wpnonce'] = 'valid-nonce';
+
+        $input = [
+            'client_id' => 'test-client-id',
+            'client_secret' => 'test-client-secret',
+        ];
+
+        $result = $this->admin->sanitize_settings($input);
+
+        // Credentials should be empty (blocked)
+        $this->assertSame('', $result['client_id']);
+        $this->assertSame('', $result['client_secret']);
+    }
+
+    /**
+     * Test sanitize_settings allows credentials when unsafe mode enabled.
+     */
+    public function testSanitizeSettingsAllowsCredentialsWithUnsafeMode(): void
+    {
+        Functions\when('get_option')->justReturn([]);
+        Functions\when('current_user_can')->justReturn(true);
+        Functions\when('wp_verify_nonce')->justReturn(true);
+
+        // Enable unsafe mode
+        putenv('SECURE_OIDC_ALLOW_UNSAFE=true');
+        putenv('SECURE_OIDC_CLIENT_ID');
+        putenv('SECURE_OIDC_CLIENT_SECRET');
+
+        $_POST['_wpnonce'] = 'valid-nonce';
+
+        $input = [
+            'client_id' => 'test-client-id',
+            'client_secret' => 'test-client-secret',
+        ];
+
+        $result = $this->admin->sanitize_settings($input);
+
+        // Credentials should be allowed
+        $this->assertSame('test-client-id', $result['client_id']);
+        $this->assertSame('test-client-secret', $result['client_secret']);
+
+        // Clean up
+        putenv('SECURE_OIDC_ALLOW_UNSAFE');
+    }
+
+    /**
+     * Test sanitize_settings clears db credentials when env vars set.
+     */
+    public function testSanitizeSettingsClearsDbCredentialsWhenEnvVarsSet(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'client_id' => 'old-db-client-id',
+            'client_secret' => 'old-db-client-secret',
+        ]);
+        Functions\when('current_user_can')->justReturn(true);
+        Functions\when('wp_verify_nonce')->justReturn(true);
+
+        // Set env vars
+        putenv('SECURE_OIDC_CLIENT_ID=env-client-id');
+        putenv('SECURE_OIDC_CLIENT_SECRET=env-client-secret');
+
+        $_POST['_wpnonce'] = 'valid-nonce';
+
+        $input = [
+            'client_id' => 'submitted-client-id',
+            'client_secret' => 'submitted-client-secret',
+        ];
+
+        $result = $this->admin->sanitize_settings($input);
+
+        // Database values should be cleared when env vars are set
+        $this->assertSame('', $result['client_id']);
+        $this->assertSame('', $result['client_secret']);
+
+        // Clean up
+        putenv('SECURE_OIDC_CLIENT_ID');
+        putenv('SECURE_OIDC_CLIENT_SECRET');
+    }
+
+    /**
+     * Test has_database_credentials returns false when no credentials stored.
+     */
+    public function testHasDatabaseCredentialsReturnsFalseWhenEmpty(): void
+    {
+        Functions\when('get_option')->justReturn([]);
+
+        $reflection = new \ReflectionMethod(OIDC_Admin::class, 'has_database_credentials');
+        $reflection->setAccessible(true);
+
+        $result = $reflection->invoke($this->admin);
+        $this->assertFalse($result);
+    }
+
+    /**
+     * Test has_database_credentials returns true when credentials stored.
+     */
+    public function testHasDatabaseCredentialsReturnsTrueWhenStored(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'client_id' => 'stored-client-id',
+            'client_secret' => 'stored-client-secret',
+        ]);
+
+        $reflection = new \ReflectionMethod(OIDC_Admin::class, 'has_database_credentials');
+        $reflection->setAccessible(true);
+
+        $result = $reflection->invoke($this->admin);
+        $this->assertTrue($result);
+    }
+
+    /**
+     * Test render_text_field disables client_id when unsafe mode disabled.
+     */
+    public function testRenderTextFieldDisablesClientIdWithoutUnsafeMode(): void
+    {
+        Functions\when('get_option')->justReturn(['client_id' => 'test-id']);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+        Functions\when('esc_html__')->alias(fn($v, $d) => $v);
+        Functions\when('__')->alias(fn($v, $d) => $v);
+
+        // Ensure unsafe mode is disabled
+        putenv('SECURE_OIDC_ALLOW_UNSAFE');
+        putenv('SECURE_OIDC_CLIENT_ID');
+
+        ob_start();
+        $this->admin->render_text_field(['field' => 'client_id', 'required' => true]);
+        $output = ob_get_clean();
+
+        $this->assertStringContainsString('disabled', $output);
+        $this->assertStringContainsString('SECURE_OIDC_ALLOW_UNSAFE', $output);
+    }
+
+    /**
+     * Test render_text_field enables client_id when unsafe mode enabled.
+     */
+    public function testRenderTextFieldEnablesClientIdWithUnsafeMode(): void
+    {
+        Functions\when('get_option')->justReturn(['client_id' => 'test-id']);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+        Functions\when('esc_html__')->alias(fn($v, $d) => $v);
+        Functions\when('__')->alias(fn($v, $d) => $v);
+
+        // Enable unsafe mode
+        putenv('SECURE_OIDC_ALLOW_UNSAFE=true');
+        putenv('SECURE_OIDC_CLIENT_ID');
+
+        ob_start();
+        $this->admin->render_text_field(['field' => 'client_id', 'required' => true]);
+        $output = ob_get_clean();
+
+        $this->assertStringNotContainsString(' disabled', $output);
+        $this->assertStringContainsString('Warning:', $output);
+
+        // Clean up
+        putenv('SECURE_OIDC_ALLOW_UNSAFE');
+    }
+
+    /**
+     * Test render_text_field shows override message when env var set.
+     */
+    public function testRenderTextFieldShowsEnvVarOverrideMessage(): void
+    {
+        Functions\when('get_option')->justReturn([]);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+        Functions\when('esc_html__')->alias(fn($v, $d) => $v);
+        Functions\when('__')->alias(fn($v, $d) => $v);
+
+        // Set env var
+        putenv('SECURE_OIDC_CLIENT_ID=env-client-id');
+
+        ob_start();
+        $this->admin->render_text_field(['field' => 'client_id', 'required' => true]);
+        $output = ob_get_clean();
+
+        $this->assertStringContainsString('disabled', $output);
+        $this->assertStringContainsString('overridden by', $output);
+
+        // Clean up
+        putenv('SECURE_OIDC_CLIENT_ID');
+    }
+
+    /**
+     * Test render_password_field disables client_secret when unsafe mode disabled.
+     */
+    public function testRenderPasswordFieldDisablesClientSecretWithoutUnsafeMode(): void
+    {
+        Functions\when('get_option')->justReturn(['client_secret' => 'test-secret']);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+        Functions\when('esc_html__')->alias(fn($v, $d) => $v);
+        Functions\when('__')->alias(fn($v, $d) => $v);
+
+        // Ensure unsafe mode is disabled
+        putenv('SECURE_OIDC_ALLOW_UNSAFE');
+        putenv('SECURE_OIDC_CLIENT_SECRET');
+
+        ob_start();
+        $this->admin->render_password_field(['field' => 'client_secret']);
+        $output = ob_get_clean();
+
+        $this->assertStringContainsString('disabled', $output);
+        $this->assertStringContainsString('SECURE_OIDC_ALLOW_UNSAFE', $output);
+    }
+
+    /**
+     * Test render_password_field enables client_secret when unsafe mode enabled.
+     */
+    public function testRenderPasswordFieldEnablesClientSecretWithUnsafeMode(): void
+    {
+        Functions\when('get_option')->justReturn(['client_secret' => 'test-secret']);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+        Functions\when('esc_html__')->alias(fn($v, $d) => $v);
+        Functions\when('__')->alias(fn($v, $d) => $v);
+
+        // Enable unsafe mode
+        putenv('SECURE_OIDC_ALLOW_UNSAFE=true');
+        putenv('SECURE_OIDC_CLIENT_SECRET');
+
+        ob_start();
+        $this->admin->render_password_field(['field' => 'client_secret']);
+        $output = ob_get_clean();
+
+        $this->assertStringNotContainsString(' disabled', $output);
+        $this->assertStringContainsString('Warning:', $output);
+
+        // Clean up
+        putenv('SECURE_OIDC_ALLOW_UNSAFE');
+    }
+
+    /**
+     * Test sanitize_settings preserves existing credentials when unsafe mode disabled.
+     */
+    public function testSanitizeSettingsPreservesExistingCredentialsWithoutUnsafeMode(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'client_id' => 'existing-client-id',
+            'client_secret' => 'existing-client-secret',
+        ]);
+        Functions\when('current_user_can')->justReturn(true);
+        Functions\when('wp_verify_nonce')->justReturn(true);
+
+        // Ensure unsafe mode is disabled
+        putenv('SECURE_OIDC_ALLOW_UNSAFE');
+        putenv('SECURE_OIDC_CLIENT_ID');
+        putenv('SECURE_OIDC_CLIENT_SECRET');
+
+        $_POST['_wpnonce'] = 'valid-nonce';
+
+        $input = [
+            'client_id' => 'new-client-id',
+            'client_secret' => 'new-client-secret',
+        ];
+
+        $result = $this->admin->sanitize_settings($input);
+
+        // Should preserve existing values, not accept new ones
+        $this->assertSame('existing-client-id', $result['client_id']);
+        $this->assertSame('existing-client-secret', $result['client_secret']);
     }
 
     /**
