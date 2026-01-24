@@ -52,6 +52,8 @@ class OIDCClientTest extends OIDCTestCase
             },
             'wp_remote_post' => static fn($url, $args) => ['body' => '{}', 'response' => ['code' => 200]],
             'wp_remote_get' => static fn($url, $args) => ['body' => '{}', 'response' => ['code' => 200]],
+            'wp_safe_remote_post' => static fn($url, $args) => ['body' => '{}', 'response' => ['code' => 200]],
+            'wp_safe_remote_get' => static fn($url, $args) => ['body' => '{}', 'response' => ['code' => 200]],
             'wp_remote_retrieve_response_code' => static fn($response) => $response['response']['code'] ?? 200,
             'wp_remote_retrieve_body' => static fn($response) => $response['body'] ?? '',
             'wp_remote_retrieve_header' => static fn($response, $header) => 'application/json',
@@ -87,7 +89,7 @@ class OIDCClientTest extends OIDCTestCase
      */
     public function testExchangeCodeReturnsErrorOnHttpFailure(): void
     {
-        Functions\when('wp_remote_post')->justReturn(new WP_Error('http_error', 'Connection failed'));
+        Functions\when('wp_safe_remote_post')->justReturn(new WP_Error('http_error', 'Connection failed'));
         Functions\when('is_wp_error')->alias(fn($thing) => $thing instanceof WP_Error);
 
         $result = $this->client->exchange_code('auth-code');
@@ -100,7 +102,7 @@ class OIDCClientTest extends OIDCTestCase
      */
     public function testExchangeCodeReturnsErrorOnNonJsonResponse(): void
     {
-        Functions\when('wp_remote_post')->justReturn(['body' => '<html>Error</html>', 'response' => ['code' => 200]]);
+        Functions\when('wp_safe_remote_post')->justReturn(['body' => '<html>Error</html>', 'response' => ['code' => 200]]);
         Functions\when('wp_remote_retrieve_header')->justReturn('text/html');
 
         $result = $this->client->exchange_code('auth-code');
@@ -113,7 +115,7 @@ class OIDCClientTest extends OIDCTestCase
      */
     public function testExchangeCodeReturnsErrorOnNon200Status(): void
     {
-        Functions\when('wp_remote_post')->justReturn([
+        Functions\when('wp_safe_remote_post')->justReturn([
             'body' => '{"error": "invalid_grant", "error_description": "Code expired"}',
             'response' => ['code' => 400]
         ]);
@@ -129,7 +131,7 @@ class OIDCClientTest extends OIDCTestCase
      */
     public function testExchangeCodeReturnsErrorWhenAccessTokenMissing(): void
     {
-        Functions\when('wp_remote_post')->justReturn([
+        Functions\when('wp_safe_remote_post')->justReturn([
             'body' => '{"id_token": "test-id-token", "token_type": "Bearer"}',
             'response' => ['code' => 200]
         ]);
@@ -145,7 +147,7 @@ class OIDCClientTest extends OIDCTestCase
      */
     public function testExchangeCodeReturnsErrorWhenIdTokenMissing(): void
     {
-        Functions\when('wp_remote_post')->justReturn([
+        Functions\when('wp_safe_remote_post')->justReturn([
             'body' => '{"access_token": "test-access-token", "token_type": "Bearer"}',
             'response' => ['code' => 200]
         ]);
@@ -161,7 +163,7 @@ class OIDCClientTest extends OIDCTestCase
      */
     public function testExchangeCodeReturnsErrorForUnsupportedTokenType(): void
     {
-        Functions\when('wp_remote_post')->justReturn([
+        Functions\when('wp_safe_remote_post')->justReturn([
             'body' => '{"access_token": "test", "id_token": "test", "token_type": "MAC"}',
             'response' => ['code' => 200]
         ]);
@@ -184,7 +186,7 @@ class OIDCClientTest extends OIDCTestCase
             'expires_in' => 3600,
         ];
 
-        Functions\when('wp_remote_post')->justReturn([
+        Functions\when('wp_safe_remote_post')->justReturn([
             'body' => json_encode($tokenResponse),
             'response' => ['code' => 200]
         ]);
@@ -219,7 +221,7 @@ class OIDCClientTest extends OIDCTestCase
      */
     public function testGetUserinfoReturnsErrorOnHttpFailure(): void
     {
-        Functions\when('wp_remote_get')->justReturn(new WP_Error('http_error', 'Connection failed'));
+        Functions\when('wp_safe_remote_get')->justReturn(new WP_Error('http_error', 'Connection failed'));
         Functions\when('is_wp_error')->alias(fn($thing) => $thing instanceof WP_Error);
 
         $result = $this->client->get_userinfo('access-token');
@@ -238,7 +240,7 @@ class OIDCClientTest extends OIDCTestCase
             'name' => 'John Doe',
         ];
 
-        Functions\when('wp_remote_get')->justReturn([
+        Functions\when('wp_safe_remote_get')->justReturn([
             'body' => json_encode($userinfo),
             'response' => ['code' => 200]
         ]);
@@ -271,7 +273,7 @@ class OIDCClientTest extends OIDCTestCase
      */
     public function testDiscoverReturnsErrorOnHttpFailure(): void
     {
-        Functions\when('wp_remote_get')->justReturn(new WP_Error('http_error', 'Connection failed'));
+        Functions\when('wp_safe_remote_get')->justReturn(new WP_Error('http_error', 'Connection failed'));
         Functions\when('is_wp_error')->alias(fn($thing) => $thing instanceof WP_Error);
 
         $result = $this->client->discover('https://idp.example.com');
@@ -284,7 +286,7 @@ class OIDCClientTest extends OIDCTestCase
      */
     public function testDiscoverReturnsErrorOnNonJsonResponse(): void
     {
-        Functions\when('wp_remote_get')->justReturn([
+        Functions\when('wp_safe_remote_get')->justReturn([
             'body' => '<html>Not Found</html>',
             'response' => ['code' => 200]
         ]);
@@ -300,7 +302,7 @@ class OIDCClientTest extends OIDCTestCase
      */
     public function testDiscoverReturnsErrorOnNon200Status(): void
     {
-        Functions\when('wp_remote_get')->justReturn([
+        Functions\when('wp_safe_remote_get')->justReturn([
             'body' => '{}',
             'response' => ['code' => 404]
         ]);
@@ -318,7 +320,7 @@ class OIDCClientTest extends OIDCTestCase
     {
         $config = $this->getSampleOIDCConfig();
 
-        Functions\when('wp_remote_get')->justReturn([
+        Functions\when('wp_safe_remote_get')->justReturn([
             'body' => json_encode($config),
             'response' => ['code' => 200]
         ]);
@@ -347,7 +349,7 @@ class OIDCClientTest extends OIDCTestCase
     {
         $requestBody = null;
 
-        Functions\when('wp_remote_post')->alias(function($url, $args) use (&$requestBody) {
+        Functions\when('wp_safe_remote_post')->alias(function($url, $args) use (&$requestBody) {
             $requestBody = $args['body'] ?? [];
             return [
                 'body' => json_encode([
@@ -373,7 +375,7 @@ class OIDCClientTest extends OIDCTestCase
     {
         $headers = null;
 
-        Functions\when('wp_remote_post')->alias(function($url, $args) use (&$headers) {
+        Functions\when('wp_safe_remote_post')->alias(function($url, $args) use (&$headers) {
             $headers = $args['headers'] ?? [];
             return [
                 'body' => json_encode([
@@ -404,7 +406,7 @@ class OIDCClientTest extends OIDCTestCase
             'expires_in' => 3600,
         ];
 
-        Functions\when('wp_remote_post')->justReturn([
+        Functions\when('wp_safe_remote_post')->justReturn([
             'body' => json_encode($tokenResponse),
             'response' => ['code' => 200]
         ]);
@@ -421,7 +423,7 @@ class OIDCClientTest extends OIDCTestCase
      */
     public function testRefreshTokenReturnsErrorOnHttpFailure(): void
     {
-        Functions\when('wp_remote_post')->justReturn(new WP_Error('http_error', 'Connection failed'));
+        Functions\when('wp_safe_remote_post')->justReturn(new WP_Error('http_error', 'Connection failed'));
         Functions\when('is_wp_error')->alias(fn($thing) => $thing instanceof WP_Error);
 
         $result = $this->client->refresh_token('refresh-token');
@@ -434,7 +436,7 @@ class OIDCClientTest extends OIDCTestCase
      */
     public function testRefreshTokenReturnsErrorOn400Response(): void
     {
-        Functions\when('wp_remote_post')->justReturn([
+        Functions\when('wp_safe_remote_post')->justReturn([
             'body' => json_encode(['error' => 'invalid_grant', 'error_description' => 'Refresh token expired']),
             'response' => ['code' => 400]
         ]);
@@ -450,7 +452,7 @@ class OIDCClientTest extends OIDCTestCase
      */
     public function testGetUserinfoReturnsErrorOnNon200Status(): void
     {
-        Functions\when('wp_remote_get')->justReturn([
+        Functions\when('wp_safe_remote_get')->justReturn([
             'body' => '{"error": "invalid_token"}',
             'response' => ['code' => 401]
         ]);
@@ -466,7 +468,7 @@ class OIDCClientTest extends OIDCTestCase
      */
     public function testGetUserinfoReturnsErrorOnNonJsonResponse(): void
     {
-        Functions\when('wp_remote_get')->justReturn([
+        Functions\when('wp_safe_remote_get')->justReturn([
             'body' => '<html>Error</html>',
             'response' => ['code' => 200]
         ]);
@@ -484,7 +486,7 @@ class OIDCClientTest extends OIDCTestCase
     {
         $requestedUrl = null;
 
-        Functions\when('wp_remote_get')->alias(function($url, $args) use (&$requestedUrl) {
+        Functions\when('wp_safe_remote_get')->alias(function($url, $args) use (&$requestedUrl) {
             $requestedUrl = $url;
             return [
                 'body' => json_encode($this->getSampleOIDCConfig()),
@@ -614,7 +616,7 @@ class OIDCClientTest extends OIDCTestCase
 
         Functions\when('get_transient')->justReturn($cacheData);
         Functions\when('delete_transient')->justReturn(true);
-        Functions\when('wp_remote_get')->justReturn([
+        Functions\when('wp_safe_remote_get')->justReturn([
             'body' => json_encode($freshJwks),
             'response' => ['code' => 200]
         ]);
@@ -643,7 +645,7 @@ class OIDCClientTest extends OIDCTestCase
             'jwks' => $cachedJwks,
             'hmac' => 'valid-hmac'
         ]);
-        Functions\when('wp_remote_get')->justReturn([
+        Functions\when('wp_safe_remote_get')->justReturn([
             'body' => json_encode($freshJwks),
             'response' => ['code' => 200]
         ]);
@@ -667,7 +669,7 @@ class OIDCClientTest extends OIDCTestCase
     public function testGetJwksReturnsErrorOnHttpFailure(): void
     {
         Functions\when('get_transient')->justReturn(false);
-        Functions\when('wp_remote_get')->justReturn(new WP_Error('http_error', 'Connection failed'));
+        Functions\when('wp_safe_remote_get')->justReturn(new WP_Error('http_error', 'Connection failed'));
         Functions\when('is_wp_error')->alias(fn($thing) => $thing instanceof WP_Error);
 
         $reflection = new \ReflectionClass(OIDC_Client::class);
@@ -685,7 +687,7 @@ class OIDCClientTest extends OIDCTestCase
     public function testGetJwksReturnsErrorOnNon200Status(): void
     {
         Functions\when('get_transient')->justReturn(false);
-        Functions\when('wp_remote_get')->justReturn([
+        Functions\when('wp_safe_remote_get')->justReturn([
             'body' => '{"error": "not_found"}',
             'response' => ['code' => 404]
         ]);
@@ -706,7 +708,7 @@ class OIDCClientTest extends OIDCTestCase
     public function testGetJwksReturnsErrorOnInvalidResponse(): void
     {
         Functions\when('get_transient')->justReturn(false);
-        Functions\when('wp_remote_get')->justReturn([
+        Functions\when('wp_safe_remote_get')->justReturn([
             'body' => '{"invalid": "response"}',
             'response' => ['code' => 200]
         ]);

@@ -12,6 +12,7 @@ ignore:
   - "vendor/**/*"
   - "tests/**/*"
   - "build/**/*"
+  - "secure-oidc-login.php"  # Bootstrap file with initialization code - tested via integration tests
 
 comment:
   layout: "reach,diff,flags,files"

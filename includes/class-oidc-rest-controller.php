@@ -31,6 +31,20 @@ class OIDC_REST_Controller extends WP_REST_Controller {
 	protected $namespace = 'secure-oidc-login/v1';
 
 	/**
+	 * Rate limiter instance.
+	 *
+	 * @var OIDC_Rate_Limiter
+	 */
+	private $rate_limiter;
+
+	/**
+	 * Constructor - Initialize rate limiter.
+	 */
+	public function __construct() {
+		$this->rate_limiter = new OIDC_Rate_Limiter();
+	}
+
+	/**
 	 * Register REST API routes.
 	 */
 	public function register_routes(): void {
@@ -108,26 +122,76 @@ class OIDC_REST_Controller extends WP_REST_Controller {
 	 * Fetches the OpenID Provider Configuration document from the
 	 * well-known endpoint and returns it as JSON.
 	 *
+	 * SECURITY: Uses wp_safe_remote_get() which provides built-in SSRF protection
+	 * via wp_http_validate_url(). This blocks:
+	 * - Private/local IP addresses (192.168.x.x, 10.x.x.x, 127.0.0.1, etc.)
+	 * - Non-standard ports (only 80, 443, 8080 allowed)
+	 * - URLs with embedded credentials
+	 * - Invalid/malformed URLs
+	 *
+	 * For intranet IdPs, use the http_request_host_is_external filter.
+	 *
 	 * @param WP_REST_Request<array<string, mixed>> $request The REST request.
 	 * @return WP_REST_Response|WP_Error The discovery document or error.
 	 */
 	public function discover( WP_REST_Request $request ): WP_REST_Response|WP_Error {
-		$discovery_url = $request->get_param( 'discovery_url' );
+		// SECURITY: Check rate limit to prevent discovery endpoint abuse
+		if ( $this->rate_limiter->is_rate_limited( 'discovery' ) ) {
+			$expiry = $this->rate_limiter->get_lockout_expiry( 'discovery' );
+			if ( false !== $expiry ) {
+				$wait_time = $expiry - time();
+				$error_msg = sprintf(
+					/* translators: %d: number of seconds */
+					__( 'Too many discovery requests. Please wait %d seconds before trying again.', 'secure-oidc-login' ),
+					$wait_time
+				);
+			} else {
+				$error_msg = __( 'Too many discovery requests. Please try again later.', 'secure-oidc-login' );
+			}
 
-		// SECURITY: Validate URL to prevent SSRF attacks
-		$ssrf_validation = $this->validate_discovery_url_ssrf( $discovery_url );
-		if ( is_wp_error( $ssrf_validation ) ) {
-			return $ssrf_validation;
+			return new WP_Error(
+				'rate_limit_exceeded',
+				$error_msg,
+				array( 'status' => 429 )
+			);
 		}
+
+		// Record this discovery attempt
+		$this->rate_limiter->record_attempt( 'discovery' );
+
+		$discovery_url = $request->get_param( 'discovery_url' );
 
 		// Append well-known path if not already present
 		if ( strpos( $discovery_url, '.well-known/openid-configuration' ) === false ) {
 			$discovery_url = rtrim( $discovery_url, '/' ) . '/.well-known/openid-configuration';
 		}
 
-		$response = wp_remote_get( $discovery_url, array( 'timeout' => 30 ) );
+		// SECURITY: Validate URL before making request
+		// This provides early feedback with a clear error message
+		$validation_result = $this->validate_discovery_url_ssrf( $discovery_url );
+		if ( is_wp_error( $validation_result ) ) {
+			return $validation_result;
+		}
+
+		// SECURITY: Use wp_safe_remote_get() for SSRF protection
+		// This function validates URLs via wp_http_validate_url() and blocks:
+		// - Private/reserved IP addresses
+		// - Non-standard ports (only 80, 443, 8080 allowed)
+		// - URLs with embedded credentials
+		// It also validates redirect destinations to prevent redirect-based SSRF
+		$response = wp_safe_remote_get( $discovery_url, array( 'timeout' => 30 ) );
 
 		if ( is_wp_error( $response ) ) {
+			// Provide user-friendly error messages for common SSRF blocks
+			$error_code = $response->get_error_code();
+			if ( 'http_request_not_executed' === $error_code ) {
+				return new WP_Error(
+					'ssrf_blocked',
+					__( 'Discovery URL was blocked for security reasons. Ensure the URL uses HTTPS, points to a public IP address, and uses a standard port (80, 443, or 8080).', 'secure-oidc-login' ),
+					array( 'status' => 400 )
+				);
+			}
+
 			return new WP_Error(
 				'discovery_request_failed',
 				$response->get_error_message(),
@@ -177,15 +241,15 @@ class OIDC_REST_Controller extends WP_REST_Controller {
 	}
 
 	/**
-	 * Validate a discovery URL for SSRF protection.
+	 * Pre-validate a discovery URL for SSRF protection with clear error messages.
 	 *
-	 * SECURITY: Prevents Server-Side Request Forgery (SSRF) attacks by:
-	 * - Blocking requests to internal/private IP addresses (unless overridden)
-	 * - Requiring HTTPS connections (unless overridden)
+	 * SECURITY: This provides early validation with user-friendly error messages
+	 * before wp_safe_remote_get() performs its validation. While wp_safe_remote_get()
+	 * provides the actual SSRF protection, this method gives clearer feedback.
 	 *
-	 * Environment variables for intranet deployments:
-	 * - SECURE_OIDC_ALLOW_LOCAL_DISCOVERY_URLS=true - Allow internal IPs
-	 * - SECURE_OIDC_ALLOW_INSECURE_DISCOVERY=true - Allow HTTP connections
+	 * For intranet identity providers, administrators can use WordPress filters:
+	 * - http_request_host_is_external: Allow specific internal hosts
+	 * - http_allowed_safe_ports: Allow additional ports
 	 *
 	 * @since 0.6.0
 	 *
@@ -206,8 +270,16 @@ class OIDC_REST_Controller extends WP_REST_Controller {
 		$scheme = strtolower( $parsed['scheme'] ?? '' );
 		$host   = $parsed['host'];
 
-		// Check HTTPS requirement
+		// Check HTTPS requirement (can be bypassed with SECURE_OIDC_ALLOW_INSECURE_DISCOVERY for testing)
 		$allow_insecure = getenv( 'SECURE_OIDC_ALLOW_INSECURE_DISCOVERY' );
+		if ( 'https' !== $scheme && 'http' !== $scheme ) {
+			return new WP_Error(
+				'invalid_scheme',
+				__( 'Discovery URL must use HTTP or HTTPS.', 'secure-oidc-login' ),
+				array( 'status' => 400 )
+			);
+		}
+
 		if ( 'https' !== $scheme ) {
 			if ( false === $allow_insecure || 'true' !== strtolower( (string) $allow_insecure ) ) {
 				return new WP_Error(
@@ -218,36 +290,25 @@ class OIDC_REST_Controller extends WP_REST_Controller {
 			}
 		}
 
-		// Check for local/internal IP addresses
-		$allow_local = getenv( 'SECURE_OIDC_ALLOW_LOCAL_DISCOVERY_URLS' );
-		if ( false === $allow_local || 'true' !== strtolower( (string) $allow_local ) ) {
-			// Resolve hostname to IP address for validation
-			$ip = gethostbyname( $host );
+		// Check for obviously blocked hosts with clear messages
+		$blocked_hosts = array( 'localhost', 'localhost.localdomain' );
+		if ( in_array( strtolower( $host ), $blocked_hosts, true ) ) {
+			return new WP_Error(
+				'localhost_blocked',
+				__( 'Discovery URL cannot point to localhost. For intranet IdPs, use the http_request_host_is_external filter.', 'secure-oidc-login' ),
+				array( 'status' => 400 )
+			);
+		}
 
-			// Check if resolution failed (returns original hostname)
-			if ( $ip === $host && ! filter_var( $host, FILTER_VALIDATE_IP ) ) {
-				// Could not resolve - allow it (let wp_remote_get handle DNS errors)
-				return true;
-			}
-
-			// Validate the IP is not private or reserved
-			if ( ! filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE ) ) {
-				return new WP_Error(
-					'local_url_blocked',
-					__( 'Discovery URL points to a local or private IP address. Set SECURE_OIDC_ALLOW_LOCAL_DISCOVERY_URLS=true for intranet identity providers.', 'secure-oidc-login' ),
-					array( 'status' => 400 )
-				);
-			}
-
-			// Additional check for localhost variations
-			$blocked_hosts = array( 'localhost', 'localhost.localdomain', '127.0.0.1', '::1', '0.0.0.0' );
-			if ( in_array( strtolower( $host ), $blocked_hosts, true ) ) {
-				return new WP_Error(
-					'localhost_blocked',
-					__( 'Discovery URL cannot point to localhost. Set SECURE_OIDC_ALLOW_LOCAL_DISCOVERY_URLS=true for local testing.', 'secure-oidc-login' ),
-					array( 'status' => 400 )
-				);
-			}
+		// Use WordPress's built-in URL validation for comprehensive checks
+		// This validates against private IPs, ports, and other SSRF vectors
+		$validated_url = wp_http_validate_url( $url );
+		if ( false === $validated_url ) {
+			return new WP_Error(
+				'url_validation_failed',
+				__( 'Discovery URL failed security validation. Ensure it uses a public IP address and standard port (80, 443, or 8080). For intranet IdPs, use the http_request_host_is_external filter.', 'secure-oidc-login' ),
+				array( 'status' => 400 )
+			);
 		}
 
 		return true;

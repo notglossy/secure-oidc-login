@@ -57,6 +57,7 @@ require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-admin.php';
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-user-handler.php';
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-token-crypto.php';
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-rest-controller.php';
+require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-rate-limiter.php';
 
 /**
  * Main plugin class implementing OpenID Connect authentication for WordPress.
@@ -78,6 +79,9 @@ class Secure_OIDC_Login {
 
 	/** @var OIDC_User_Handler Handles WordPress user creation/mapping */
 	private $user_handler;
+
+	/** @var OIDC_Rate_Limiter Handles rate limiting for authentication endpoints */
+	private $rate_limiter;
 
 	/**
 	 * Get the singleton instance.
@@ -136,6 +140,7 @@ class Secure_OIDC_Login {
 		$this->client       = new OIDC_Client();
 		$this->admin        = new OIDC_Admin();
 		$this->user_handler = new OIDC_User_Handler();
+		$this->rate_limiter = new OIDC_Rate_Limiter();
 
 		add_action( 'init', array( $this, 'init' ) );
 		add_action( 'rest_api_init', array( $this, 'register_rest_routes' ) );
@@ -394,6 +399,27 @@ class Secure_OIDC_Login {
 	 * then redirects the user to the identity provider's authorization endpoint.
 	 */
 	public function initiate_login(): void {
+		// SECURITY: Check rate limit to prevent state exhaustion attacks
+		if ( $this->rate_limiter->is_rate_limited( 'login' ) ) {
+			$expiry = $this->rate_limiter->get_lockout_expiry( 'login' );
+			if ( false !== $expiry ) {
+				$wait_time = $expiry - time();
+				$this->handle_error(
+					sprintf(
+						/* translators: %d: number of seconds */
+						__( 'Too many login attempts. Please wait %d seconds before trying again.', 'secure-oidc-login' ),
+						$wait_time
+					)
+				);
+			} else {
+				$this->handle_error( __( 'Too many login attempts. Please try again later.', 'secure-oidc-login' ) );
+			}
+			return;
+		}
+
+		// Record this login attempt
+		$this->rate_limiter->record_attempt( 'login' );
+
 		$options = get_option( 'secure_oidc_login_settings' );
 
 		// Get settings with environment variable support
@@ -459,6 +485,27 @@ class Secure_OIDC_Login {
 	 * validates the ID token, retrieves user info, and logs the user into WordPress.
 	 */
 	public function handle_callback(): void {
+		// SECURITY: Check rate limit to prevent callback flooding and DoS attacks
+		if ( $this->rate_limiter->is_rate_limited( 'callback' ) ) {
+			$expiry = $this->rate_limiter->get_lockout_expiry( 'callback' );
+			if ( false !== $expiry ) {
+				$wait_time = $expiry - time();
+				$this->handle_error(
+					sprintf(
+						/* translators: %d: number of seconds */
+						__( 'Too many authentication attempts. Please wait %d seconds before trying again.', 'secure-oidc-login' ),
+						$wait_time
+					)
+				);
+			} else {
+				$this->handle_error( __( 'Too many authentication attempts. Please try again later.', 'secure-oidc-login' ) );
+			}
+			return;
+		}
+
+		// Record this callback attempt
+		$this->rate_limiter->record_attempt( 'callback' );
+
 		// Verify state to prevent CSRF
 		if ( empty( $_GET['state'] ) ) {
 			$this->handle_error( __( 'Missing state parameter.', 'secure-oidc-login' ) );
@@ -567,6 +614,10 @@ class Secure_OIDC_Login {
 			}
 			update_user_meta( $user->ID, 'oidc_refresh_token', $encrypted_refresh );
 		}
+
+		// Clear rate limits on successful authentication
+		$this->rate_limiter->clear_limit( 'callback' );
+		$this->rate_limiter->clear_limit( 'login' );
 
 		// Establish WordPress session
 		wp_set_current_user( $user->ID );

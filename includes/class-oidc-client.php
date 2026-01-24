@@ -129,7 +129,9 @@ class OIDC_Client {
 			$token_params['code_verifier'] = $code_verifier;
 		}
 
-		$response = wp_remote_post(
+		// SECURITY: Use wp_safe_remote_post() to prevent SSRF attacks
+		// This validates the token_endpoint URL and blocks private IPs, non-standard ports, etc.
+		$response = wp_safe_remote_post(
 			$token_endpoint,
 			array(
 				'body'    => $token_params,
@@ -315,9 +317,24 @@ class OIDC_Client {
 			// Convert JWKS to Key objects using Firebase JWT library
 			$keys = JWK::parseKeySet( $jwks );
 
+			// SECURITY: Set clock skew tolerance for JWT validation
+			// This accommodates time differences between IdP and WordPress server
+			// Default: 15 seconds (reduced from 5 minutes for better security)
+			// Override with SECURE_OIDC_JWT_LEEWAY environment variable (in seconds)
+			$leeway     = 15; // Default: 15 seconds
+			$env_leeway = getenv( 'SECURE_OIDC_JWT_LEEWAY' );
+			if ( false !== $env_leeway && '' !== $env_leeway ) {
+				$parsed_leeway = filter_var( $env_leeway, FILTER_VALIDATE_INT );
+				if ( false !== $parsed_leeway && $parsed_leeway > 0 && $parsed_leeway <= 600 ) {
+					$leeway = $parsed_leeway;
+				} else {
+					error_log( '[Secure OIDC Login] Invalid SECURE_OIDC_JWT_LEEWAY value: ' . $env_leeway . '. Using default 15 seconds.' );
+				}
+			}
+			JWT::$leeway = $leeway;
+
 			// Decode and verify JWT (automatically validates signature, exp, nbf, iat)
-			JWT::$leeway = 300; // 5 minutes clock skew tolerance
-			$decoded     = JWT::decode( $jwt, $keys );
+			$decoded = JWT::decode( $jwt, $keys );
 
 			// Convert stdClass to array for consistency with existing code
 			return json_decode( json_encode( $decoded ), true );
@@ -395,8 +412,9 @@ class OIDC_Client {
 			}
 		}
 
-		// Fetch JWKS from IdP
-		$response = wp_remote_get(
+		// SECURITY: Use wp_safe_remote_get() to prevent SSRF attacks
+		// This validates the jwks_uri and blocks private IPs, non-standard ports, etc.
+		$response = wp_safe_remote_get(
 			$jwks_uri,
 			array(
 				'timeout' => 30,
@@ -497,7 +515,9 @@ class OIDC_Client {
 			return array(); // Userinfo endpoint is optional
 		}
 
-		$response = wp_remote_get(
+		// SECURITY: Use wp_safe_remote_get() to prevent SSRF attacks
+		// This validates the userinfo_endpoint and blocks private IPs, non-standard ports, etc.
+		$response = wp_safe_remote_get(
 			$userinfo_endpoint,
 			array(
 				'headers' => array(
@@ -586,7 +606,9 @@ class OIDC_Client {
 			$headers['Authorization'] = 'Basic ' . base64_encode( $credentials );
 		}
 
-		$response = wp_remote_post(
+		// SECURITY: Use wp_safe_remote_post() to prevent SSRF attacks
+		// This validates the token_endpoint URL and blocks private IPs, non-standard ports, etc.
+		$response = wp_safe_remote_post(
 			$token_endpoint,
 			array(
 				'body'    => $token_params,
@@ -656,7 +678,9 @@ class OIDC_Client {
 	public function discover( string $issuer_url ): array|WP_Error {
 		$discovery_url = rtrim( $issuer_url, '/' ) . '/.well-known/openid-configuration';
 
-		$response = wp_remote_get(
+		// SECURITY: Use wp_safe_remote_get() to prevent SSRF attacks
+		// This validates the discovery_url and blocks private IPs, non-standard ports, etc.
+		$response = wp_safe_remote_get(
 			$discovery_url,
 			array(
 				'timeout' => 30,
