@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0-beta] - 2026-01-24
+
+### Security
+- **[High]** Added IP-based rate limiting to all authentication endpoints (login, callback, discovery)
+- **[High]** Migrated all HTTP requests to `wp_safe_remote_get/post` for comprehensive SSRF protection
+- **[Medium]** Reduced default JWT clock skew tolerance from 5 minutes to 15 seconds
+
+### Added
+- New `OIDC_Rate_Limiter` class using WordPress transients (follows core patterns like `check_comment_flood_db()`)
+- Rate limiting returns HTTP 429 (Too Many Requests) with informative error messages
+- Security event logging for rate limit events (lockouts, blocked requests)
+- New environment variable `SECURE_OIDC_RATE_LIMIT_ATTEMPTS` (1-100, default: 10)
+- New environment variable `SECURE_OIDC_RATE_LIMIT_WINDOW` (60-3600 seconds, default: 300)
+- New environment variable `SECURE_OIDC_RATE_LIMIT_LOCKOUT` (60-86400 seconds, default: 900)
+- New environment variable `SECURE_OIDC_JWT_LEEWAY` (1-600 seconds, default: 15) for JWT clock skew tolerance
+- New constant `SECURE_OIDC_TRUST_PROXY_HEADERS` for reverse proxy/load balancer deployments
+- Reverse proxy support checks `X-Real-IP`, `X-Forwarded-For`, and `Client-IP` headers
+
+### Changed
+- Discovery endpoint now uses `wp_safe_remote_get()` with WordPress's built-in `wp_http_validate_url()` validation
+- Token endpoint now uses `wp_safe_remote_post()` for SSRF protection
+- JWKS endpoint now uses `wp_safe_remote_get()` for SSRF protection
+- Userinfo endpoint now uses `wp_safe_remote_get()` for SSRF protection
+- Removed custom DNS resolution (`gethostbyname()`) in favor of WordPress's built-in SSRF protection
+- Improved error messages for SSRF-blocked requests with guidance for intranet IdPs
+- Rate limits automatically clear on successful authentication
+
+### Removed
+- `SECURE_OIDC_ALLOW_LOCAL_DISCOVERY_URLS` environment variable (use `http_request_host_is_external` filter instead)
+
 ## [0.5.0-beta] - 2026-01-18
 
 ### Security
@@ -87,7 +117,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Flexible email verification
 - PHPStan level 6 compliance
 
-[Unreleased]: https://github.com/notglossy/secure-oidc-login/compare/v0.5.0-beta...HEAD
+[Unreleased]: https://github.com/notglossy/secure-oidc-login/compare/v0.6.0-beta...HEAD
+[0.6.0-beta]: https://github.com/notglossy/secure-oidc-login/compare/v0.5.0-beta...v0.6.0-beta
 [0.5.0-beta]: https://github.com/notglossy/secure-oidc-login/compare/v0.4.0-beta...v0.5.0-beta
 [0.4.0-beta]: https://github.com/notglossy/secure-oidc-login/compare/v0.3.1-beta...v0.4.0-beta
 [0.3.1-beta]: https://github.com/notglossy/secure-oidc-login/compare/v0.3.0-beta...v0.3.1-beta
