@@ -83,10 +83,17 @@ class OIDC_Admin {
 		}
 
 		// Remove credentials from database
+		// Use direct database update to bypass sanitize_settings which would preserve credentials
+		global $wpdb;
 		$options                  = get_option( 'secure_oidc_login_settings', array() );
 		$options['client_id']     = '';
 		$options['client_secret'] = '';
-		update_option( 'secure_oidc_login_settings', $options );
+		$wpdb->update(
+			$wpdb->options,
+			array( 'option_value' => maybe_serialize( $options ) ),
+			array( 'option_name' => 'secure_oidc_login_settings' )
+		);
+		wp_cache_delete( 'secure_oidc_login_settings', 'options' );
 
 		// Store success message in transient for display after redirect
 		set_transient( 'secure_oidc_credentials_deleted', true, 30 );
