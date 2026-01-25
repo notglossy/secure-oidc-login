@@ -707,4 +707,259 @@ class OIDCRestControllerTest extends OIDCTestCase
         $this->assertArrayHasKey('sanitize_callback', $registeredArgs['args']['discovery_url']);
         $this->assertSame('esc_url_raw', $registeredArgs['args']['discovery_url']['sanitize_callback']);
     }
+
+    /**
+     * Test validate_discovery_url_ssrf blocks localhost.localdomain.
+     */
+    public function testValidateDiscoveryUrlSsrfBlocksLocalhostLocaldomain(): void
+    {
+        $reflection = new \ReflectionClass(OIDC_REST_Controller::class);
+        $method = $reflection->getMethod('validate_discovery_url_ssrf');
+        $method->setAccessible(true);
+
+        $result = $method->invoke($this->controller, 'https://localhost.localdomain:8080');
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('localhost_blocked', $result->get_error_code());
+    }
+
+    /**
+     * Test validate_discovery_url_ssrf rejects FTP scheme.
+     */
+    public function testValidateDiscoveryUrlSsrfRejectsFtpScheme(): void
+    {
+        $reflection = new \ReflectionClass(OIDC_REST_Controller::class);
+        $method = $reflection->getMethod('validate_discovery_url_ssrf');
+        $method->setAccessible(true);
+
+        $result = $method->invoke($this->controller, 'ftp://idp.example.com');
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('invalid_scheme', $result->get_error_code());
+    }
+
+    /**
+     * Test validate_discovery_url_ssrf rejects file scheme.
+     *
+     * file:// URLs have no host, so they fail URL format validation.
+     */
+    public function testValidateDiscoveryUrlSsrfRejectsFileScheme(): void
+    {
+        $reflection = new \ReflectionClass(OIDC_REST_Controller::class);
+        $method = $reflection->getMethod('validate_discovery_url_ssrf');
+        $method->setAccessible(true);
+
+        $result = $method->invoke($this->controller, 'file:///etc/passwd');
+
+        // file:// URLs have no host, so they fail URL format validation
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('invalid_url', $result->get_error_code());
+    }
+
+    /**
+     * Test validate_discovery_url_ssrf handles mixed case HTTPS scheme.
+     */
+    public function testValidateDiscoveryUrlSsrfHandlesMixedCaseScheme(): void
+    {
+        // Mock wp_http_validate_url to accept the URL
+        Functions\when('wp_http_validate_url')->justReturn('HTTPS://idp.example.com');
+
+        $reflection = new \ReflectionClass(OIDC_REST_Controller::class);
+        $method = $reflection->getMethod('validate_discovery_url_ssrf');
+        $method->setAccessible(true);
+
+        $result = $method->invoke($this->controller, 'HTTPS://idp.example.com');
+
+        $this->assertTrue($result);
+    }
+
+    /**
+     * Test validate_discovery_url_ssrf blocks IPv6 loopback.
+     */
+    public function testValidateDiscoveryUrlSsrfBlocksIpv6Loopback(): void
+    {
+        // Mock wp_http_validate_url to return false for IPv6 loopback
+        Functions\when('wp_http_validate_url')->justReturn(false);
+
+        $reflection = new \ReflectionClass(OIDC_REST_Controller::class);
+        $method = $reflection->getMethod('validate_discovery_url_ssrf');
+        $method->setAccessible(true);
+
+        $result = $method->invoke($this->controller, 'https://[::1]:8080');
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('url_validation_failed', $result->get_error_code());
+    }
+
+    /**
+     * Test validate_discovery_url_ssrf blocks URL with credentials.
+     */
+    public function testValidateDiscoveryUrlSsrfBlocksUrlWithCredentials(): void
+    {
+        // Mock wp_http_validate_url to return false for URLs with credentials
+        Functions\when('wp_http_validate_url')->justReturn(false);
+
+        $reflection = new \ReflectionClass(OIDC_REST_Controller::class);
+        $method = $reflection->getMethod('validate_discovery_url_ssrf');
+        $method->setAccessible(true);
+
+        $result = $method->invoke($this->controller, 'https://user:pass@idp.example.com');
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('url_validation_failed', $result->get_error_code());
+    }
+
+    /**
+     * Test discover handles SSRF block error from wp_safe_remote_get.
+     */
+    public function testDiscoverHandlesSsrfBlockFromRemoteGet(): void
+    {
+        // Mock valid SSRF pre-validation
+        Functions\when('wp_http_validate_url')->justReturn('https://idp.example.com');
+
+        // But wp_safe_remote_get blocks it
+        Functions\when('wp_safe_remote_get')->justReturn(
+            new WP_Error('http_request_not_executed', 'Request blocked')
+        );
+
+        $request = $this->createMock(WP_REST_Request::class);
+        $request->method('get_param')->willReturn('https://idp.example.com');
+
+        $result = $this->controller->discover($request);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('ssrf_blocked', $result->get_error_code());
+        $this->assertStringContainsString('blocked for security', $result->get_error_message());
+    }
+
+    /**
+     * Test discover handles content-type as array.
+     */
+    public function testDiscoverHandlesContentTypeAsArray(): void
+    {
+        // Mock valid URL validation
+        Functions\when('wp_http_validate_url')->alias(fn($url) => $url);
+
+        Functions\when('wp_safe_remote_get')->justReturn([
+            'body' => '<html>Not JSON</html>',
+            'response' => ['code' => 200],
+        ]);
+
+        // Return content-type as array (some servers do this)
+        Functions\when('wp_remote_retrieve_header')->justReturn(['text/html', 'charset=utf-8']);
+
+        $request = $this->createMock(WP_REST_Request::class);
+        $request->method('get_param')->willReturn('https://idp.example.com');
+
+        $result = $this->controller->discover($request);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('invalid_content_type', $result->get_error_code());
+    }
+
+    /**
+     * Test discover handles empty JSON response.
+     */
+    public function testDiscoverHandlesEmptyJsonResponse(): void
+    {
+        // Mock valid URL validation
+        Functions\when('wp_http_validate_url')->alias(fn($url) => $url);
+
+        Functions\when('wp_safe_remote_get')->justReturn([
+            'body' => 'null',
+            'response' => ['code' => 200],
+        ]);
+        Functions\when('wp_remote_retrieve_header')->justReturn('application/json');
+
+        $request = $this->createMock(WP_REST_Request::class);
+        $request->method('get_param')->willReturn('https://idp.example.com');
+
+        $result = $this->controller->discover($request);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('invalid_json', $result->get_error_code());
+    }
+
+    /**
+     * Test discover handles JSON array instead of object.
+     */
+    public function testDiscoverHandlesJsonArrayInsteadOfObject(): void
+    {
+        // Mock valid URL validation
+        Functions\when('wp_http_validate_url')->alias(fn($url) => $url);
+
+        // Return a JSON array instead of object
+        Functions\when('wp_safe_remote_get')->justReturn([
+            'body' => '["item1", "item2"]',
+            'response' => ['code' => 200],
+        ]);
+        Functions\when('wp_remote_retrieve_header')->justReturn('application/json');
+
+        $request = $this->createMock(WP_REST_Request::class);
+        $request->method('get_param')->willReturn('https://idp.example.com');
+
+        $result = $this->controller->discover($request);
+
+        // JSON array should be valid - it's an array in PHP
+        $this->assertInstanceOf(WP_REST_Response::class, $result);
+    }
+
+    /**
+     * Test validate_discovery_url_format rejects arrays.
+     */
+    public function testValidateDiscoveryUrlFormatRejectsArray(): void
+    {
+        $request = $this->createMock(WP_REST_Request::class);
+
+        $result = $this->controller->validate_discovery_url_format(
+            ['url' => 'https://example.com'],
+            $request,
+            'discovery_url'
+        );
+
+        $this->assertFalse($result);
+    }
+
+    /**
+     * Test validate_discovery_url_format rejects null.
+     */
+    public function testValidateDiscoveryUrlFormatRejectsNull(): void
+    {
+        $request = $this->createMock(WP_REST_Request::class);
+
+        $result = $this->controller->validate_discovery_url_format(
+            null,
+            $request,
+            'discovery_url'
+        );
+
+        $this->assertFalse($result);
+    }
+
+    /**
+     * Test discover strips trailing slash before appending well-known path.
+     */
+    public function testDiscoverStripsTrailingSlash(): void
+    {
+        $requestedUrl = null;
+
+        Functions\when('wp_http_validate_url')->alias(fn($url) => $url);
+
+        Functions\when('wp_safe_remote_get')->alias(function ($url, $args) use (&$requestedUrl) {
+            $requestedUrl = $url;
+            return [
+                'body' => json_encode($this->getSampleOIDCConfig()),
+                'response' => ['code' => 200],
+            ];
+        });
+
+        $request = $this->createMock(WP_REST_Request::class);
+        $request->method('get_param')->willReturn('https://idp.example.com/');
+
+        $this->controller->discover($request);
+
+        // Should not have double slashes
+        $this->assertStringNotContainsString('//.well-known', $requestedUrl);
+        $this->assertStringContainsString('/.well-known/openid-configuration', $requestedUrl);
+    }
 }

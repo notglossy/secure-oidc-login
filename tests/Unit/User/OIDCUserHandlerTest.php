@@ -806,4 +806,206 @@ class OIDCUserHandlerTest extends OIDCTestCase
 
         $this->assertSame('johndoe_3', $result);
     }
+
+    /**
+     * Test is_email_domain_allowed handles whitespace around domains.
+     */
+    public function testIsEmailDomainAllowedHandlesWhitespace(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'allowed_email_domains' => '  example.com  ,  test.org  ',
+        ]);
+
+        $handler = new OIDC_User_Handler();
+
+        $reflection = new \ReflectionMethod(OIDC_User_Handler::class, 'is_email_domain_allowed');
+        $reflection->setAccessible(true);
+
+        $this->assertTrue($reflection->invoke($handler, 'user@example.com'));
+        $this->assertTrue($reflection->invoke($handler, 'user@test.org'));
+    }
+
+    /**
+     * Test is_email_domain_allowed handles empty entries in domain list.
+     */
+    public function testIsEmailDomainAllowedIgnoresEmptyEntries(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'allowed_email_domains' => 'example.com,,,,test.org,',
+        ]);
+
+        $handler = new OIDC_User_Handler();
+
+        $reflection = new \ReflectionMethod(OIDC_User_Handler::class, 'is_email_domain_allowed');
+        $reflection->setAccessible(true);
+
+        $this->assertTrue($reflection->invoke($handler, 'user@example.com'));
+        $this->assertTrue($reflection->invoke($handler, 'user@test.org'));
+        $this->assertFalse($reflection->invoke($handler, 'user@other.com'));
+    }
+
+    /**
+     * Test is_email_domain_allowed prevents partial domain matching.
+     */
+    public function testIsEmailDomainAllowedPreventsPartialMatch(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'allowed_email_domains' => 'example.com',
+        ]);
+
+        $handler = new OIDC_User_Handler();
+
+        $reflection = new \ReflectionMethod(OIDC_User_Handler::class, 'is_email_domain_allowed');
+        $reflection->setAccessible(true);
+
+        // Should NOT match: "badexample.com" is not "example.com"
+        $this->assertFalse($reflection->invoke($handler, 'user@badexample.com'));
+        $this->assertFalse($reflection->invoke($handler, 'user@example.com.evil.com'));
+        // Should match
+        $this->assertTrue($reflection->invoke($handler, 'user@example.com'));
+    }
+
+    /**
+     * Test is_email_domain_allowed with wildcard doesn't match unrelated domains.
+     */
+    public function testIsEmailDomainAllowedWildcardDoesNotMatchUnrelated(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'allowed_email_domains' => '*.example.com',
+        ]);
+
+        $handler = new OIDC_User_Handler();
+
+        $reflection = new \ReflectionMethod(OIDC_User_Handler::class, 'is_email_domain_allowed');
+        $reflection->setAccessible(true);
+
+        // Wildcard *.example.com should NOT match:
+        $this->assertFalse($reflection->invoke($handler, 'user@notexample.com'));
+        $this->assertFalse($reflection->invoke($handler, 'user@example.com.evil.com'));
+        // Should match:
+        $this->assertTrue($reflection->invoke($handler, 'user@example.com'));
+        $this->assertTrue($reflection->invoke($handler, 'user@sub.example.com'));
+    }
+
+    /**
+     * Test is_email_domain_allowed with multiple domains including wildcards.
+     */
+    public function testIsEmailDomainAllowedMixedDomainsAndWildcards(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'allowed_email_domains' => 'exact.com, *.wildcard.org',
+        ]);
+
+        $handler = new OIDC_User_Handler();
+
+        $reflection = new \ReflectionMethod(OIDC_User_Handler::class, 'is_email_domain_allowed');
+        $reflection->setAccessible(true);
+
+        $this->assertTrue($reflection->invoke($handler, 'user@exact.com'));
+        $this->assertTrue($reflection->invoke($handler, 'user@wildcard.org'));
+        $this->assertTrue($reflection->invoke($handler, 'user@sub.wildcard.org'));
+        $this->assertFalse($reflection->invoke($handler, 'user@sub.exact.com'));
+        $this->assertFalse($reflection->invoke($handler, 'user@other.com'));
+    }
+
+    /**
+     * Test is_email_domain_allowed with only whitespace returns true (no restrictions).
+     */
+    public function testIsEmailDomainAllowedWithOnlyWhitespaceAllowsAll(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'allowed_email_domains' => '   ',
+        ]);
+
+        $handler = new OIDC_User_Handler();
+
+        $reflection = new \ReflectionMethod(OIDC_User_Handler::class, 'is_email_domain_allowed');
+        $reflection->setAccessible(true);
+
+        $this->assertTrue($reflection->invoke($handler, 'user@anydomain.com'));
+    }
+
+    /**
+     * Test is_email_domain_allowed handles email with multiple @ signs.
+     */
+    public function testIsEmailDomainAllowedRejectsMultipleAtSigns(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'allowed_email_domains' => 'example.com',
+        ]);
+
+        $handler = new OIDC_User_Handler();
+
+        $reflection = new \ReflectionMethod(OIDC_User_Handler::class, 'is_email_domain_allowed');
+        $reflection->setAccessible(true);
+
+        // Multiple @ signs should result in invalid parsing
+        $this->assertFalse($reflection->invoke($handler, 'user@domain@example.com'));
+    }
+
+    /**
+     * Test is_email_verified handles string with whitespace.
+     */
+    public function testIsEmailVerifiedHandlesWhitespaceInString(): void
+    {
+        $reflection = new \ReflectionMethod(OIDC_User_Handler::class, 'is_email_verified');
+        $reflection->setAccessible(true);
+
+        $this->assertTrue($reflection->invoke($this->handler, ['email_verified' => ' true ']));
+        $this->assertTrue($reflection->invoke($this->handler, ['email_verified' => ' 1 ']));
+        $this->assertFalse($reflection->invoke($this->handler, ['email_verified' => ' false ']));
+    }
+
+    /**
+     * Test is_email_verified returns false for null value.
+     */
+    public function testIsEmailVerifiedReturnsFalseForNull(): void
+    {
+        $reflection = new \ReflectionMethod(OIDC_User_Handler::class, 'is_email_verified');
+        $reflection->setAccessible(true);
+
+        $this->assertFalse($reflection->invoke($this->handler, ['email_verified' => null]));
+    }
+
+    /**
+     * Test is_email_verified returns false for float values.
+     */
+    public function testIsEmailVerifiedReturnsFalseForFloat(): void
+    {
+        $reflection = new \ReflectionMethod(OIDC_User_Handler::class, 'is_email_verified');
+        $reflection->setAccessible(true);
+
+        $this->assertFalse($reflection->invoke($this->handler, ['email_verified' => 1.0]));
+        $this->assertFalse($reflection->invoke($this->handler, ['email_verified' => 0.0]));
+    }
+
+    /**
+     * Test metadata storage failure when linking existing user.
+     */
+    public function testMetadataStorageFailureWhenLinkingExistingUser(): void
+    {
+        $claims = $this->getSampleClaims();
+        $claims['email_verified'] = true;
+
+        // Mock: no user found by subject
+        Functions\when('get_users')->justReturn([]);
+
+        // Mock: existing user found by email
+        $existingUser = new WP_User(99, 'testuser', $claims['email']);
+
+        Functions\when('get_user_by')->alias(function ($field, $value) use ($existingUser, $claims) {
+            if ($field === 'email' && $value === $claims['email']) {
+                return $existingUser;
+            }
+            return false;
+        });
+
+        // Mock: update_user_meta fails
+        Functions\when('update_user_meta')->justReturn(false);
+
+        $result = $this->handler->get_or_create_user($claims);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('oidc_metadata_storage_failed', $result->get_error_code());
+    }
 }
