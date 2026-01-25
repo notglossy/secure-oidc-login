@@ -676,4 +676,470 @@ class OIDCTokenRefreshTest extends OIDCTestCase
         // Should succeed (with warning logged internally)
         $this->assertTrue($result);
     }
+
+    /**
+     * Test multiple consecutive refresh calls succeed with rotation.
+     *
+     * Simulates a chain of token refreshes where each refresh gets a new
+     * rotated refresh token.
+     */
+    public function testMultipleConsecutiveRefreshesWithRotation(): void
+    {
+        $user_id = 123;
+
+        Functions\when('get_option')->justReturn([
+            'enable_auto_token_refresh' => true,
+            'token_refresh_buffer' => 300,
+            'enforce_refresh_token_rotation' => true,
+        ]);
+
+        // First refresh cycle
+        $this->token_manager
+            ->shouldReceive('has_refresh_token')
+            ->with($user_id)
+            ->twice()
+            ->andReturn(true);
+
+        $this->token_manager
+            ->shouldReceive('is_token_expired')
+            ->with($user_id, 300)
+            ->twice()
+            ->andReturn(true);
+
+        // First refresh
+        $this->token_manager
+            ->shouldReceive('get_refresh_token')
+            ->with($user_id)
+            ->once()
+            ->andReturn('refresh-token-v1');
+
+        $this->client
+            ->shouldReceive('refresh_token')
+            ->with('refresh-token-v1')
+            ->once()
+            ->andReturn([
+                'access_token' => 'access-token-v2',
+                'refresh_token' => 'refresh-token-v2',
+                'expires_in' => 3600,
+            ]);
+
+        $this->token_manager
+            ->shouldReceive('was_refresh_token_rotated')
+            ->with($user_id, 'refresh-token-v2')
+            ->once()
+            ->andReturn(true);
+
+        $this->token_manager
+            ->shouldReceive('store_tokens')
+            ->once()
+            ->andReturn(true);
+
+        $result1 = $this->refresh->maybe_refresh($user_id);
+        $this->assertTrue($result1);
+
+        // Second refresh cycle - need a new instance to clear options cache
+        $this->refresh = new OIDC_Token_Refresh($this->client, $this->token_manager);
+
+        $this->token_manager
+            ->shouldReceive('get_refresh_token')
+            ->with($user_id)
+            ->once()
+            ->andReturn('refresh-token-v2');
+
+        $this->client
+            ->shouldReceive('refresh_token')
+            ->with('refresh-token-v2')
+            ->once()
+            ->andReturn([
+                'access_token' => 'access-token-v3',
+                'refresh_token' => 'refresh-token-v3',
+                'expires_in' => 3600,
+            ]);
+
+        $this->token_manager
+            ->shouldReceive('was_refresh_token_rotated')
+            ->with($user_id, 'refresh-token-v3')
+            ->once()
+            ->andReturn(true);
+
+        $this->token_manager
+            ->shouldReceive('store_tokens')
+            ->once()
+            ->andReturn(true);
+
+        $result2 = $this->refresh->maybe_refresh($user_id);
+        $this->assertTrue($result2);
+    }
+
+    /**
+     * Test refresh after previous refresh failure recovers correctly.
+     */
+    public function testRefreshAfterPreviousFailureRecovers(): void
+    {
+        $user_id = 123;
+
+        Functions\when('get_option')->justReturn([
+            'enforce_refresh_token_rotation' => false,
+        ]);
+
+        // First attempt fails
+        $this->token_manager
+            ->shouldReceive('get_refresh_token')
+            ->with($user_id)
+            ->twice()
+            ->andReturn('refresh-token');
+
+        $this->client
+            ->shouldReceive('refresh_token')
+            ->with('refresh-token')
+            ->once()
+            ->andReturn(new WP_Error('oidc_error', 'IdP temporarily unavailable'));
+
+        $result1 = $this->refresh->refresh($user_id);
+        $this->assertInstanceOf(WP_Error::class, $result1);
+
+        // Second attempt succeeds
+        $new_tokens = [
+            'access_token' => 'new-access-token',
+            'refresh_token' => 'new-refresh-token',
+            'expires_in' => 3600,
+        ];
+
+        $this->client
+            ->shouldReceive('refresh_token')
+            ->with('refresh-token')
+            ->once()
+            ->andReturn($new_tokens);
+
+        $this->token_manager
+            ->shouldReceive('was_refresh_token_rotated')
+            ->with($user_id, 'new-refresh-token')
+            ->once()
+            ->andReturn(true);
+
+        $this->token_manager
+            ->shouldReceive('store_tokens')
+            ->with($user_id, $new_tokens)
+            ->once()
+            ->andReturn(true);
+
+        $result2 = $this->refresh->refresh($user_id);
+        $this->assertTrue($result2);
+    }
+
+    /**
+     * Test refresh for multiple different users.
+     */
+    public function testRefreshForMultipleUsers(): void
+    {
+        $user1_id = 100;
+        $user2_id = 200;
+
+        Functions\when('get_option')->justReturn([
+            'enforce_refresh_token_rotation' => false,
+        ]);
+
+        // User 1 refresh
+        $this->token_manager
+            ->shouldReceive('get_refresh_token')
+            ->with($user1_id)
+            ->once()
+            ->andReturn('user1-refresh-token');
+
+        $this->client
+            ->shouldReceive('refresh_token')
+            ->with('user1-refresh-token')
+            ->once()
+            ->andReturn([
+                'access_token' => 'user1-new-access',
+                'refresh_token' => 'user1-new-refresh',
+                'expires_in' => 3600,
+            ]);
+
+        $this->token_manager
+            ->shouldReceive('was_refresh_token_rotated')
+            ->with($user1_id, 'user1-new-refresh')
+            ->once()
+            ->andReturn(true);
+
+        $this->token_manager
+            ->shouldReceive('store_tokens')
+            ->once()
+            ->andReturn(true);
+
+        $result1 = $this->refresh->refresh($user1_id);
+        $this->assertTrue($result1);
+
+        // User 2 refresh
+        $this->token_manager
+            ->shouldReceive('get_refresh_token')
+            ->with($user2_id)
+            ->once()
+            ->andReturn('user2-refresh-token');
+
+        $this->client
+            ->shouldReceive('refresh_token')
+            ->with('user2-refresh-token')
+            ->once()
+            ->andReturn([
+                'access_token' => 'user2-new-access',
+                'refresh_token' => 'user2-new-refresh',
+                'expires_in' => 3600,
+            ]);
+
+        $this->token_manager
+            ->shouldReceive('was_refresh_token_rotated')
+            ->with($user2_id, 'user2-new-refresh')
+            ->once()
+            ->andReturn(true);
+
+        $this->token_manager
+            ->shouldReceive('store_tokens')
+            ->once()
+            ->andReturn(true);
+
+        $result2 = $this->refresh->refresh($user2_id);
+        $this->assertTrue($result2);
+    }
+
+    /**
+     * Test refresh with empty access token in response.
+     */
+    public function testRefreshFailsWithEmptyAccessToken(): void
+    {
+        $user_id = 123;
+
+        Functions\when('get_option')->justReturn([]);
+
+        $this->token_manager
+            ->shouldReceive('get_refresh_token')
+            ->with($user_id)
+            ->once()
+            ->andReturn('refresh-token');
+
+        // Empty string access_token is still invalid
+        $this->client
+            ->shouldReceive('refresh_token')
+            ->with('refresh-token')
+            ->once()
+            ->andReturn([
+                'access_token' => '',
+                'refresh_token' => 'new-refresh-token',
+                'expires_in' => 3600,
+            ]);
+
+        $result = $this->refresh->refresh($user_id);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('oidc_refresh_invalid_response', $result->get_error_code());
+    }
+
+    /**
+     * Test refresh with zero expires_in.
+     */
+    public function testRefreshWithZeroExpiresIn(): void
+    {
+        $user_id = 123;
+
+        Functions\when('get_option')->justReturn([
+            'enforce_refresh_token_rotation' => false,
+        ]);
+
+        $tokens = [
+            'access_token' => 'new-access-token',
+            'refresh_token' => 'new-refresh-token',
+            'expires_in' => 0,
+        ];
+
+        $this->token_manager
+            ->shouldReceive('get_refresh_token')
+            ->with($user_id)
+            ->once()
+            ->andReturn('refresh-token');
+
+        $this->client
+            ->shouldReceive('refresh_token')
+            ->with('refresh-token')
+            ->once()
+            ->andReturn($tokens);
+
+        $this->token_manager
+            ->shouldReceive('was_refresh_token_rotated')
+            ->with($user_id, 'new-refresh-token')
+            ->once()
+            ->andReturn(true);
+
+        $this->token_manager
+            ->shouldReceive('store_tokens')
+            ->with($user_id, $tokens)
+            ->once()
+            ->andReturn(true);
+
+        // Should succeed - expires_in validation is token manager's responsibility
+        $result = $this->refresh->refresh($user_id);
+        $this->assertTrue($result);
+    }
+
+    /**
+     * Test refresh with only access_token in response (no refresh token, not enforced).
+     */
+    public function testRefreshWithOnlyAccessTokenWhenNotEnforced(): void
+    {
+        $user_id = 123;
+
+        Functions\when('get_option')->justReturn([
+            'enforce_refresh_token_rotation' => false,
+        ]);
+
+        // Response has only access_token - no refresh token returned
+        $tokens = [
+            'access_token' => 'new-access-token',
+            'expires_in' => 3600,
+        ];
+
+        $this->token_manager
+            ->shouldReceive('get_refresh_token')
+            ->with($user_id)
+            ->once()
+            ->andReturn('old-refresh-token');
+
+        $this->client
+            ->shouldReceive('refresh_token')
+            ->with('old-refresh-token')
+            ->once()
+            ->andReturn($tokens);
+
+        // No rotation check since no refresh_token in response
+        // Store should still be called with the tokens
+        $this->token_manager
+            ->shouldReceive('store_tokens')
+            ->with($user_id, $tokens)
+            ->once()
+            ->andReturn(true);
+
+        $result = $this->refresh->refresh($user_id);
+        $this->assertTrue($result);
+    }
+
+    /**
+     * Test maybe_refresh uses default buffer when not configured.
+     */
+    public function testMaybeRefreshUsesDefaultBuffer(): void
+    {
+        $user_id = 123;
+
+        Functions\when('get_option')->justReturn([
+            'enable_auto_token_refresh' => true,
+            // No token_refresh_buffer set - should use default 300
+        ]);
+
+        $this->token_manager
+            ->shouldReceive('has_refresh_token')
+            ->with($user_id)
+            ->once()
+            ->andReturn(true);
+
+        // Should use default 300 second buffer
+        $this->token_manager
+            ->shouldReceive('is_token_expired')
+            ->with($user_id, 300)
+            ->once()
+            ->andReturn(false);
+
+        $result = $this->refresh->maybe_refresh($user_id);
+        $this->assertTrue($result);
+    }
+
+    /**
+     * Test refresh with id_token in response.
+     */
+    public function testRefreshWithIdToken(): void
+    {
+        $user_id = 123;
+
+        Functions\when('get_option')->justReturn([
+            'enforce_refresh_token_rotation' => false,
+        ]);
+
+        // Response includes id_token (some IdPs return this on refresh)
+        $tokens = [
+            'access_token' => 'new-access-token',
+            'refresh_token' => 'new-refresh-token',
+            'id_token' => 'new-id-token.jwt.here',
+            'expires_in' => 3600,
+        ];
+
+        $this->token_manager
+            ->shouldReceive('get_refresh_token')
+            ->with($user_id)
+            ->once()
+            ->andReturn('old-refresh-token');
+
+        $this->client
+            ->shouldReceive('refresh_token')
+            ->with('old-refresh-token')
+            ->once()
+            ->andReturn($tokens);
+
+        $this->token_manager
+            ->shouldReceive('was_refresh_token_rotated')
+            ->with($user_id, 'new-refresh-token')
+            ->once()
+            ->andReturn(true);
+
+        // Should store all tokens including id_token
+        $this->token_manager
+            ->shouldReceive('store_tokens')
+            ->with($user_id, $tokens)
+            ->once()
+            ->andReturn(true);
+
+        $result = $this->refresh->refresh($user_id);
+        $this->assertTrue($result);
+    }
+
+    /**
+     * Test refresh buffer at exact minimum boundary.
+     */
+    public function testRefreshBufferAtMinimumBoundary(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'token_refresh_buffer' => 60, // Exactly at minimum
+        ]);
+
+        $this->assertSame(60, $this->refresh->get_refresh_buffer());
+    }
+
+    /**
+     * Test refresh buffer at exact maximum boundary.
+     */
+    public function testRefreshBufferAtMaximumBoundary(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'token_refresh_buffer' => 3600, // Exactly at maximum
+        ]);
+
+        $this->assertSame(3600, $this->refresh->get_refresh_buffer());
+    }
+
+    /**
+     * Test options are cached after first call.
+     */
+    public function testOptionsCaching(): void
+    {
+        // get_option should only be called once due to caching
+        $call_count = 0;
+        Functions\when('get_option')->alias(function () use (&$call_count) {
+            $call_count++;
+            return ['enable_auto_token_refresh' => false];
+        });
+
+        // Call multiple methods that use options
+        $this->refresh->is_auto_refresh_enabled();
+        $this->refresh->is_rotation_enforced();
+        $this->refresh->get_refresh_buffer();
+
+        // Options should be cached after first call
+        $this->assertSame(1, $call_count);
+    }
 }
