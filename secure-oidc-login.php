@@ -58,6 +58,8 @@ require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-user-handler.ph
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-token-crypto.php';
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-rest-controller.php';
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-rate-limiter.php';
+require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-token-manager.php';
+require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-token-refresh.php';
 
 /**
  * Main plugin class implementing OpenID Connect authentication for WordPress.
@@ -82,6 +84,12 @@ class Secure_OIDC_Login {
 
 	/** @var OIDC_Rate_Limiter Handles rate limiting for authentication endpoints */
 	private $rate_limiter;
+
+	/** @var OIDC_Token_Manager Handles token storage and retrieval */
+	private $token_manager;
+
+	/** @var OIDC_Token_Refresh Handles automatic token refresh */
+	private $token_refresh;
 
 	/**
 	 * Get the singleton instance.
@@ -137,12 +145,15 @@ class Secure_OIDC_Login {
 	 * Initialize the plugin components and register WordPress hooks.
 	 */
 	private function __construct() {
-		$this->client       = new OIDC_Client();
-		$this->admin        = new OIDC_Admin();
-		$this->user_handler = new OIDC_User_Handler();
-		$this->rate_limiter = new OIDC_Rate_Limiter();
+		$this->client        = new OIDC_Client();
+		$this->admin         = new OIDC_Admin();
+		$this->user_handler  = new OIDC_User_Handler();
+		$this->rate_limiter  = new OIDC_Rate_Limiter();
+		$this->token_manager = new OIDC_Token_Manager();
+		$this->token_refresh = new OIDC_Token_Refresh( $this->client, $this->token_manager );
 
 		add_action( 'init', array( $this, 'init' ) );
+		add_action( 'init', array( $this, 'maybe_refresh_tokens' ), 20 );
 		add_action( 'rest_api_init', array( $this, 'register_rest_routes' ) );
 		add_action( 'login_form', array( $this, 'add_login_button' ) );
 		add_action( 'login_form', array( $this, 'add_emergency_bypass_field' ) );
@@ -588,31 +599,30 @@ class Secure_OIDC_Login {
 		// SECURITY: Authentication FAILS if encryption fails - we never store plaintext tokens.
 		$options = get_option( 'secure_oidc_login_settings' );
 
-		// Encrypt ID token before storing in user meta
-		$encrypted_id = OIDC_Token_Crypto::encrypt( $tokens['id_token'] );
-		if ( is_wp_error( $encrypted_id ) ) {
+		// Prepare tokens for storage - always include access_token and id_token
+		$tokens_to_store = array(
+			'access_token' => $tokens['access_token'],
+			'id_token'     => $tokens['id_token'],
+			'expires_in'   => $tokens['expires_in'] ?? 3600,
+		);
+
+		// Include refresh token if:
+		// 1. Single logout is enabled (existing behavior), OR
+		// 2. Auto token refresh is enabled (new M3 feature)
+		if ( ! empty( $tokens['refresh_token'] ) &&
+			( ! empty( $options['enable_single_logout'] ) || ! empty( $options['enable_auto_token_refresh'] ) ) ) {
+			$tokens_to_store['refresh_token'] = $tokens['refresh_token'];
+		}
+
+		// Store tokens using the token manager (handles encryption)
+		$store_result = $this->token_manager->store_tokens( $user->ID, $tokens_to_store );
+		if ( is_wp_error( $store_result ) ) {
 			// SECURITY: Fail authentication if encryption fails - never store plaintext tokens
-			OIDC_Token_Crypto::log_error( 'ID token encryption failed: ' . $encrypted_id->get_error_message() );
+			OIDC_Token_Crypto::log_error( 'Token storage failed: ' . $store_result->get_error_message() );
 			$this->handle_error(
 				__( 'Authentication failed: Unable to securely store session tokens. Please contact your administrator.', 'secure-oidc-login' )
 			);
 			return;
-		}
-		update_user_meta( $user->ID, 'oidc_id_token', $encrypted_id );
-
-		// Persist refresh token only when single logout is enabled
-		// Refresh tokens are more sensitive than ID tokens as they can be used to obtain new access tokens
-		if ( ! empty( $tokens['refresh_token'] ) && ! empty( $options['enable_single_logout'] ) ) {
-			$encrypted_refresh = OIDC_Token_Crypto::encrypt( $tokens['refresh_token'] );
-			if ( is_wp_error( $encrypted_refresh ) ) {
-				// SECURITY: Fail authentication if encryption fails - never store plaintext tokens
-				OIDC_Token_Crypto::log_error( 'Refresh token encryption failed: ' . $encrypted_refresh->get_error_message() );
-				$this->handle_error(
-					__( 'Authentication failed: Unable to securely store session tokens. Please contact your administrator.', 'secure-oidc-login' )
-				);
-				return;
-			}
-			update_user_meta( $user->ID, 'oidc_refresh_token', $encrypted_refresh );
 		}
 
 		// Clear rate limits on successful authentication
@@ -670,28 +680,22 @@ class Secure_OIDC_Login {
 		// Get settings with environment variable support
 		$end_session_endpoint = self::get_setting( 'end_session_endpoint', $options );
 
-		if ( empty( $end_session_endpoint ) ) {
-			return;
-		}
-
-		$stored_id_token = get_user_meta( $user_id, 'oidc_id_token', true );
-		$id_token        = '';
-
-		if ( ! empty( $stored_id_token ) ) {
-			$maybe_decrypted = OIDC_Token_Crypto::decrypt_if_needed( $stored_id_token );
-			if ( is_wp_error( $maybe_decrypted ) ) {
-				OIDC_Token_Crypto::log_error( 'ID token decrypt failed during logout: ' . $maybe_decrypted->get_error_message() );
+		// Get ID token before clearing (needed for single logout)
+		$id_token = '';
+		if ( ! empty( $end_session_endpoint ) && ! empty( $options['enable_single_logout'] ) ) {
+			$maybe_id_token = $this->token_manager->get_id_token( $user_id );
+			if ( ! is_wp_error( $maybe_id_token ) ) {
+				$id_token = $maybe_id_token;
 			} else {
-				$id_token = $maybe_decrypted;
+				OIDC_Token_Crypto::log_error( 'ID token retrieval failed during logout: ' . $maybe_id_token->get_error_message() );
 			}
 		}
 
-		// Clean up stored OIDC tokens
-		delete_user_meta( $user_id, 'oidc_id_token' );
-		delete_user_meta( $user_id, 'oidc_refresh_token' );
+		// Clean up all stored OIDC tokens using token manager
+		$this->token_manager->clear_tokens( $user_id );
 
 		// Redirect to IdP logout if single logout is enabled
-		if ( ! empty( $id_token ) && ! empty( $options['enable_single_logout'] ) ) {
+		if ( ! empty( $id_token ) && ! empty( $end_session_endpoint ) ) {
 			$logout_params = array(
 				'id_token_hint'            => $id_token,
 				'post_logout_redirect_uri' => home_url(),
@@ -701,6 +705,51 @@ class Secure_OIDC_Login {
 
 			wp_redirect( $logout_url );
 			exit;
+		}
+	}
+
+	/**
+	 * Check and refresh tokens if needed for the current user.
+	 *
+	 * Called on init hook (priority 20) to ensure tokens are refreshed before
+	 * they expire. If refresh fails and enforcement is enabled, logs out the user.
+	 *
+	 * @since 0.7.0
+	 */
+	public function maybe_refresh_tokens(): void {
+		// Only process for logged-in users
+		if ( ! is_user_logged_in() ) {
+			return;
+		}
+
+		$options = get_option( 'secure_oidc_login_settings' );
+
+		// Check if auto-refresh is enabled
+		if ( empty( $options['enable_auto_token_refresh'] ) ) {
+			return;
+		}
+
+		$user_id = get_current_user_id();
+		$result  = $this->token_refresh->maybe_refresh( $user_id );
+
+		// If refresh failed and we should enforce it, log out the user
+		if ( is_wp_error( $result ) ) {
+			// Log the failure
+			error_log(
+				sprintf(
+					'[Secure OIDC Login] Token refresh failed for user %d: %s',
+					$user_id,
+					$result->get_error_message()
+				)
+			);
+
+			// Only force logout if the token is actually expired (not just failed to refresh)
+			// This prevents logout during temporary IdP issues
+			if ( $this->token_manager->is_token_expired( $user_id, 0 ) ) {
+				wp_logout();
+				wp_safe_redirect( wp_login_url() );
+				exit;
+			}
 		}
 	}
 
@@ -773,26 +822,29 @@ class Secure_OIDC_Login {
 	 */
 	public function activate(): void {
 		$default_options = array(
-			'client_id'              => '',
-			'client_secret'          => '',
-			'authorization_endpoint' => '',
-			'token_endpoint'         => '',
-			'userinfo_endpoint'      => '',
-			'end_session_endpoint'   => '',
-			'jwks_uri'               => '',
-			'issuer'                 => '',
-			'scope'                  => 'openid email profile',
-			'login_button_text'      => 'Login with SSO',
-			'enable_single_logout'   => false,
-			'disable_native_login'   => false,
-			'create_users'           => true,
-			'require_verified_email' => true,
-			'default_role'           => 'subscriber',
-			'username_claim'         => 'preferred_username',
-			'email_claim'            => 'email',
-			'first_name_claim'       => 'given_name',
-			'last_name_claim'        => 'family_name',
-			'allowed_email_domains'  => '',
+			'client_id'                      => '',
+			'client_secret'                  => '',
+			'authorization_endpoint'         => '',
+			'token_endpoint'                 => '',
+			'userinfo_endpoint'              => '',
+			'end_session_endpoint'           => '',
+			'jwks_uri'                       => '',
+			'issuer'                         => '',
+			'scope'                          => 'openid email profile',
+			'login_button_text'              => 'Login with SSO',
+			'enable_single_logout'           => false,
+			'disable_native_login'           => false,
+			'enable_auto_token_refresh'      => false,
+			'token_refresh_buffer'           => 300,
+			'enforce_refresh_token_rotation' => false,
+			'create_users'                   => true,
+			'require_verified_email'         => true,
+			'default_role'                   => 'subscriber',
+			'username_claim'                 => 'preferred_username',
+			'email_claim'                    => 'email',
+			'first_name_claim'               => 'given_name',
+			'last_name_claim'                => 'family_name',
+			'allowed_email_domains'          => '',
 		);
 
 		if ( ! get_option( 'secure_oidc_login_settings' ) ) {
