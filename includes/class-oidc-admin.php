@@ -1147,19 +1147,23 @@ class OIDC_Admin {
 				</div>
 				<?php
 			} else {
-				?>
-				<div class="notice notice-info">
-					<p>
-						<?php
-						printf(
-							/* translators: %s: emergency login URL */
-							esc_html__( 'Native login is disabled. Emergency admin access: %s', 'secure-oidc-login' ),
-							'<code>' . esc_html( wp_login_url() . '?native=1' ) . '</code>'
-						);
-						?>
-					</p>
-				</div>
-				<?php
+				// Only show emergency access notice if bypass is actually enabled.
+				$bypass_enabled = getenv( 'SECURE_OIDC_ENABLE_EMERGENCY_BYPASS' );
+				if ( false !== $bypass_enabled && 'true' === strtolower( (string) $bypass_enabled ) ) {
+					?>
+					<div class="notice notice-info">
+						<p>
+							<?php
+							printf(
+								/* translators: %s: emergency login URL */
+								esc_html__( 'Native login is disabled. Emergency admin access: %s', 'secure-oidc-login' ),
+								'<code>' . esc_html( wp_login_url() . '?native=1' ) . '</code>'
+							);
+							?>
+						</p>
+					</div>
+					<?php
+				}
 			}
 		}
 
