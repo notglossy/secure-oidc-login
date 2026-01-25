@@ -1,4 +1,5 @@
 <?php
+declare(strict_types=1);
 /**
  * OIDC Client class for handling OAuth/OIDC protocol operations.
  *
@@ -155,7 +156,7 @@ class OIDC_Client {
 			);
 		}
 
-		$status_code  = wp_remote_retrieve_response_code( $response );
+		$status_code  = (int) wp_remote_retrieve_response_code( $response );
 		$body         = wp_remote_retrieve_body( $response );
 		$content_type = wp_remote_retrieve_header( $response, 'content-type' );
 		if ( is_array( $content_type ) ) {
@@ -178,7 +179,7 @@ class OIDC_Client {
 
 		$tokens = json_decode( $body, true );
 
-		if ( $status_code !== 200 ) {
+		if ( 200 !== $status_code ) {
 			// Log detailed IdP error but show generic message to users
 			$detailed_error = sprintf(
 				'Token exchange failed with status %d. IdP error: %s - %s',
@@ -436,8 +437,8 @@ class OIDC_Client {
 			);
 		}
 
-		$status_code = wp_remote_retrieve_response_code( $response );
-		if ( $status_code !== 200 ) {
+		$status_code = (int) wp_remote_retrieve_response_code( $response );
+		if ( 200 !== $status_code ) {
 			return $this->handle_error(
 				'jwks_fetch',
 				'Failed to fetch JWKS. HTTP status: ' . $status_code,
@@ -597,7 +598,7 @@ class OIDC_Client {
 			);
 		}
 
-		$status_code  = wp_remote_retrieve_response_code( $response );
+		$status_code  = (int) wp_remote_retrieve_response_code( $response );
 		$body         = wp_remote_retrieve_body( $response );
 		$content_type = wp_remote_retrieve_header( $response, 'content-type' );
 		if ( is_array( $content_type ) ) {
@@ -618,7 +619,7 @@ class OIDC_Client {
 			);
 		}
 
-		if ( $status_code !== 200 ) {
+		if ( 200 !== $status_code ) {
 			return $this->handle_error(
 				'userinfo',
 				'Userinfo request failed with status ' . $status_code,
@@ -687,7 +688,7 @@ class OIDC_Client {
 			);
 		}
 
-		$status_code  = wp_remote_retrieve_response_code( $response );
+		$status_code  = (int) wp_remote_retrieve_response_code( $response );
 		$body         = wp_remote_retrieve_body( $response );
 		$content_type = wp_remote_retrieve_header( $response, 'content-type' );
 		if ( is_array( $content_type ) ) {
@@ -710,7 +711,7 @@ class OIDC_Client {
 
 		$tokens = json_decode( $body, true );
 
-		if ( $status_code !== 200 ) {
+		if ( 200 !== $status_code ) {
 			// Log detailed IdP error but show generic message to users
 			$detailed_error = sprintf(
 				'Token refresh failed with status %d. IdP error: %s - %s',
@@ -753,7 +754,7 @@ class OIDC_Client {
 			return $response;
 		}
 
-		$status_code  = wp_remote_retrieve_response_code( $response );
+		$status_code  = (int) wp_remote_retrieve_response_code( $response );
 		$body         = wp_remote_retrieve_body( $response );
 		$content_type = wp_remote_retrieve_header( $response, 'content-type' );
 		if ( is_array( $content_type ) ) {
@@ -769,7 +770,7 @@ class OIDC_Client {
 			);
 		}
 
-		if ( $status_code !== 200 ) {
+		if ( 200 !== $status_code ) {
 			return new WP_Error( 'oidc_error', __( 'Failed to discover OIDC configuration.', 'secure-oidc-login' ) );
 		}
 

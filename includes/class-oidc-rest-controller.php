@@ -1,4 +1,5 @@
 <?php
+declare(strict_types=1);
 /**
  * OIDC REST API Controller.
  *
@@ -199,7 +200,7 @@ class OIDC_REST_Controller extends WP_REST_Controller {
 			);
 		}
 
-		$status_code = wp_remote_retrieve_response_code( $response );
+		$status_code = (int) wp_remote_retrieve_response_code( $response );
 
 		if ( 200 !== $status_code ) {
 			return new WP_Error(

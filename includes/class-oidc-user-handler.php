@@ -1,4 +1,5 @@
 <?php
+declare(strict_types=1);
 /**
  * OIDC User Handler class for managing WordPress user creation and mapping.
  *
