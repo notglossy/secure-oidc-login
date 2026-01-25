@@ -77,3 +77,5 @@ require_once dirname(__DIR__) . '/includes/class-oidc-client.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-user-handler.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-rest-controller.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-rate-limiter.php';
+require_once dirname(__DIR__) . '/includes/class-oidc-token-manager.php';
+require_once dirname(__DIR__) . '/includes/class-oidc-token-refresh.php';

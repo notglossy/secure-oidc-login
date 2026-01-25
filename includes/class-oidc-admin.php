@@ -369,6 +369,53 @@ class OIDC_Admin {
 			)
 		);
 
+		// === Token Management Section ===
+		add_settings_section(
+			'oidc_token_section',
+			__( 'Token Management', 'secure-oidc-login' ),
+			array( $this, 'render_token_section' ),
+			'secure-oidc-login'
+		);
+
+		add_settings_field(
+			'enable_auto_token_refresh',
+			__( 'Enable Auto Token Refresh', 'secure-oidc-login' ),
+			array( $this, 'render_checkbox_field' ),
+			'secure-oidc-login',
+			'oidc_token_section',
+			array(
+				'field'       => 'enable_auto_token_refresh',
+				'description' => __( 'Automatically refresh access tokens before they expire. Requires refresh token support from your IdP.', 'secure-oidc-login' ),
+			)
+		);
+
+		add_settings_field(
+			'token_refresh_buffer',
+			__( 'Refresh Buffer (seconds)', 'secure-oidc-login' ),
+			array( $this, 'render_number_field' ),
+			'secure-oidc-login',
+			'oidc_token_section',
+			array(
+				'field'       => 'token_refresh_buffer',
+				'default'     => 300,
+				'min'         => 60,
+				'max'         => 3600,
+				'description' => __( 'Seconds before token expiry to trigger refresh. Default: 300 (5 minutes).', 'secure-oidc-login' ),
+			)
+		);
+
+		add_settings_field(
+			'enforce_refresh_token_rotation',
+			__( 'Enforce Token Rotation', 'secure-oidc-login' ),
+			array( $this, 'render_checkbox_field' ),
+			'secure-oidc-login',
+			'oidc_token_section',
+			array(
+				'field'       => 'enforce_refresh_token_rotation',
+				'description' => __( 'Require IdP to rotate refresh tokens on each refresh. If enabled, users will be logged out if rotation fails.', 'secure-oidc-login' ),
+			)
+		);
+
 		// === User Settings Section ===
 		add_settings_section(
 			'oidc_user_section',
@@ -537,7 +584,16 @@ class OIDC_Admin {
 		);
 
 		// Boolean checkbox fields
-		$checkbox_fields = array( 'enable_single_logout', 'create_users', 'require_verified_email', 'disable_native_login' );
+		$checkbox_fields = array( 'enable_single_logout', 'create_users', 'require_verified_email', 'disable_native_login', 'enable_auto_token_refresh', 'enforce_refresh_token_rotation' );
+
+		// Integer number fields with validation
+		$number_fields = array(
+			'token_refresh_buffer' => array(
+				'min'     => 60,
+				'max'     => 3600,
+				'default' => 300,
+			),
+		);
 
 		// Credential fields that require special security handling
 		$credential_fields = array( 'client_id', 'client_secret' );
@@ -607,6 +663,20 @@ class OIDC_Admin {
 
 		foreach ( $checkbox_fields as $field ) {
 			$sanitized[ $field ] = ! empty( $input[ $field ] );
+		}
+
+		// Number fields with min/max validation
+		foreach ( $number_fields as $field => $constraints ) {
+			$value = isset( $input[ $field ] ) ? (int) $input[ $field ] : $constraints['default'];
+
+			// Clamp to valid range
+			if ( $value < $constraints['min'] ) {
+				$value = $constraints['min'];
+			} elseif ( $value > $constraints['max'] ) {
+				$value = $constraints['max'];
+			}
+
+			$sanitized[ $field ] = $value;
 		}
 
 		// Validate allowed_email_domains format
@@ -713,6 +783,13 @@ class OIDC_Admin {
 	 */
 	public function render_login_section(): void {
 		echo '<p>' . __( 'Configure how the OIDC login appears and behaves.', 'secure-oidc-login' ) . '</p>';
+	}
+
+	/**
+	 * Render the Token Management settings section description.
+	 */
+	public function render_token_section(): void {
+		echo '<p>' . __( 'Configure automatic token refresh and rotation security settings.', 'secure-oidc-login' ) . '</p>';
 	}
 
 	/**
@@ -940,6 +1017,31 @@ class OIDC_Admin {
 
 		if ( isset( $args['description'] ) ) {
 			printf( '<span class="description">%s</span>', esc_html( $args['description'] ) );
+		}
+	}
+
+	/**
+	 * Render a number input field.
+	 *
+	 * @param array<string, mixed> $args Field arguments including 'field', 'default', 'min', 'max', 'description'.
+	 */
+	public function render_number_field( array $args ): void {
+		$options = get_option( 'secure_oidc_login_settings', array() );
+		$field   = $args['field'];
+		$value   = $options[ $field ] ?? $args['default'] ?? '';
+		$min     = $args['min'] ?? '';
+		$max     = $args['max'] ?? '';
+
+		printf(
+			'<input type="number" name="secure_oidc_login_settings[%s]" value="%s" class="small-text"%s%s>',
+			esc_attr( $field ),
+			esc_attr( (string) $value ),
+			'' !== $min ? ' min="' . esc_attr( (string) $min ) . '"' : '',
+			'' !== $max ? ' max="' . esc_attr( (string) $max ) . '"' : ''
+		);
+
+		if ( isset( $args['description'] ) ) {
+			printf( '<p class="description">%s</p>', esc_html( $args['description'] ) );
 		}
 	}
 
