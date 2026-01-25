@@ -592,4 +592,119 @@ class OIDCRestControllerTest extends OIDCTestCase
         $this->assertInstanceOf(WP_REST_Response::class, $result);
         $this->assertSame(200, $result->get_status());
     }
+
+    /**
+     * Test register_routes registers the discover endpoint.
+     */
+    public function testRegisterRoutesRegistersDiscoverEndpoint(): void
+    {
+        $registeredRoutes = [];
+
+        Functions\when('register_rest_route')->alias(function ($namespace, $route, $args) use (&$registeredRoutes) {
+            $registeredRoutes[] = [
+                'namespace' => $namespace,
+                'route' => $route,
+                'args' => $args,
+            ];
+            return true;
+        });
+
+        $this->controller->register_routes();
+
+        $this->assertCount(1, $registeredRoutes);
+        $this->assertSame('secure-oidc-login/v1', $registeredRoutes[0]['namespace']);
+        $this->assertSame('/discover', $registeredRoutes[0]['route']);
+    }
+
+    /**
+     * Test register_routes configures POST method for discover endpoint.
+     */
+    public function testRegisterRoutesConfiguresPostMethod(): void
+    {
+        $registeredArgs = null;
+
+        Functions\when('register_rest_route')->alias(function ($namespace, $route, $args) use (&$registeredArgs) {
+            $registeredArgs = $args;
+            return true;
+        });
+
+        $this->controller->register_routes();
+
+        $this->assertNotNull($registeredArgs);
+        // WP_REST_Server::CREATABLE is 'POST'
+        $this->assertArrayHasKey('methods', $registeredArgs);
+    }
+
+    /**
+     * Test register_routes configures permission callback.
+     */
+    public function testRegisterRoutesConfiguresPermissionCallback(): void
+    {
+        $registeredArgs = null;
+
+        Functions\when('register_rest_route')->alias(function ($namespace, $route, $args) use (&$registeredArgs) {
+            $registeredArgs = $args;
+            return true;
+        });
+
+        $this->controller->register_routes();
+
+        $this->assertArrayHasKey('permission_callback', $registeredArgs);
+        $this->assertIsCallable($registeredArgs['permission_callback']);
+    }
+
+    /**
+     * Test register_routes configures discovery_url argument as required.
+     */
+    public function testRegisterRoutesConfiguresDiscoveryUrlAsRequired(): void
+    {
+        $registeredArgs = null;
+
+        Functions\when('register_rest_route')->alias(function ($namespace, $route, $args) use (&$registeredArgs) {
+            $registeredArgs = $args;
+            return true;
+        });
+
+        $this->controller->register_routes();
+
+        $this->assertArrayHasKey('args', $registeredArgs);
+        $this->assertArrayHasKey('discovery_url', $registeredArgs['args']);
+        $this->assertTrue($registeredArgs['args']['discovery_url']['required']);
+    }
+
+    /**
+     * Test register_routes configures validate_callback for discovery_url.
+     */
+    public function testRegisterRoutesConfiguresValidateCallback(): void
+    {
+        $registeredArgs = null;
+
+        Functions\when('register_rest_route')->alias(function ($namespace, $route, $args) use (&$registeredArgs) {
+            $registeredArgs = $args;
+            return true;
+        });
+
+        $this->controller->register_routes();
+
+        $this->assertArrayHasKey('validate_callback', $registeredArgs['args']['discovery_url']);
+        $this->assertIsCallable($registeredArgs['args']['discovery_url']['validate_callback']);
+    }
+
+    /**
+     * Test register_routes configures sanitize_callback for discovery_url.
+     */
+    public function testRegisterRoutesConfiguresSanitizeCallback(): void
+    {
+        $registeredArgs = null;
+
+        Functions\when('register_rest_route')->alias(function ($namespace, $route, $args) use (&$registeredArgs) {
+            $registeredArgs = $args;
+            return true;
+        });
+
+        $this->controller->register_routes();
+
+        $this->assertArrayHasKey('sanitize_callback', $registeredArgs['args']['discovery_url']);
+        $this->assertSame('esc_url_raw', $registeredArgs['args']['discovery_url']['sanitize_callback']);
+    }
 }

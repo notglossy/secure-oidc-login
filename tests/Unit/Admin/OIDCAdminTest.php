@@ -670,4 +670,386 @@ class OIDCAdminTest extends OIDCTestCase
         $this->assertSame('https://idp.example.com/authorize', $result['authorization_endpoint']);
         $this->assertSame('https://idp.example.com/token', $result['token_endpoint']);
     }
+
+    /**
+     * Test render_checkbox_field outputs checkbox input.
+     */
+    public function testRenderCheckboxFieldOutputsCheckboxInput(): void
+    {
+        Functions\when('get_option')->justReturn(['enable_single_logout' => true]);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+        Functions\when('esc_html__')->alias(fn($v, $d) => $v);
+
+        ob_start();
+        $this->admin->render_checkbox_field(['field' => 'enable_single_logout']);
+        $output = ob_get_clean();
+
+        $this->assertStringContainsString('type="checkbox"', $output);
+        $this->assertStringContainsString('name="secure_oidc_login_settings[enable_single_logout]"', $output);
+        $this->assertStringContainsString('checked', $output);
+    }
+
+    /**
+     * Test render_checkbox_field outputs unchecked when value is false.
+     */
+    public function testRenderCheckboxFieldOutputsUncheckedWhenFalse(): void
+    {
+        Functions\when('get_option')->justReturn(['enable_single_logout' => false]);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+        Functions\when('esc_html__')->alias(fn($v, $d) => $v);
+
+        ob_start();
+        $this->admin->render_checkbox_field(['field' => 'enable_single_logout']);
+        $output = ob_get_clean();
+
+        $this->assertStringContainsString('type="checkbox"', $output);
+        $this->assertStringNotContainsString('checked', $output);
+    }
+
+    /**
+     * Test render_checkbox_field shows security warning when require_verified_email is disabled.
+     */
+    public function testRenderCheckboxFieldShowsSecurityWarningForDisabledEmailVerification(): void
+    {
+        Functions\when('get_option')->justReturn(['require_verified_email' => false]);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+        Functions\when('esc_html__')->alias(fn($v, $d) => $v);
+
+        ob_start();
+        $this->admin->render_checkbox_field(['field' => 'require_verified_email']);
+        $output = ob_get_clean();
+
+        $this->assertStringContainsString('Security Warning:', $output);
+        $this->assertStringContainsString('account takeover', $output);
+    }
+
+    /**
+     * Test render_checkbox_field does not show security warning when require_verified_email is enabled.
+     */
+    public function testRenderCheckboxFieldNoWarningWhenEmailVerificationEnabled(): void
+    {
+        Functions\when('get_option')->justReturn(['require_verified_email' => true]);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+        Functions\when('esc_html__')->alias(fn($v, $d) => $v);
+
+        ob_start();
+        $this->admin->render_checkbox_field(['field' => 'require_verified_email']);
+        $output = ob_get_clean();
+
+        $this->assertStringNotContainsString('Security Warning:', $output);
+    }
+
+    /**
+     * Test render_checkbox_field includes description when provided.
+     */
+    public function testRenderCheckboxFieldIncludesDescription(): void
+    {
+        Functions\when('get_option')->justReturn([]);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+
+        ob_start();
+        $this->admin->render_checkbox_field([
+            'field' => 'create_users',
+            'description' => 'Allow automatic user creation',
+        ]);
+        $output = ob_get_clean();
+
+        $this->assertStringContainsString('Allow automatic user creation', $output);
+        $this->assertStringContainsString('class="description"', $output);
+    }
+
+    /**
+     * Test render_number_field outputs number input with value.
+     */
+    public function testRenderNumberFieldOutputsNumberInputWithValue(): void
+    {
+        Functions\when('get_option')->justReturn(['token_expiry_buffer' => 300]);
+        Functions\when('esc_attr')->alias(fn($v) => (string) $v);
+
+        ob_start();
+        $this->admin->render_number_field(['field' => 'token_expiry_buffer', 'default' => 60]);
+        $output = ob_get_clean();
+
+        $this->assertStringContainsString('type="number"', $output);
+        $this->assertStringContainsString('name="secure_oidc_login_settings[token_expiry_buffer]"', $output);
+        $this->assertStringContainsString('value="300"', $output);
+    }
+
+    /**
+     * Test render_number_field uses default when no value set.
+     */
+    public function testRenderNumberFieldUsesDefaultWhenNoValueSet(): void
+    {
+        Functions\when('get_option')->justReturn([]);
+        Functions\when('esc_attr')->alias(fn($v) => (string) $v);
+
+        ob_start();
+        $this->admin->render_number_field(['field' => 'token_expiry_buffer', 'default' => 60]);
+        $output = ob_get_clean();
+
+        $this->assertStringContainsString('value="60"', $output);
+    }
+
+    /**
+     * Test render_number_field includes min and max attributes.
+     */
+    public function testRenderNumberFieldIncludesMinMaxAttributes(): void
+    {
+        Functions\when('get_option')->justReturn([]);
+        Functions\when('esc_attr')->alias(fn($v) => (string) $v);
+
+        ob_start();
+        $this->admin->render_number_field([
+            'field' => 'token_expiry_buffer',
+            'default' => 60,
+            'min' => 0,
+            'max' => 3600,
+        ]);
+        $output = ob_get_clean();
+
+        $this->assertStringContainsString('min="0"', $output);
+        $this->assertStringContainsString('max="3600"', $output);
+    }
+
+    /**
+     * Test render_number_field includes description when provided.
+     */
+    public function testRenderNumberFieldIncludesDescription(): void
+    {
+        Functions\when('get_option')->justReturn([]);
+        Functions\when('esc_attr')->alias(fn($v) => (string) $v);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+
+        ob_start();
+        $this->admin->render_number_field([
+            'field' => 'token_expiry_buffer',
+            'default' => 60,
+            'description' => 'Buffer in seconds before token expiry',
+        ]);
+        $output = ob_get_clean();
+
+        $this->assertStringContainsString('Buffer in seconds before token expiry', $output);
+        $this->assertStringContainsString('class="description"', $output);
+    }
+
+    /**
+     * Test render_role_field outputs select element.
+     */
+    public function testRenderRoleFieldOutputsSelectElement(): void
+    {
+        Functions\when('get_option')->justReturn(['default_role' => 'subscriber']);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+        Functions\when('esc_html__')->alias(fn($v, $d) => $v);
+        Functions\when('wp_dropdown_roles')->justReturn(null);
+
+        ob_start();
+        $this->admin->render_role_field(['field' => 'default_role']);
+        $output = ob_get_clean();
+
+        $this->assertStringContainsString('<select', $output);
+        $this->assertStringContainsString('name="secure_oidc_login_settings[default_role]"', $output);
+        $this->assertStringContainsString('id="default_role"', $output);
+    }
+
+    /**
+     * Test render_role_field defaults to subscriber when no value set.
+     */
+    public function testRenderRoleFieldDefaultsToSubscriber(): void
+    {
+        Functions\when('get_option')->justReturn([]);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+        Functions\when('esc_html__')->alias(fn($v, $d) => $v);
+
+        $selectedRole = null;
+        Functions\when('wp_dropdown_roles')->alias(function ($role) use (&$selectedRole) {
+            $selectedRole = $role;
+        });
+
+        ob_start();
+        $this->admin->render_role_field(['field' => 'default_role']);
+        ob_get_clean();
+
+        $this->assertSame('subscriber', $selectedRole);
+    }
+
+    /**
+     * Test render_role_field includes description.
+     */
+    public function testRenderRoleFieldIncludesDescription(): void
+    {
+        Functions\when('get_option')->justReturn([]);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+        Functions\when('esc_html__')->alias(fn($v, $d) => $v);
+        Functions\when('wp_dropdown_roles')->justReturn(null);
+
+        ob_start();
+        $this->admin->render_role_field(['field' => 'default_role']);
+        $output = ob_get_clean();
+
+        $this->assertStringContainsString('Role assigned to new users', $output);
+        $this->assertStringContainsString('class="description"', $output);
+    }
+
+    /**
+     * Test admin_notices shows warning when OIDC not configured.
+     */
+    public function testAdminNoticesShowsWarningWhenOidcNotConfigured(): void
+    {
+        Functions\when('get_option')->justReturn([]);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+        Functions\when('esc_html__')->alias(fn($v, $d) => $v);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('get_transient')->justReturn(false);
+        Functions\when('set_transient')->justReturn(true);
+
+        $_GET['page'] = 'secure-oidc-login';
+
+        ob_start();
+        $this->admin->admin_notices();
+        $output = ob_get_clean();
+
+        $this->assertStringContainsString('notice-warning', $output);
+    }
+
+    /**
+     * Test admin_notices does not show on other admin pages.
+     */
+    public function testAdminNoticesDoesNotShowOnOtherPages(): void
+    {
+        $_GET['page'] = 'other-plugin';
+
+        ob_start();
+        $this->admin->admin_notices();
+        $output = ob_get_clean();
+
+        $this->assertEmpty($output);
+    }
+
+    /**
+     * Test admin_notices shows error when native login disabled but OIDC not configured.
+     */
+    public function testAdminNoticesShowsErrorWhenNativeLoginDisabledWithoutOidc(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'disable_native_login' => true,
+            // Missing client_id, authorization_endpoint, token_endpoint
+        ]);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+        Functions\when('esc_html__')->alias(fn($v, $d) => $v);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('get_transient')->justReturn(false);
+        Functions\when('set_transient')->justReturn(true);
+
+        $_GET['page'] = 'secure-oidc-login';
+
+        ob_start();
+        $this->admin->admin_notices();
+        $output = ob_get_clean();
+
+        $this->assertStringContainsString('notice-error', $output);
+        $this->assertStringContainsString('locked out', $output);
+    }
+
+    /**
+     * Test admin_notices shows emergency bypass notice when bypass enabled.
+     */
+    public function testAdminNoticesShowsBypassNoticeWhenBypassEnabled(): void
+    {
+        putenv('SECURE_OIDC_ENABLE_EMERGENCY_BYPASS=true');
+
+        Functions\when('get_option')->justReturn([
+            'disable_native_login' => true,
+            'client_id' => 'test-client',
+            'authorization_endpoint' => 'https://idp.example.com/authorize',
+            'token_endpoint' => 'https://idp.example.com/token',
+        ]);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+        Functions\when('esc_html__')->alias(fn($v, $d) => $v);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('wp_login_url')->justReturn('https://example.com/wp-login.php');
+        Functions\when('get_transient')->justReturn(false);
+        Functions\when('set_transient')->justReturn(true);
+        Functions\when('admin_url')->justReturn('https://example.com/wp-admin/');
+        Functions\when('wp_nonce_field')->justReturn(null);
+
+        $_GET['page'] = 'secure-oidc-login';
+
+        ob_start();
+        $this->admin->admin_notices();
+        $output = ob_get_clean();
+
+        $this->assertStringContainsString('notice-info', $output);
+        $this->assertStringContainsString('Emergency admin access', $output);
+        $this->assertStringContainsString('?native=1', $output);
+
+        putenv('SECURE_OIDC_ENABLE_EMERGENCY_BYPASS');
+    }
+
+    /**
+     * Test admin_notices does not show bypass notice when bypass disabled.
+     */
+    public function testAdminNoticesDoesNotShowBypassNoticeWhenBypassDisabled(): void
+    {
+        putenv('SECURE_OIDC_ENABLE_EMERGENCY_BYPASS');
+
+        Functions\when('get_option')->justReturn([
+            'disable_native_login' => true,
+            'client_id' => 'test-client',
+            'authorization_endpoint' => 'https://idp.example.com/authorize',
+            'token_endpoint' => 'https://idp.example.com/token',
+        ]);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+        Functions\when('esc_html__')->alias(fn($v, $d) => $v);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('get_transient')->justReturn(false);
+        Functions\when('set_transient')->justReturn(true);
+        Functions\when('admin_url')->justReturn('https://example.com/wp-admin/');
+        Functions\when('wp_nonce_field')->justReturn(null);
+
+        $_GET['page'] = 'secure-oidc-login';
+
+        ob_start();
+        $this->admin->admin_notices();
+        $output = ob_get_clean();
+
+        $this->assertStringNotContainsString('Emergency admin access', $output);
+    }
+
+    /**
+     * Test admin_notices shows domain filtering notice when domains configured.
+     */
+    public function testAdminNoticesShowsDomainFilteringNotice(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'client_id' => 'test-client',
+            'authorization_endpoint' => 'https://idp.example.com/authorize',
+            'token_endpoint' => 'https://idp.example.com/token',
+            'allowed_email_domains' => 'example.com,test.org',
+        ]);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+        Functions\when('esc_html__')->alias(fn($v, $d) => $v);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('getenv')->justReturn(false);
+        Functions\when('get_transient')->justReturn(false);
+        Functions\when('set_transient')->justReturn(true);
+        Functions\when('admin_url')->justReturn('https://example.com/wp-admin/');
+        Functions\when('wp_nonce_field')->justReturn(null);
+
+        $_GET['page'] = 'secure-oidc-login';
+
+        ob_start();
+        $this->admin->admin_notices();
+        $output = ob_get_clean();
+
+        $this->assertStringContainsString('Email Domain Filtering Active', $output);
+        $this->assertStringContainsString('example.com,test.org', $output);
+    }
 }
