@@ -1,4 +1,5 @@
 <?php
+declare(strict_types=1);
 /**
  * OIDC Admin class for handling WordPress admin settings.
  *

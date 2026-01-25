@@ -1,4 +1,5 @@
 <?php
+declare(strict_types=1);
 /**
  * Token encryption utilities for secure storage.
  *
@@ -206,6 +207,11 @@ class OIDC_Token_Crypto {
 				$nonce,
 				$key
 			);
+
+			// sodium_crypto_aead_chacha20poly1305_ietf_decrypt returns false on failure
+			if ( false === $plaintext ) {
+				return new WP_Error( 'oidc_decryption_failed', __( 'Failed to decrypt token.', 'secure-oidc-login' ) );
+			}
 
 			return $plaintext;
 

@@ -1,4 +1,5 @@
 <?php
+declare(strict_types=1);
 /**
  * Rate limiter for OIDC authentication endpoints.
  *
