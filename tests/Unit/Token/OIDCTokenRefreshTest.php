@@ -624,4 +624,56 @@ class OIDCTokenRefreshTest extends OIDCTestCase
         $this->assertInstanceOf(WP_Error::class, $result);
         $this->assertSame('oidc_rotation_required', $result->get_error_code());
     }
+
+    /**
+     * Test same refresh token returned succeeds when rotation not enforced.
+     *
+     * When rotation enforcement is disabled, the same refresh token being returned
+     * should still succeed (with a security warning logged).
+     */
+    public function testSameRefreshTokenSucceedsWhenRotationNotEnforced(): void
+    {
+        $user_id = 123;
+        $same_refresh_token = 'same-refresh-token';
+        $new_tokens = [
+            'access_token' => 'new-access-token',
+            'refresh_token' => $same_refresh_token, // Same as old
+            'expires_in' => 3600,
+        ];
+
+        Functions\when('get_option')->justReturn([
+            'enforce_refresh_token_rotation' => false,
+        ]);
+
+        $this->token_manager
+            ->shouldReceive('get_refresh_token')
+            ->with($user_id)
+            ->once()
+            ->andReturn($same_refresh_token);
+
+        $this->client
+            ->shouldReceive('refresh_token')
+            ->with($same_refresh_token)
+            ->once()
+            ->andReturn($new_tokens);
+
+        // Hash comparison shows it's the same token (not rotated)
+        $this->token_manager
+            ->shouldReceive('was_refresh_token_rotated')
+            ->with($user_id, $same_refresh_token)
+            ->once()
+            ->andReturn(false);
+
+        // Should still store tokens even without rotation
+        $this->token_manager
+            ->shouldReceive('store_tokens')
+            ->with($user_id, $new_tokens)
+            ->once()
+            ->andReturn(true);
+
+        $result = $this->refresh->refresh($user_id);
+
+        // Should succeed (with warning logged internally)
+        $this->assertTrue($result);
+    }
 }

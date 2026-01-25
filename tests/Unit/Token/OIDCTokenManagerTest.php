@@ -446,4 +446,111 @@ class OIDCTokenManagerTest extends OIDCTestCase
         $this->assertSame('oidc_refresh_token_hash', OIDC_Token_Manager::META_REFRESH_TOKEN_HASH);
         $this->assertSame(3600, OIDC_Token_Manager::DEFAULT_EXPIRES_IN);
     }
+
+    /**
+     * Test get_access_token returns error on decryption failure.
+     */
+    public function testGetAccessTokenReturnsErrorOnDecryptionFailure(): void
+    {
+        $user_id = 123;
+        // Malformed encrypted token that will fail decryption
+        $malformed = 'enc:v2:' . base64_encode('short');
+
+        Functions\when('get_user_meta')->alias(function ($uid, $key, $single) use ($user_id, $malformed) {
+            if ($uid === $user_id && $key === 'oidc_access_token' && $single) {
+                return $malformed;
+            }
+            return '';
+        });
+
+        $result = $this->manager->get_access_token($user_id);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('oidc_decryption_failed', $result->get_error_code());
+    }
+
+    /**
+     * Test get_refresh_token returns error on decryption failure.
+     */
+    public function testGetRefreshTokenReturnsErrorOnDecryptionFailure(): void
+    {
+        $user_id = 123;
+        // Malformed encrypted token that will fail decryption
+        $malformed = 'enc:v2:' . base64_encode('short');
+
+        Functions\when('get_user_meta')->alias(function ($uid, $key, $single) use ($user_id, $malformed) {
+            if ($uid === $user_id && $key === 'oidc_refresh_token' && $single) {
+                return $malformed;
+            }
+            return '';
+        });
+
+        $result = $this->manager->get_refresh_token($user_id);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('oidc_decryption_failed', $result->get_error_code());
+    }
+
+    /**
+     * Test get_id_token returns error on decryption failure.
+     */
+    public function testGetIdTokenReturnsErrorOnDecryptionFailure(): void
+    {
+        $user_id = 123;
+        // Malformed encrypted token that will fail decryption
+        $malformed = 'enc:v2:' . base64_encode('short');
+
+        Functions\when('get_user_meta')->alias(function ($uid, $key, $single) use ($user_id, $malformed) {
+            if ($uid === $user_id && $key === 'oidc_id_token' && $single) {
+                return $malformed;
+            }
+            return '';
+        });
+
+        $result = $this->manager->get_id_token($user_id);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('oidc_decryption_failed', $result->get_error_code());
+    }
+
+    /**
+     * Test get_refresh_token returns error when not found.
+     */
+    public function testGetRefreshTokenReturnsErrorWhenNotFound(): void
+    {
+        Functions\when('get_user_meta')->justReturn('');
+
+        $result = $this->manager->get_refresh_token(123);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('oidc_token_not_found', $result->get_error_code());
+    }
+
+    /**
+     * Test get_expiration_time returns null when false is returned.
+     */
+    public function testGetExpirationTimeReturnsNullWhenFalse(): void
+    {
+        Functions\when('get_user_meta')->justReturn(false);
+
+        $result = $this->manager->get_expiration_time(123);
+
+        $this->assertNull($result);
+    }
+
+    /**
+     * Test store_tokens with empty access_token string.
+     */
+    public function testStoreTokensFailsWithEmptyAccessToken(): void
+    {
+        $tokens = [
+            'access_token' => '',
+            'id_token' => 'test-id-token',
+        ];
+
+        $result = $this->manager->store_tokens(123, $tokens);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('oidc_invalid_tokens', $result->get_error_code());
+    }
 }
