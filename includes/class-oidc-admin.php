@@ -964,12 +964,19 @@ class OIDC_Admin {
 			}
 		}
 
+		// Add autocomplete="off" when unsafe mode is enabled to reduce browser cache exposure
+		$autocomplete_attr = '';
+		if ( $this->is_unsafe_mode_enabled() && ! $is_disabled ) {
+			$autocomplete_attr = ' autocomplete="new-password"';
+		}
+
 		printf(
-			'<input type="password" name="secure_oidc_login_settings[%s]" value="%s" class="regular-text"%s%s>',
+			'<input type="password" name="secure_oidc_login_settings[%s]" value="%s" class="regular-text"%s%s%s>',
 			esc_attr( $field ),
 			esc_attr( $value ),
 			$maxlength,
-			$is_disabled ? ' disabled' : ''
+			$is_disabled ? ' disabled' : '',
+			$autocomplete_attr
 		);
 
 		if ( $is_env_overridden ) {
@@ -1073,7 +1080,8 @@ class OIDC_Admin {
 	 * Shows a warning if required settings are not configured.
 	 */
 	public function admin_notices(): void {
-		if ( ! isset( $_GET['page'] ) || $_GET['page'] !== 'secure-oidc-login' ) {
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Just checking current page, not processing user input
+		if ( ! isset( $_GET['page'] ) || sanitize_text_field( wp_unslash( $_GET['page'] ) ) !== 'secure-oidc-login' ) {
 			return;
 		}
 
