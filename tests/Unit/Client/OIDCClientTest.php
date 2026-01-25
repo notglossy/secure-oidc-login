@@ -882,6 +882,31 @@ class OIDCClientTest extends OIDCTestCase
     }
 
     /**
+     * Test check_salt_strength skips check when flag is already set.
+     */
+    public function testCheckSaltStrengthSkipsWhenFlagAlreadySet(): void
+    {
+        $reflection = new \ReflectionClass(OIDC_Client::class);
+        $property = $reflection->getProperty('has_logged_salt_warning');
+        $property->setAccessible(true);
+
+        // Pre-set the flag to true
+        $property->setValue(null, true);
+
+        $method = $reflection->getMethod('check_salt_strength');
+        $method->setAccessible(true);
+
+        // Call the method - should return early without doing anything
+        $method->invoke($this->client);
+
+        // Flag should still be true
+        $this->assertTrue(
+            $property->getValue(null),
+            'Flag should remain true after check_salt_strength call'
+        );
+    }
+
+    /**
      * Test generate_jwks_hmac calls check_salt_strength.
      *
      * Verifies that the HMAC generation triggers the salt strength check.
@@ -905,6 +930,305 @@ class OIDCClientTest extends OIDCTestCase
         // The flag may or may not be true depending on whether salts are weak
         // But the method should have been called (no exception thrown)
         $this->assertTrue(true, 'generate_jwks_hmac should call check_salt_strength without error');
+    }
+
+    /**
+     * Test generate_jwks_hmac still produces valid HMAC even with weak salts.
+     *
+     * The HMAC should still be generated (for functionality) even if salts are weak.
+     */
+    public function testGenerateJwksHmacProducesValidHmacRegardlessOfSaltStrength(): void
+    {
+        $reflection = new \ReflectionClass(OIDC_Client::class);
+        $property = $reflection->getProperty('has_logged_salt_warning');
+        $property->setAccessible(true);
+        $property->setValue(null, false);
+
+        Functions\when('wp_json_encode')->alias(fn($data) => json_encode($data));
+
+        $hmacMethod = $reflection->getMethod('generate_jwks_hmac');
+        $hmacMethod->setAccessible(true);
+
+        $jwks = ['keys' => [['kty' => 'RSA', 'kid' => 'test-key']]];
+        $hmac = $hmacMethod->invoke($this->client, $jwks);
+
+        // HMAC should always be a valid 64-character hex string
+        $this->assertIsString($hmac);
+        $this->assertSame(64, strlen($hmac), 'HMAC should be 64 hex characters (SHA-256)');
+        $this->assertMatchesRegularExpression('/^[a-f0-9]{64}$/', $hmac, 'HMAC should be valid hex');
+    }
+
+    /**
+     * Test multiple HMAC generations only trigger salt check once.
+     */
+    public function testMultipleHmacGenerationsOnlyCheckSaltOnce(): void
+    {
+        $reflection = new \ReflectionClass(OIDC_Client::class);
+        $property = $reflection->getProperty('has_logged_salt_warning');
+        $property->setAccessible(true);
+        $property->setValue(null, false);
+
+        Functions\when('wp_json_encode')->alias(fn($data) => json_encode($data));
+
+        $hmacMethod = $reflection->getMethod('generate_jwks_hmac');
+        $hmacMethod->setAccessible(true);
+
+        $jwks1 = ['keys' => [['kty' => 'RSA', 'kid' => 'key-1']]];
+        $jwks2 = ['keys' => [['kty' => 'RSA', 'kid' => 'key-2']]];
+        $jwks3 = ['keys' => [['kty' => 'RSA', 'kid' => 'key-3']]];
+
+        // Generate multiple HMACs
+        $hmacMethod->invoke($this->client, $jwks1);
+        $flagAfterFirst = $property->getValue(null);
+
+        $hmacMethod->invoke($this->client, $jwks2);
+        $flagAfterSecond = $property->getValue(null);
+
+        $hmacMethod->invoke($this->client, $jwks3);
+        $flagAfterThird = $property->getValue(null);
+
+        // Flag state should not change after initial call
+        $this->assertSame(
+            $flagAfterFirst,
+            $flagAfterSecond,
+            'Flag should not change between HMAC generations'
+        );
+        $this->assertSame(
+            $flagAfterSecond,
+            $flagAfterThird,
+            'Flag should not change between HMAC generations'
+        );
+    }
+
+    /**
+     * Test HMAC is deterministic for same input.
+     */
+    public function testHmacIsDeterministicForSameInput(): void
+    {
+        $reflection = new \ReflectionClass(OIDC_Client::class);
+        Functions\when('wp_json_encode')->alias(fn($data) => json_encode($data));
+
+        $hmacMethod = $reflection->getMethod('generate_jwks_hmac');
+        $hmacMethod->setAccessible(true);
+
+        $jwks = ['keys' => [['kty' => 'RSA', 'kid' => 'test-key', 'n' => 'modulus']]];
+
+        $hmac1 = $hmacMethod->invoke($this->client, $jwks);
+        $hmac2 = $hmacMethod->invoke($this->client, $jwks);
+        $hmac3 = $hmacMethod->invoke($this->client, $jwks);
+
+        $this->assertSame($hmac1, $hmac2, 'Same input should produce same HMAC');
+        $this->assertSame($hmac2, $hmac3, 'Same input should produce same HMAC');
+    }
+
+    /**
+     * Test HMAC differs for different inputs.
+     */
+    public function testHmacDiffersForDifferentInputs(): void
+    {
+        $reflection = new \ReflectionClass(OIDC_Client::class);
+        Functions\when('wp_json_encode')->alias(fn($data) => json_encode($data));
+
+        $hmacMethod = $reflection->getMethod('generate_jwks_hmac');
+        $hmacMethod->setAccessible(true);
+
+        $jwks1 = ['keys' => [['kty' => 'RSA', 'kid' => 'key-1']]];
+        $jwks2 = ['keys' => [['kty' => 'RSA', 'kid' => 'key-2']]];
+        $jwks3 = ['keys' => [['kty' => 'RSA', 'kid' => 'key-1'], ['kty' => 'RSA', 'kid' => 'key-2']]];
+
+        $hmac1 = $hmacMethod->invoke($this->client, $jwks1);
+        $hmac2 = $hmacMethod->invoke($this->client, $jwks2);
+        $hmac3 = $hmacMethod->invoke($this->client, $jwks3);
+
+        $this->assertNotSame($hmac1, $hmac2, 'Different inputs should produce different HMACs');
+        $this->assertNotSame($hmac1, $hmac3, 'Different inputs should produce different HMACs');
+        $this->assertNotSame($hmac2, $hmac3, 'Different inputs should produce different HMACs');
+    }
+
+    /**
+     * Test HMAC handles empty JWKS keys array.
+     */
+    public function testHmacHandlesEmptyKeysArray(): void
+    {
+        $reflection = new \ReflectionClass(OIDC_Client::class);
+        Functions\when('wp_json_encode')->alias(fn($data) => json_encode($data));
+
+        $hmacMethod = $reflection->getMethod('generate_jwks_hmac');
+        $hmacMethod->setAccessible(true);
+
+        $jwks = ['keys' => []];
+        $hmac = $hmacMethod->invoke($this->client, $jwks);
+
+        $this->assertIsString($hmac);
+        $this->assertSame(64, strlen($hmac), 'HMAC should be 64 hex characters even for empty keys');
+    }
+
+    /**
+     * Test HMAC handles complex JWKS with multiple keys.
+     */
+    public function testHmacHandlesComplexJwks(): void
+    {
+        $reflection = new \ReflectionClass(OIDC_Client::class);
+        Functions\when('wp_json_encode')->alias(fn($data) => json_encode($data));
+
+        $hmacMethod = $reflection->getMethod('generate_jwks_hmac');
+        $hmacMethod->setAccessible(true);
+
+        $jwks = [
+            'keys' => [
+                [
+                    'kty' => 'RSA',
+                    'kid' => 'key-1',
+                    'use' => 'sig',
+                    'alg' => 'RS256',
+                    'n' => 'very-long-modulus-value-here',
+                    'e' => 'AQAB',
+                ],
+                [
+                    'kty' => 'RSA',
+                    'kid' => 'key-2',
+                    'use' => 'sig',
+                    'alg' => 'RS384',
+                    'n' => 'another-long-modulus',
+                    'e' => 'AQAB',
+                ],
+                [
+                    'kty' => 'EC',
+                    'kid' => 'key-3',
+                    'use' => 'sig',
+                    'alg' => 'ES256',
+                    'crv' => 'P-256',
+                    'x' => 'x-coordinate',
+                    'y' => 'y-coordinate',
+                ],
+            ],
+        ];
+
+        $hmac = $hmacMethod->invoke($this->client, $jwks);
+
+        $this->assertIsString($hmac);
+        $this->assertSame(64, strlen($hmac), 'HMAC should be 64 hex characters for complex JWKS');
+        $this->assertMatchesRegularExpression('/^[a-f0-9]{64}$/', $hmac);
+    }
+
+    /**
+     * Test that verify_jwks_integrity uses timing-safe comparison.
+     *
+     * This test ensures the verification method exists and returns boolean.
+     * The actual timing-safety is provided by hash_equals() which we trust.
+     */
+    public function testVerifyJwksIntegrityReturnsBooleanType(): void
+    {
+        $reflection = new \ReflectionClass(OIDC_Client::class);
+        $method = $reflection->getMethod('verify_jwks_integrity');
+        $method->setAccessible(true);
+
+        Functions\when('wp_json_encode')->alias(fn($data) => json_encode($data));
+
+        // Valid cache data
+        $jwks = ['keys' => [['kty' => 'RSA', 'kid' => 'test']]];
+        $hmacMethod = $reflection->getMethod('generate_jwks_hmac');
+        $hmacMethod->setAccessible(true);
+        $validHmac = $hmacMethod->invoke($this->client, $jwks);
+
+        $validResult = $method->invoke($this->client, ['jwks' => $jwks, 'hmac' => $validHmac]);
+        $invalidResult = $method->invoke($this->client, ['jwks' => $jwks, 'hmac' => 'wrong']);
+
+        $this->assertIsBool($validResult, 'verify_jwks_integrity should return boolean');
+        $this->assertIsBool($invalidResult, 'verify_jwks_integrity should return boolean');
+        $this->assertTrue($validResult);
+        $this->assertFalse($invalidResult);
+    }
+
+    /**
+     * Test verify_jwks_integrity detects JWKS tampering.
+     */
+    public function testVerifyJwksIntegrityDetectsTampering(): void
+    {
+        $reflection = new \ReflectionClass(OIDC_Client::class);
+        Functions\when('wp_json_encode')->alias(fn($data) => json_encode($data));
+
+        $hmacMethod = $reflection->getMethod('generate_jwks_hmac');
+        $hmacMethod->setAccessible(true);
+
+        $verifyMethod = $reflection->getMethod('verify_jwks_integrity');
+        $verifyMethod->setAccessible(true);
+
+        // Original JWKS
+        $originalJwks = ['keys' => [['kty' => 'RSA', 'kid' => 'legitimate-key']]];
+        $originalHmac = $hmacMethod->invoke($this->client, $originalJwks);
+
+        // Tampered JWKS (attacker injected their key)
+        $tamperedJwks = ['keys' => [['kty' => 'RSA', 'kid' => 'attacker-key']]];
+
+        // Verification should fail when JWKS is tampered but HMAC is from original
+        $result = $verifyMethod->invoke($this->client, [
+            'jwks' => $tamperedJwks,
+            'hmac' => $originalHmac,
+        ]);
+
+        $this->assertFalse($result, 'Tampered JWKS should fail integrity check');
+    }
+
+    /**
+     * Test verify_jwks_integrity detects subtle JWKS modifications.
+     */
+    public function testVerifyJwksIntegrityDetectsSubtleModifications(): void
+    {
+        $reflection = new \ReflectionClass(OIDC_Client::class);
+        Functions\when('wp_json_encode')->alias(fn($data) => json_encode($data));
+
+        $hmacMethod = $reflection->getMethod('generate_jwks_hmac');
+        $hmacMethod->setAccessible(true);
+
+        $verifyMethod = $reflection->getMethod('verify_jwks_integrity');
+        $verifyMethod->setAccessible(true);
+
+        // Original JWKS
+        $originalJwks = ['keys' => [['kty' => 'RSA', 'kid' => 'key-1', 'n' => 'original-modulus']]];
+        $originalHmac = $hmacMethod->invoke($this->client, $originalJwks);
+
+        // Subtly modified JWKS (changed modulus - would allow forged signatures)
+        $modifiedJwks = ['keys' => [['kty' => 'RSA', 'kid' => 'key-1', 'n' => 'modified-modulus']]];
+
+        $result = $verifyMethod->invoke($this->client, [
+            'jwks' => $modifiedJwks,
+            'hmac' => $originalHmac,
+        ]);
+
+        $this->assertFalse($result, 'Subtly modified JWKS should fail integrity check');
+    }
+
+    /**
+     * Test verify_jwks_integrity detects key addition attacks.
+     */
+    public function testVerifyJwksIntegrityDetectsKeyAddition(): void
+    {
+        $reflection = new \ReflectionClass(OIDC_Client::class);
+        Functions\when('wp_json_encode')->alias(fn($data) => json_encode($data));
+
+        $hmacMethod = $reflection->getMethod('generate_jwks_hmac');
+        $hmacMethod->setAccessible(true);
+
+        $verifyMethod = $reflection->getMethod('verify_jwks_integrity');
+        $verifyMethod->setAccessible(true);
+
+        // Original JWKS with one key
+        $originalJwks = ['keys' => [['kty' => 'RSA', 'kid' => 'legitimate-key']]];
+        $originalHmac = $hmacMethod->invoke($this->client, $originalJwks);
+
+        // Modified JWKS with attacker's key added
+        $attackerJwks = ['keys' => [
+            ['kty' => 'RSA', 'kid' => 'legitimate-key'],
+            ['kty' => 'RSA', 'kid' => 'attacker-injected-key'],
+        ]];
+
+        $result = $verifyMethod->invoke($this->client, [
+            'jwks' => $attackerJwks,
+            'hmac' => $originalHmac,
+        ]);
+
+        $this->assertFalse($result, 'JWKS with added keys should fail integrity check');
     }
 
     /**
