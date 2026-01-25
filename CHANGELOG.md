@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-01-24
+
+First stable release. Comprehensive security audit completed with no critical or high-severity vulnerabilities found.
+
 ### Security
 - **[Low]** Fixed missing `wp_unslash()` on `$_GET['page']` in admin notices check
 - **[Low]** Added `autocomplete="new-password"` to client secret field when unsafe mode is enabled to reduce browser cache exposure
@@ -127,7 +131,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Flexible email verification
 - PHPStan level 6 compliance
 
-[Unreleased]: https://github.com/notglossy/secure-oidc-login/compare/v0.6.0-beta...HEAD
+[Unreleased]: https://github.com/notglossy/secure-oidc-login/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/notglossy/secure-oidc-login/compare/v0.6.0-beta...v1.0.0
 [0.6.0-beta]: https://github.com/notglossy/secure-oidc-login/compare/v0.5.0-beta...v0.6.0-beta
 [0.5.0-beta]: https://github.com/notglossy/secure-oidc-login/compare/v0.4.0-beta...v0.5.0-beta
 [0.4.0-beta]: https://github.com/notglossy/secure-oidc-login/compare/v0.3.1-beta...v0.4.0-beta
