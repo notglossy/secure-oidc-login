@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **[Low]** Fixed missing `wp_unslash()` on `$_GET['page']` in admin notices check
+- **[Low]** Added `autocomplete="new-password"` to client secret field when unsafe mode is enabled to reduce browser cache exposure
+
+### Added
+- New environment variable `SECURE_OIDC_STATE_TTL` (60-600 seconds, default: 300) to configure state/nonce parameter expiration
+
+### Changed
+- Enhanced README documentation for reverse proxy security considerations
+
 ## [0.6.0-beta] - 2026-01-24
 
 ### Security

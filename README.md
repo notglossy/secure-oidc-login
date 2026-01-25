@@ -234,6 +234,9 @@ For enhanced security in production environments, you can override sensitive set
 **JWT Validation:**
 - `SECURE_OIDC_JWT_LEEWAY` - Clock skew tolerance in seconds (1-600, default: 15)
 
+**Authentication Flow:**
+- `SECURE_OIDC_STATE_TTL` - State/nonce parameter expiration in seconds (60-600, default: 300)
+
 #### Setting Environment Variables
 
 **On your server:**
@@ -342,6 +345,13 @@ When enabled, the plugin checks these headers in order:
 
 **Security Warning:** Only enable this if your server is actually behind a trusted proxy. These headers can be spoofed by attackers if requests reach your server directly.
 
+#### Important Security Considerations
+
+- **Verify your proxy configuration**: Ensure your reverse proxy is stripping or overwriting client-provided `X-Forwarded-For` headers before adding the real client IP
+- **Disable in development**: Leave `SECURE_OIDC_TRUST_PROXY_HEADERS` undefined (defaults to false) for local development
+- **Spoofing risk**: If clients can connect directly to your WordPress server (bypassing the proxy), attackers can spoof these headers to bypass rate limiting
+- **Testing**: After enabling, verify rate limiting works correctly by testing with multiple IPs behind your proxy
+
 ## Provider-Specific Configuration
 
 ### Keycloak
@@ -418,7 +428,7 @@ add_action('secure_oidc_login_user_created', function($user_id, $claims) {
 
 ### Common Issues
 
-1. **"Invalid state parameter"**: This usually means the authentication took too long (>5 minutes) or cookies are not being preserved. Check your browser's cookie settings.
+1. **"Invalid state parameter"**: This usually means the authentication took too long (>5 minutes by default) or cookies are not being preserved. Check your browser's cookie settings. You can increase the timeout using `SECURE_OIDC_STATE_TTL` (60-600 seconds).
 
 2. **"Token exchange failed"**: Verify your client ID and secret are correct, and that the callback URL matches exactly what's configured in your IdP.
 

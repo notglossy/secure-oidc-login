@@ -441,28 +441,29 @@ class Secure_OIDC_Login {
 			wp_die( __( 'OIDC is not properly configured.', 'secure-oidc-login' ) );
 		}
 
+		// Get state/nonce TTL from environment or use default (5 minutes)
+		// Configurable via SECURE_OIDC_STATE_TTL (60-600 seconds)
+		$state_ttl = $this->get_state_ttl();
+
 		// SECURITY: State parameter prevents CSRF attacks by linking the callback
 		// to this specific authorization request. Attackers cannot trick users into
 		// authenticating with an attacker-controlled account (session fixation).
-		// Stored as transient for 5 minutes (300 seconds).
 		$state = wp_generate_password( 32, false );
-		set_transient( 'oidc_state_' . $state, true, 300 );
+		set_transient( 'oidc_state_' . $state, true, $state_ttl );
 
 		// SECURITY: Nonce prevents token replay attacks. The nonce is embedded in
 		// the ID token by the IdP and must match our expected value. This ensures
 		// the token was issued in response to our specific authentication request.
-		// Stored as transient for 5 minutes (300 seconds).
 		$nonce = wp_generate_password( 32, false );
-		set_transient( 'oidc_nonce_' . $state, $nonce, 300 );
+		set_transient( 'oidc_nonce_' . $state, $nonce, $state_ttl );
 
 		// SECURITY: PKCE (Proof Key for Code Exchange) prevents authorization code
 		// interception attacks. Even if an attacker intercepts the authorization code,
 		// they cannot exchange it for tokens without the code_verifier (which never
 		// leaves this server). This protects public clients and adds defense-in-depth
 		// for confidential clients. Per RFC 7636.
-		// Stored as transient for 5 minutes (300 seconds).
 		$code_verifier = $this->generate_code_verifier();
-		set_transient( 'oidc_code_verifier_' . $state, $code_verifier, 300 );
+		set_transient( 'oidc_code_verifier_' . $state, $code_verifier, $state_ttl );
 		$code_challenge = $this->generate_code_challenge( $code_verifier );
 
 		$redirect_uri = $this->get_callback_url();
@@ -760,6 +761,31 @@ class Secure_OIDC_Login {
 	 */
 	public function get_callback_url(): string {
 		return add_query_arg( 'oidc_callback', '1', home_url( '/' ) );
+	}
+
+	/**
+	 * Get the TTL for state/nonce transients.
+	 *
+	 * Configurable via SECURE_OIDC_STATE_TTL environment variable.
+	 * Default is 300 seconds (5 minutes). Valid range: 60-600 seconds.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @return int TTL in seconds.
+	 */
+	private function get_state_ttl(): int {
+		$env_value = getenv( 'SECURE_OIDC_STATE_TTL' );
+		if ( false === $env_value || '' === $env_value ) {
+			return 300; // Default: 5 minutes
+		}
+
+		$parsed = filter_var( $env_value, FILTER_VALIDATE_INT );
+		if ( false === $parsed || $parsed < 60 || $parsed > 600 ) {
+			error_log( "[Secure OIDC Login] Invalid SECURE_OIDC_STATE_TTL value: {$env_value}. Using default 300 seconds." );
+			return 300;
+		}
+
+		return $parsed;
 	}
 
 	/**
