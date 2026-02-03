@@ -239,6 +239,22 @@ class OIDC_Admin {
 		);
 
 		add_settings_field(
+			'token_endpoint_auth_method',
+			__( 'Token Endpoint Auth Method', 'secure-oidc-login' ),
+			array( $this, 'render_radio_field' ),
+			'secure-oidc-login',
+			'oidc_provider_section',
+			array(
+				'field'   => 'token_endpoint_auth_method',
+				'options' => array(
+					'client_secret_basic' => __( 'Client Secret Basic (credentials in Authorization header)', 'secure-oidc-login' ),
+					'client_secret_post'  => __( 'Client Secret Post (credentials in request body)', 'secure-oidc-login' ),
+				),
+				'default' => 'client_secret_basic',
+			)
+		);
+
+		add_settings_field(
 			'authorization_endpoint',
 			__( 'Authorization Endpoint', 'secure-oidc-login' ),
 			array( $this, 'render_text_field' ),
@@ -680,6 +696,24 @@ class OIDC_Admin {
 			$sanitized[ $field ] = $value;
 		}
 
+		// Enum fields with allowed values
+		$enum_fields = array(
+			'token_endpoint_auth_method' => array(
+				'allowed' => array( 'client_secret_basic', 'client_secret_post' ),
+				'default' => 'client_secret_basic',
+			),
+		);
+
+		foreach ( $enum_fields as $field => $constraints ) {
+			$value = sanitize_text_field( $input[ $field ] ?? $constraints['default'] );
+
+			if ( ! in_array( $value, $constraints['allowed'], true ) ) {
+				$value = $constraints['default'];
+			}
+
+			$sanitized[ $field ] = $value;
+		}
+
 		// Validate allowed_email_domains format
 		if ( ! empty( $sanitized['allowed_email_domains'] ) ) {
 			$validation = $this->validate_domain_list( $sanitized['allowed_email_domains'] );
@@ -1025,6 +1059,54 @@ class OIDC_Admin {
 
 		if ( isset( $args['description'] ) ) {
 			printf( '<span class="description">%s</span>', esc_html( $args['description'] ) );
+		}
+	}
+
+	/**
+	 * Render a radio button field.
+	 *
+	 * @param array<string, mixed> $args Field arguments including 'field', 'options', 'default'.
+	 */
+	public function render_radio_field( array $args ): void {
+		$options = get_option( 'secure_oidc_login_settings', array() );
+		$field   = $args['field'];
+		$choices = $args['options'];
+		$default = $args['default'] ?? '';
+		$value   = $options[ $field ] ?? $default;
+
+		// Check if this setting is overridden by environment variable
+		$env_var = 'SECURE_OIDC_' . strtoupper( $field );
+
+		$is_env_overridden = false;
+		$env_value         = getenv( $env_var );
+		if ( false !== $env_value && '' !== $env_value ) {
+			$is_env_overridden = true;
+			$value             = $env_value;
+		}
+
+		$disabled = $is_env_overridden ? ' disabled' : '';
+
+		foreach ( $choices as $option_value => $label ) {
+			$checked = checked( $value, $option_value, false );
+			printf(
+				'<label><input type="radio" name="secure_oidc_login_settings[%s]" value="%s" %s%s> %s</label><br>',
+				esc_attr( $field ),
+				esc_attr( $option_value ),
+				$checked,
+				$disabled,
+				esc_html( $label )
+			);
+		}
+
+		if ( $is_env_overridden ) {
+			printf(
+				'<p class="description" style="color: #2271b1;">%s</p>',
+				sprintf(
+					/* translators: %s: environment variable name */
+					esc_html__( 'This setting is overridden by the %s environment variable.', 'secure-oidc-login' ),
+					esc_html( $env_var )
+				)
+			);
 		}
 	}
 

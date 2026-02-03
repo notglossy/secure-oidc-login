@@ -124,12 +124,19 @@ class OIDC_Client {
 			'Content-Type' => 'application/x-www-form-urlencoded',
 		);
 
-		// Confidential clients use HTTP Basic auth per RFC 6749 section 2.3.1
-		// This is the recommended authentication method for confidential clients
-		// as it keeps credentials in headers rather than the request body
+		// Confidential clients authenticate per RFC 6749 section 2.3
+		// The method is configurable: client_secret_basic (header) or client_secret_post (body)
 		if ( ! empty( $client_secret ) ) {
-			$credentials              = $client_id . ':' . $client_secret;
-			$headers['Authorization'] = 'Basic ' . base64_encode( $credentials );
+			$auth_method = $this->get_setting( 'token_endpoint_auth_method' );
+
+			if ( 'client_secret_post' === $auth_method ) {
+				// client_secret_post: credentials sent in the request body
+				$token_params['client_secret'] = $client_secret;
+			} else {
+				// client_secret_basic (default): credentials in Authorization header
+				$credentials              = $client_id . ':' . $client_secret;
+				$headers['Authorization'] = 'Basic ' . base64_encode( $credentials );
+			}
 		}
 
 		// Public clients use PKCE for security (no client_secret available)
@@ -663,10 +670,19 @@ class OIDC_Client {
 			'Content-Type' => 'application/x-www-form-urlencoded',
 		);
 
-		// Confidential clients use HTTP Basic auth per RFC 6749
+		// Confidential clients authenticate per RFC 6749 section 2.3
+		// The method is configurable: client_secret_basic (header) or client_secret_post (body)
 		if ( ! empty( $client_secret ) ) {
-			$credentials              = $client_id . ':' . $client_secret;
-			$headers['Authorization'] = 'Basic ' . base64_encode( $credentials );
+			$auth_method = $this->get_setting( 'token_endpoint_auth_method' );
+
+			if ( 'client_secret_post' === $auth_method ) {
+				// client_secret_post: credentials sent in the request body
+				$token_params['client_secret'] = $client_secret;
+			} else {
+				// client_secret_basic (default): credentials in Authorization header
+				$credentials              = $client_id . ':' . $client_secret;
+				$headers['Authorization'] = 'Basic ' . base64_encode( $credentials );
+			}
 		}
 
 		// SECURITY: Use wp_safe_remote_post() to prevent SSRF attacks
