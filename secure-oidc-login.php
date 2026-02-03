@@ -474,6 +474,8 @@ class Secure_OIDC_Login {
 			$scope = $options['scope'];
 		}
 
+		$acr_values = self::get_setting( 'acr_values', $options );
+
 		$auth_params = array(
 			'response_type'         => 'code',
 			'client_id'             => $client_id,
@@ -484,6 +486,10 @@ class Secure_OIDC_Login {
 			'code_challenge'        => $code_challenge,
 			'code_challenge_method' => 'S256',
 		);
+
+		if ( ! empty( $acr_values ) ) {
+			$auth_params['acr_values'] = $acr_values;
+		}
 
 		$auth_url = $authorization_endpoint . '?' . http_build_query( $auth_params );
 
@@ -577,6 +583,14 @@ class Secure_OIDC_Login {
 
 		// Delete nonce to prevent replay attacks
 		delete_transient( 'oidc_nonce_' . $state );
+
+		// Validate ACR claim if enforcement is enabled
+		$acr_result = $this->client->validate_acr_claim( $id_token_claims, $options );
+
+		if ( is_wp_error( $acr_result ) ) {
+			$this->handle_error( $acr_result->get_error_message() );
+			return;
+		}
 
 		// Fetch additional user info from userinfo endpoint
 		$userinfo = $this->client->get_userinfo( $tokens['access_token'] );
@@ -858,6 +872,8 @@ class Secure_OIDC_Login {
 			'jwks_uri'                       => '',
 			'issuer'                         => '',
 			'scope'                          => 'openid email profile',
+			'acr_values'                     => '',
+			'enforce_acr'                    => false,
 			'login_button_text'              => 'Login with SSO',
 			'enable_single_logout'           => false,
 			'disable_native_login'           => false,

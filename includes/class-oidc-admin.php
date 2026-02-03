@@ -163,6 +163,7 @@ class OIDC_Admin {
 			'jwks_uri'               => 2048,
 			'issuer'                 => 512,
 			'scope'                  => 512,
+			'acr_values'             => 1024,
 			'login_button_text'      => 100,
 			'username_claim'         => 100,
 			'email_claim'            => 100,
@@ -339,6 +340,30 @@ class OIDC_Admin {
 			array(
 				'field'   => 'scope',
 				'default' => 'openid email profile',
+			)
+		);
+
+		add_settings_field(
+			'acr_values',
+			__( 'ACR Values', 'secure-oidc-login' ),
+			array( $this, 'render_text_field' ),
+			'secure-oidc-login',
+			'oidc_provider_section',
+			array(
+				'field'       => 'acr_values',
+				'description' => __( 'Space-separated Authentication Context Class Reference values to request from the IdP (e.g., urn:mace:incommon:iap:silver).', 'secure-oidc-login' ),
+			)
+		);
+
+		add_settings_field(
+			'enforce_acr',
+			__( 'Enforce ACR', 'secure-oidc-login' ),
+			array( $this, 'render_checkbox_field' ),
+			'secure-oidc-login',
+			'oidc_provider_section',
+			array(
+				'field'       => 'enforce_acr',
+				'description' => __( 'Require the ID token acr claim to match one of the requested ACR values. Authentication will fail if the claim is missing or does not match.', 'secure-oidc-login' ),
 			)
 		);
 
@@ -581,6 +606,7 @@ class OIDC_Admin {
 			'client_id',
 			'client_secret',
 			'scope',
+			'acr_values',
 			'login_button_text',
 			'username_claim',
 			'email_claim',
@@ -601,7 +627,7 @@ class OIDC_Admin {
 		);
 
 		// Boolean checkbox fields
-		$checkbox_fields = array( 'enable_single_logout', 'create_users', 'require_verified_email', 'disable_native_login', 'enable_auto_token_refresh', 'enforce_refresh_token_rotation' );
+		$checkbox_fields = array( 'enable_single_logout', 'create_users', 'require_verified_email', 'disable_native_login', 'enable_auto_token_refresh', 'enforce_refresh_token_rotation', 'enforce_acr' );
 
 		// Integer number fields with validation
 		$number_fields = array(

@@ -1611,6 +1611,166 @@ class OIDCClientTest extends OIDCTestCase
         $this->assertStringNotContainsString('algorithm', strtolower($result->get_error_message()));
     }
 
+    // =========================================================================
+    // ACR Claim Validation Tests
+    // =========================================================================
+
+    /**
+     * Test validate_acr_claim returns true when enforcement is disabled.
+     */
+    public function testValidateAcrClaimReturnsTrueWhenEnforcementDisabled(): void
+    {
+        putenv('SECURE_OIDC_ENFORCE_ACR');
+        putenv('SECURE_OIDC_ACR_VALUES');
+
+        $claims = ['sub' => 'user-123', 'acr' => 'urn:mace:incommon:iap:silver'];
+        $options = [
+            'acr_values' => 'urn:mace:incommon:iap:silver',
+            'enforce_acr' => false,
+        ];
+
+        $result = $this->client->validate_acr_claim($claims, $options);
+
+        $this->assertTrue($result);
+    }
+
+    /**
+     * Test validate_acr_claim returns true when no acr_values configured.
+     */
+    public function testValidateAcrClaimReturnsTrueWhenNoAcrValuesConfigured(): void
+    {
+        putenv('SECURE_OIDC_ENFORCE_ACR');
+        putenv('SECURE_OIDC_ACR_VALUES');
+
+        $claims = ['sub' => 'user-123'];
+        $options = [
+            'acr_values' => '',
+            'enforce_acr' => true,
+        ];
+
+        $result = $this->client->validate_acr_claim($claims, $options);
+
+        $this->assertTrue($result);
+    }
+
+    /**
+     * Test validate_acr_claim returns true when acr claim matches requested value.
+     */
+    public function testValidateAcrClaimReturnsTrueWhenAcrMatches(): void
+    {
+        putenv('SECURE_OIDC_ENFORCE_ACR');
+        putenv('SECURE_OIDC_ACR_VALUES');
+
+        $claims = ['sub' => 'user-123', 'acr' => 'urn:mace:incommon:iap:silver'];
+        $options = [
+            'acr_values' => 'urn:mace:incommon:iap:bronze urn:mace:incommon:iap:silver',
+            'enforce_acr' => true,
+        ];
+
+        $result = $this->client->validate_acr_claim($claims, $options);
+
+        $this->assertTrue($result);
+    }
+
+    /**
+     * Test validate_acr_claim returns WP_Error when acr claim is missing.
+     */
+    public function testValidateAcrClaimReturnsErrorWhenAcrMissing(): void
+    {
+        putenv('SECURE_OIDC_ENFORCE_ACR');
+        putenv('SECURE_OIDC_ACR_VALUES');
+
+        $claims = ['sub' => 'user-123'];
+        $options = [
+            'acr_values' => 'urn:mace:incommon:iap:silver',
+            'enforce_acr' => true,
+        ];
+
+        $result = $this->client->validate_acr_claim($claims, $options);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('oidc_acr_missing', $result->get_error_code());
+    }
+
+    /**
+     * Test validate_acr_claim returns WP_Error when acr claim does not match.
+     */
+    public function testValidateAcrClaimReturnsErrorWhenAcrMismatch(): void
+    {
+        putenv('SECURE_OIDC_ENFORCE_ACR');
+        putenv('SECURE_OIDC_ACR_VALUES');
+
+        $claims = ['sub' => 'user-123', 'acr' => 'urn:mace:incommon:iap:bronze'];
+        $options = [
+            'acr_values' => 'urn:mace:incommon:iap:silver urn:mace:incommon:iap:gold',
+            'enforce_acr' => true,
+        ];
+
+        $result = $this->client->validate_acr_claim($claims, $options);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('oidc_acr_mismatch', $result->get_error_code());
+    }
+
+    /**
+     * Test validate_acr_claim works with a single acr_value.
+     */
+    public function testValidateAcrClaimWorksSingleAcrValue(): void
+    {
+        putenv('SECURE_OIDC_ENFORCE_ACR');
+        putenv('SECURE_OIDC_ACR_VALUES');
+
+        $claims = ['sub' => 'user-123', 'acr' => 'urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport'];
+        $options = [
+            'acr_values' => 'urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport',
+            'enforce_acr' => true,
+        ];
+
+        $result = $this->client->validate_acr_claim($claims, $options);
+
+        $this->assertTrue($result);
+    }
+
+    /**
+     * Test validate_acr_claim uses strict string comparison (no type coercion).
+     */
+    public function testValidateAcrClaimUsesStrictStringComparison(): void
+    {
+        putenv('SECURE_OIDC_ENFORCE_ACR');
+        putenv('SECURE_OIDC_ACR_VALUES');
+
+        // Integer 0 should not match string "0" loosely - ensure strict comparison
+        $claims = ['sub' => 'user-123', 'acr' => '1'];
+        $options = [
+            'acr_values' => '01',
+            'enforce_acr' => true,
+        ];
+
+        $result = $this->client->validate_acr_claim($claims, $options);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('oidc_acr_mismatch', $result->get_error_code());
+    }
+
+    /**
+     * Test validate_acr_claim handles extra whitespace in acr_values string.
+     */
+    public function testValidateAcrClaimHandlesExtraWhitespace(): void
+    {
+        putenv('SECURE_OIDC_ENFORCE_ACR');
+        putenv('SECURE_OIDC_ACR_VALUES');
+
+        $claims = ['sub' => 'user-123', 'acr' => 'urn:mace:incommon:iap:silver'];
+        $options = [
+            'acr_values' => '  urn:mace:incommon:iap:bronze   urn:mace:incommon:iap:silver  ',
+            'enforce_acr' => true,
+        ];
+
+        $result = $this->client->validate_acr_claim($claims, $options);
+
+        $this->assertTrue($result);
+    }
+
     /**
      * Test decode_and_verify_jwt defaults to RS256 when algorithm not in header.
      */
