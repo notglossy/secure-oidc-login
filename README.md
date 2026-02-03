@@ -120,6 +120,7 @@ Navigate to **Settings > OIDC Auth** in your WordPress admin panel.
 | Discovery URL | Your IdP's `.well-known/openid-configuration` URL. Click "Discover" to auto-populate endpoints. | No |
 | Client ID | The client ID from your IdP | Yes |
 | Client Secret | The client secret from your IdP (for confidential clients) | No |
+| Token Endpoint Auth Method | How client credentials are sent to the token endpoint: `client_secret_basic` (Authorization header, default) or `client_secret_post` (POST body) | No |
 | Authorization Endpoint | URL for the authorization endpoint | Yes |
 | Token Endpoint | URL for the token endpoint | Yes |
 | Userinfo Endpoint | URL for the userinfo endpoint | No |
@@ -220,6 +221,9 @@ For enhanced security in production environments, you can override sensitive set
 - `SECURE_OIDC_USERINFO_ENDPOINT` - Overrides the Userinfo Endpoint
 - `SECURE_OIDC_END_SESSION_ENDPOINT` - Overrides the End Session (logout) Endpoint
 - `SECURE_OIDC_JWKS_URI` - Overrides the JWKS URI for token verification
+
+**Client Authentication:**
+- `SECURE_OIDC_TOKEN_ENDPOINT_AUTH_METHOD` - Overrides the token endpoint auth method (`client_secret_basic` or `client_secret_post`)
 
 **Token Validation:**
 - `SECURE_OIDC_ISSUER` - Overrides the expected Issuer value for JWT validation

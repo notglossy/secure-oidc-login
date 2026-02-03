@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-02-02
+
+### Added
+- Configurable `token_endpoint_auth_method` setting with two options: `client_secret_basic` (default, credentials in Authorization header) and `client_secret_post` (credentials in POST body)
+- New `render_radio_field()` admin UI method for radio button settings
+- New environment variable `SECURE_OIDC_TOKEN_ENDPOINT_AUTH_METHOD` to override the auth method setting
+
+### Changed
+- `client_id` is no longer included in the POST body when using `client_secret_basic`, per RFC 6749 section 2.3.1
+
 ## [1.0.0] - 2026-01-24
 
 First stable release. Comprehensive security audit completed with no critical or high-severity vulnerabilities found.
@@ -131,7 +141,8 @@ First stable release. Comprehensive security audit completed with no critical or
 - Flexible email verification
 - PHPStan level 6 compliance
 
-[Unreleased]: https://github.com/notglossy/secure-oidc-login/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/notglossy/secure-oidc-login/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/notglossy/secure-oidc-login/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/notglossy/secure-oidc-login/compare/v0.6.0-beta...v1.0.0
 [0.6.0-beta]: https://github.com/notglossy/secure-oidc-login/compare/v0.5.0-beta...v0.6.0-beta
 [0.5.0-beta]: https://github.com/notglossy/secure-oidc-login/compare/v0.4.0-beta...v0.5.0-beta
