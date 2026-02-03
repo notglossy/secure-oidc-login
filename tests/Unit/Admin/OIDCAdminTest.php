@@ -1023,6 +1023,194 @@ class OIDCAdminTest extends OIDCTestCase
         $this->assertStringNotContainsString('Emergency admin access', $output);
     }
 
+    // =========================================================================
+    // Token Endpoint Auth Method Radio Field Tests
+    // =========================================================================
+
+    /**
+     * Test render_radio_field outputs both radio options.
+     */
+    public function testRenderRadioFieldOutputsBothOptions(): void
+    {
+        Functions\when('get_option')->justReturn([]);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+        Functions\when('esc_html__')->alias(fn($v, $d) => $v);
+        Functions\when('checked')->alias(fn($checked, $current, $echo = true) => $checked === $current ? 'checked=\'checked\'' : '');
+
+        putenv('SECURE_OIDC_TOKEN_ENDPOINT_AUTH_METHOD');
+
+        ob_start();
+        $this->admin->render_radio_field([
+            'field' => 'token_endpoint_auth_method',
+            'options' => [
+                'client_secret_basic' => 'Client Secret Basic (credentials in Authorization header)',
+                'client_secret_post' => 'Client Secret Post (credentials in request body)',
+            ],
+            'default' => 'client_secret_basic',
+        ]);
+        $output = ob_get_clean();
+
+        $this->assertStringContainsString('type="radio"', $output);
+        $this->assertStringContainsString('value="client_secret_basic"', $output);
+        $this->assertStringContainsString('value="client_secret_post"', $output);
+        $this->assertStringContainsString('Client Secret Basic', $output);
+        $this->assertStringContainsString('Client Secret Post', $output);
+    }
+
+    /**
+     * Test render_radio_field selects default value when no option stored.
+     */
+    public function testRenderRadioFieldSelectsDefaultValue(): void
+    {
+        Functions\when('get_option')->justReturn([]);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+        Functions\when('esc_html__')->alias(fn($v, $d) => $v);
+        Functions\when('checked')->alias(fn($checked, $current, $echo = true) => $checked === $current ? 'checked=\'checked\'' : '');
+
+        putenv('SECURE_OIDC_TOKEN_ENDPOINT_AUTH_METHOD');
+
+        ob_start();
+        $this->admin->render_radio_field([
+            'field' => 'token_endpoint_auth_method',
+            'options' => [
+                'client_secret_basic' => 'Basic',
+                'client_secret_post' => 'Post',
+            ],
+            'default' => 'client_secret_basic',
+        ]);
+        $output = ob_get_clean();
+
+        // The default option should be checked
+        $this->assertMatchesRegularExpression(
+            '/value="client_secret_basic".*checked/',
+            $output
+        );
+    }
+
+    /**
+     * Test render_radio_field disables inputs when env var is set.
+     */
+    public function testRenderRadioFieldDisabledWhenEnvVarSet(): void
+    {
+        Functions\when('get_option')->justReturn([]);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+        Functions\when('esc_html__')->alias(fn($v, $d) => $v);
+        Functions\when('checked')->alias(fn($checked, $current, $echo = true) => $checked === $current ? 'checked=\'checked\'' : '');
+
+        putenv('SECURE_OIDC_TOKEN_ENDPOINT_AUTH_METHOD=client_secret_post');
+
+        ob_start();
+        $this->admin->render_radio_field([
+            'field' => 'token_endpoint_auth_method',
+            'options' => [
+                'client_secret_basic' => 'Basic',
+                'client_secret_post' => 'Post',
+            ],
+            'default' => 'client_secret_basic',
+        ]);
+        $output = ob_get_clean();
+
+        $this->assertStringContainsString('disabled', $output);
+        $this->assertStringContainsString('overridden by', $output);
+        $this->assertStringContainsString('SECURE_OIDC_TOKEN_ENDPOINT_AUTH_METHOD', $output);
+
+        putenv('SECURE_OIDC_TOKEN_ENDPOINT_AUTH_METHOD');
+    }
+
+    /**
+     * Test render_radio_field uses env var value when set.
+     */
+    public function testRenderRadioFieldUsesEnvVarValue(): void
+    {
+        Functions\when('get_option')->justReturn(['token_endpoint_auth_method' => 'client_secret_basic']);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+        Functions\when('esc_html__')->alias(fn($v, $d) => $v);
+        Functions\when('checked')->alias(fn($checked, $current, $echo = true) => $checked === $current ? 'checked=\'checked\'' : '');
+
+        putenv('SECURE_OIDC_TOKEN_ENDPOINT_AUTH_METHOD=client_secret_post');
+
+        ob_start();
+        $this->admin->render_radio_field([
+            'field' => 'token_endpoint_auth_method',
+            'options' => [
+                'client_secret_basic' => 'Basic',
+                'client_secret_post' => 'Post',
+            ],
+            'default' => 'client_secret_basic',
+        ]);
+        $output = ob_get_clean();
+
+        // Env var value (client_secret_post) should be checked, not the stored value
+        $this->assertMatchesRegularExpression(
+            '/value="client_secret_post".*checked/',
+            $output
+        );
+
+        putenv('SECURE_OIDC_TOKEN_ENDPOINT_AUTH_METHOD');
+    }
+
+    /**
+     * Test sanitize_settings validates token_endpoint_auth_method.
+     */
+    public function testSanitizeSettingsValidatesTokenEndpointAuthMethod(): void
+    {
+        Functions\when('get_option')->justReturn([]);
+        Functions\when('current_user_can')->justReturn(true);
+        Functions\when('wp_verify_nonce')->justReturn(true);
+
+        $_POST['_wpnonce'] = 'valid-nonce';
+
+        $input = [
+            'token_endpoint_auth_method' => 'client_secret_post',
+        ];
+
+        $result = $this->admin->sanitize_settings($input);
+
+        $this->assertSame('client_secret_post', $result['token_endpoint_auth_method']);
+    }
+
+    /**
+     * Test sanitize_settings defaults invalid token_endpoint_auth_method to client_secret_basic.
+     */
+    public function testSanitizeSettingsDefaultsInvalidAuthMethod(): void
+    {
+        Functions\when('get_option')->justReturn([]);
+        Functions\when('current_user_can')->justReturn(true);
+        Functions\when('wp_verify_nonce')->justReturn(true);
+
+        $_POST['_wpnonce'] = 'valid-nonce';
+
+        $input = [
+            'token_endpoint_auth_method' => 'invalid_method',
+        ];
+
+        $result = $this->admin->sanitize_settings($input);
+
+        $this->assertSame('client_secret_basic', $result['token_endpoint_auth_method']);
+    }
+
+    /**
+     * Test sanitize_settings defaults missing token_endpoint_auth_method.
+     */
+    public function testSanitizeSettingsDefaultsMissingAuthMethod(): void
+    {
+        Functions\when('get_option')->justReturn([]);
+        Functions\when('current_user_can')->justReturn(true);
+        Functions\when('wp_verify_nonce')->justReturn(true);
+
+        $_POST['_wpnonce'] = 'valid-nonce';
+
+        $input = [];
+
+        $result = $this->admin->sanitize_settings($input);
+
+        $this->assertSame('client_secret_basic', $result['token_endpoint_auth_method']);
+    }
+
     /**
      * Test admin_notices shows domain filtering notice when domains configured.
      */

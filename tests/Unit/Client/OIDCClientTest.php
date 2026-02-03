@@ -1332,6 +1332,179 @@ class OIDCClientTest extends OIDCTestCase
     // JWT Algorithm Handling Tests
     // =========================================================================
 
+    // =========================================================================
+    // Token Endpoint Auth Method Tests
+    // =========================================================================
+
+    /**
+     * Test exchange_code uses client_secret_basic (Authorization header) by default.
+     */
+    public function testExchangeCodeUsesClientSecretBasicByDefault(): void
+    {
+        $capturedHeaders = null;
+        $capturedBody = null;
+
+        Functions\when('wp_safe_remote_post')->alias(function($url, $args) use (&$capturedHeaders, &$capturedBody) {
+            $capturedHeaders = $args['headers'] ?? [];
+            $capturedBody = $args['body'] ?? [];
+            return [
+                'body' => json_encode([
+                    'access_token' => 'test-access',
+                    'id_token' => 'test-id',
+                    'token_type' => 'Bearer'
+                ]),
+                'response' => ['code' => 200]
+            ];
+        });
+
+        $this->client->exchange_code('auth-code');
+
+        $this->assertArrayHasKey('Authorization', $capturedHeaders);
+        $this->assertStringStartsWith('Basic ', $capturedHeaders['Authorization']);
+        $this->assertArrayNotHasKey('client_id', $capturedBody);
+        $this->assertArrayNotHasKey('client_secret', $capturedBody);
+    }
+
+    /**
+     * Test exchange_code uses client_secret_post when configured.
+     */
+    public function testExchangeCodeUsesClientSecretPostWhenConfigured(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'client_id' => 'test-client-id',
+            'client_secret' => 'test-client-secret',
+            'token_endpoint' => 'https://idp.example.com/token',
+            'token_endpoint_auth_method' => 'client_secret_post',
+        ]);
+
+        $client = new OIDC_Client();
+
+        $capturedHeaders = null;
+        $capturedBody = null;
+
+        Functions\when('wp_safe_remote_post')->alias(function($url, $args) use (&$capturedHeaders, &$capturedBody) {
+            $capturedHeaders = $args['headers'] ?? [];
+            $capturedBody = $args['body'] ?? [];
+            return [
+                'body' => json_encode([
+                    'access_token' => 'test-access',
+                    'id_token' => 'test-id',
+                    'token_type' => 'Bearer'
+                ]),
+                'response' => ['code' => 200]
+            ];
+        });
+
+        $client->exchange_code('auth-code');
+
+        $this->assertArrayNotHasKey('Authorization', $capturedHeaders);
+        $this->assertArrayHasKey('client_secret', $capturedBody);
+        $this->assertSame('test-client-secret', $capturedBody['client_secret']);
+        $this->assertArrayHasKey('client_id', $capturedBody);
+    }
+
+    /**
+     * Test refresh_token uses client_secret_basic (Authorization header) by default.
+     */
+    public function testRefreshTokenUsesClientSecretBasicByDefault(): void
+    {
+        $capturedHeaders = null;
+        $capturedBody = null;
+
+        Functions\when('wp_safe_remote_post')->alias(function($url, $args) use (&$capturedHeaders, &$capturedBody) {
+            $capturedHeaders = $args['headers'] ?? [];
+            $capturedBody = $args['body'] ?? [];
+            return [
+                'body' => json_encode([
+                    'access_token' => 'new-access',
+                    'id_token' => 'new-id',
+                    'token_type' => 'Bearer'
+                ]),
+                'response' => ['code' => 200]
+            ];
+        });
+
+        $this->client->refresh_token('refresh-token-value');
+
+        $this->assertArrayHasKey('Authorization', $capturedHeaders);
+        $this->assertStringStartsWith('Basic ', $capturedHeaders['Authorization']);
+        $this->assertArrayNotHasKey('client_id', $capturedBody);
+        $this->assertArrayNotHasKey('client_secret', $capturedBody);
+    }
+
+    /**
+     * Test refresh_token uses client_secret_post when configured.
+     */
+    public function testRefreshTokenUsesClientSecretPostWhenConfigured(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'client_id' => 'test-client-id',
+            'client_secret' => 'test-client-secret',
+            'token_endpoint' => 'https://idp.example.com/token',
+            'token_endpoint_auth_method' => 'client_secret_post',
+        ]);
+
+        $client = new OIDC_Client();
+
+        $capturedHeaders = null;
+        $capturedBody = null;
+
+        Functions\when('wp_safe_remote_post')->alias(function($url, $args) use (&$capturedHeaders, &$capturedBody) {
+            $capturedHeaders = $args['headers'] ?? [];
+            $capturedBody = $args['body'] ?? [];
+            return [
+                'body' => json_encode([
+                    'access_token' => 'new-access',
+                    'id_token' => 'new-id',
+                    'token_type' => 'Bearer'
+                ]),
+                'response' => ['code' => 200]
+            ];
+        });
+
+        $client->refresh_token('refresh-token-value');
+
+        $this->assertArrayNotHasKey('Authorization', $capturedHeaders);
+        $this->assertArrayHasKey('client_secret', $capturedBody);
+        $this->assertSame('test-client-secret', $capturedBody['client_secret']);
+        $this->assertArrayHasKey('client_id', $capturedBody);
+    }
+
+    /**
+     * Test exchange_code with client_secret_post includes both client_id and client_secret in body.
+     */
+    public function testExchangeCodeClientSecretPostIncludesBothCredentialsInBody(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'client_id' => 'my-client',
+            'client_secret' => 'my-secret',
+            'token_endpoint' => 'https://idp.example.com/token',
+            'token_endpoint_auth_method' => 'client_secret_post',
+        ]);
+
+        $client = new OIDC_Client();
+
+        $capturedBody = null;
+
+        Functions\when('wp_safe_remote_post')->alias(function($url, $args) use (&$capturedBody) {
+            $capturedBody = $args['body'] ?? [];
+            return [
+                'body' => json_encode([
+                    'access_token' => 'test-access',
+                    'id_token' => 'test-id',
+                    'token_type' => 'Bearer'
+                ]),
+                'response' => ['code' => 200]
+            ];
+        });
+
+        $client->exchange_code('auth-code');
+
+        $this->assertSame('my-client', $capturedBody['client_id']);
+        $this->assertSame('my-secret', $capturedBody['client_secret']);
+        $this->assertSame('authorization_code', $capturedBody['grant_type']);
+    }
+
     /**
      * Test decode_and_verify_jwt returns error for invalid JWT format (not 3 parts).
      *
