@@ -117,7 +117,6 @@ class OIDC_Client {
 			'grant_type'   => 'authorization_code',
 			'code'         => $code,
 			'redirect_uri' => $this->get_callback_url(),
-			'client_id'    => $client_id,
 		);
 
 		$headers = array(
@@ -130,13 +129,19 @@ class OIDC_Client {
 			$auth_method = $this->get_setting( 'token_endpoint_auth_method' );
 
 			if ( 'client_secret_post' === $auth_method ) {
-				// client_secret_post: credentials sent in the request body
+				// client_secret_post: credentials sent in the request body (RFC 6749 section 2.3.1)
+				$token_params['client_id']     = $client_id;
 				$token_params['client_secret'] = $client_secret;
 			} else {
-				// client_secret_basic (default): credentials in Authorization header
+				// client_secret_basic (default): credentials in Authorization header only
+				// Per RFC 6749 section 2.3.1, clients using Basic auth MUST NOT include
+				// credentials in the request body
 				$credentials              = $client_id . ':' . $client_secret;
 				$headers['Authorization'] = 'Basic ' . base64_encode( $credentials );
 			}
+		} else {
+			// Public clients: include client_id in body for identification
+			$token_params['client_id'] = $client_id;
 		}
 
 		// Public clients use PKCE for security (no client_secret available)
@@ -663,7 +668,6 @@ class OIDC_Client {
 		$token_params = array(
 			'grant_type'    => 'refresh_token',
 			'refresh_token' => $refresh_token,
-			'client_id'     => $client_id,
 		);
 
 		$headers = array(
@@ -676,13 +680,19 @@ class OIDC_Client {
 			$auth_method = $this->get_setting( 'token_endpoint_auth_method' );
 
 			if ( 'client_secret_post' === $auth_method ) {
-				// client_secret_post: credentials sent in the request body
+				// client_secret_post: credentials sent in the request body (RFC 6749 section 2.3.1)
+				$token_params['client_id']     = $client_id;
 				$token_params['client_secret'] = $client_secret;
 			} else {
-				// client_secret_basic (default): credentials in Authorization header
+				// client_secret_basic (default): credentials in Authorization header only
+				// Per RFC 6749 section 2.3.1, clients using Basic auth MUST NOT include
+				// credentials in the request body
 				$credentials              = $client_id . ':' . $client_secret;
 				$headers['Authorization'] = 'Basic ' . base64_encode( $credentials );
 			}
+		} else {
+			// Public clients: include client_id in body for identification
+			$token_params['client_id'] = $client_id;
 		}
 
 		// SECURITY: Use wp_safe_remote_post() to prevent SSRF attacks

@@ -1361,6 +1361,7 @@ class OIDCClientTest extends OIDCTestCase
 
         $this->assertArrayHasKey('Authorization', $capturedHeaders);
         $this->assertStringStartsWith('Basic ', $capturedHeaders['Authorization']);
+        $this->assertArrayNotHasKey('client_id', $capturedBody);
         $this->assertArrayNotHasKey('client_secret', $capturedBody);
     }
 
@@ -1427,6 +1428,7 @@ class OIDCClientTest extends OIDCTestCase
 
         $this->assertArrayHasKey('Authorization', $capturedHeaders);
         $this->assertStringStartsWith('Basic ', $capturedHeaders['Authorization']);
+        $this->assertArrayNotHasKey('client_id', $capturedBody);
         $this->assertArrayNotHasKey('client_secret', $capturedBody);
     }
 
