@@ -52,6 +52,26 @@ class OIDC_User_Handler {
 	 * @return WP_User|WP_Error WordPress user object or error.
 	 */
 	public function get_or_create_user( array $id_token_claims, array $userinfo = array() ): WP_User|WP_Error {
+		// SECURITY: Validate sub claim consistency per OIDC Core spec §5.3.4.
+		// The ID token's sub was cryptographically verified via JWT signature, but the
+		// UserInfo response is only authenticated by the bearer access token. If the
+		// UserInfo endpoint returns a different sub, reject authentication to prevent
+		// identity spoofing or account takeover.
+		if ( isset( $userinfo['sub'] ) && isset( $id_token_claims['sub'] )
+			&& $userinfo['sub'] !== $id_token_claims['sub'] ) {
+			$log_msg = sprintf(
+				'Sub claim mismatch between ID token and UserInfo (id_token sub: %s, userinfo sub: %s)',
+				$id_token_claims['sub'],
+				$userinfo['sub']
+			);
+			error_log( '[Secure OIDC Login] ' . $log_msg );
+
+			return new WP_Error(
+				'oidc_sub_mismatch',
+				__( 'Authentication failed: subject identifier mismatch between ID token and UserInfo.', 'secure-oidc-login' )
+			);
+		}
+
 		// Combine claims from both sources (userinfo takes precedence for overlapping keys)
 		// This allows userinfo endpoint to provide more detailed/updated information
 		$claims = array_merge( $id_token_claims, $userinfo );
