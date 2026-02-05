@@ -1806,4 +1806,136 @@ class OIDCClientTest extends OIDCTestCase
             $this->assertStringNotContainsString('Unsupported JWT signing algorithm', $result->get_error_message(), "Algorithm $allowed_alg should not be rejected by allowlist");
         }
     }
+
+    /**
+     * Test decode_and_verify_jwt rejects algorithm not in IdP's discovered supported list.
+     *
+     * When the IdP declares id_token_signing_alg_values_supported during discovery,
+     * JWTs using algorithms outside that list should be rejected even if they are
+     * in the hardcoded safe asymmetric allowlist.
+     */
+    public function testDecodeAndVerifyJwtRejectsAlgorithmNotInIdpSupportedList(): void
+    {
+        // Configure client with IdP that only supports RS256
+        Functions\when('get_option')->justReturn([
+            'client_id' => 'test-client-id',
+            'jwks_uri' => 'https://idp.example.com/.well-known/jwks.json',
+            'issuer' => 'https://idp.example.com',
+            'id_token_signing_alg_values_supported' => ['RS256'],
+        ]);
+
+        $client = new OIDC_Client();
+
+        $jwks = ['keys' => [
+            ['kty' => 'RSA', 'kid' => 'test-key', 'n' => 'modulus', 'e' => 'AQAB'],
+        ]];
+
+        Functions\when('get_transient')->justReturn(false);
+        Functions\when('wp_safe_remote_get')->justReturn([
+            'body' => json_encode($jwks),
+            'response' => ['code' => 200],
+        ]);
+        Functions\when('set_transient')->justReturn(true);
+        Functions\when('wp_json_encode')->alias(fn($data) => json_encode($data));
+
+        $reflection = new \ReflectionMethod(OIDC_Client::class, 'decode_and_verify_jwt');
+        $reflection->setAccessible(true);
+
+        // ES256 is in the hardcoded safe list but NOT in this IdP's supported list
+        $header = rtrim(strtr(base64_encode(json_encode(['alg' => 'ES256', 'typ' => 'JWT'])), '+/', '-_'), '=');
+        $payload = rtrim(strtr(base64_encode('{"sub":"test"}'), '+/', '-_'), '=');
+        $signature = rtrim(strtr(base64_encode('fake-sig'), '+/', '-_'), '=');
+
+        $result = $reflection->invoke($client, "$header.$payload.$signature");
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertStringContainsString('not supported by the identity provider', $result->get_error_message());
+    }
+
+    /**
+     * Test decode_and_verify_jwt accepts algorithm in IdP's discovered supported list.
+     */
+    public function testDecodeAndVerifyJwtAcceptsAlgorithmInIdpSupportedList(): void
+    {
+        // Configure client with IdP that supports RS256 and ES256
+        Functions\when('get_option')->justReturn([
+            'client_id' => 'test-client-id',
+            'jwks_uri' => 'https://idp.example.com/.well-known/jwks.json',
+            'issuer' => 'https://idp.example.com',
+            'id_token_signing_alg_values_supported' => ['RS256', 'ES256'],
+        ]);
+
+        $client = new OIDC_Client();
+
+        $jwks = ['keys' => [
+            ['kty' => 'RSA', 'kid' => 'test-key', 'n' => 'modulus', 'e' => 'AQAB'],
+        ]];
+
+        Functions\when('get_transient')->justReturn(false);
+        Functions\when('wp_safe_remote_get')->justReturn([
+            'body' => json_encode($jwks),
+            'response' => ['code' => 200],
+        ]);
+        Functions\when('set_transient')->justReturn(true);
+        Functions\when('wp_json_encode')->alias(fn($data) => json_encode($data));
+
+        $reflection = new \ReflectionMethod(OIDC_Client::class, 'decode_and_verify_jwt');
+        $reflection->setAccessible(true);
+
+        // RS256 is both in the hardcoded list and IdP's supported list
+        $header = rtrim(strtr(base64_encode(json_encode(['alg' => 'RS256', 'typ' => 'JWT'])), '+/', '-_'), '=');
+        $payload = rtrim(strtr(base64_encode('{"sub":"test"}'), '+/', '-_'), '=');
+        $signature = rtrim(strtr(base64_encode('fake-sig'), '+/', '-_'), '=');
+
+        $result = $reflection->invoke($client, "$header.$payload.$signature");
+
+        // Should proceed past algorithm checks (fail on signature, not algorithm)
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertStringNotContainsString('algorithm', strtolower($result->get_error_message()));
+    }
+
+    /**
+     * Test decode_and_verify_jwt uses only hardcoded list when no IdP algorithms stored.
+     *
+     * When id_token_signing_alg_values_supported is empty (no discovery performed),
+     * the hardcoded safe asymmetric algorithm list should be the sole gatekeeper.
+     */
+    public function testDecodeAndVerifyJwtFallsBackToHardcodedListWhenNoIdpAlgorithms(): void
+    {
+        // Configure client without id_token_signing_alg_values_supported
+        Functions\when('get_option')->justReturn([
+            'client_id' => 'test-client-id',
+            'jwks_uri' => 'https://idp.example.com/.well-known/jwks.json',
+            'issuer' => 'https://idp.example.com',
+            // No id_token_signing_alg_values_supported - empty/not set
+        ]);
+
+        $client = new OIDC_Client();
+
+        $jwks = ['keys' => [
+            ['kty' => 'RSA', 'kid' => 'test-key', 'n' => 'modulus', 'e' => 'AQAB'],
+        ]];
+
+        Functions\when('get_transient')->justReturn(false);
+        Functions\when('wp_safe_remote_get')->justReturn([
+            'body' => json_encode($jwks),
+            'response' => ['code' => 200],
+        ]);
+        Functions\when('set_transient')->justReturn(true);
+        Functions\when('wp_json_encode')->alias(fn($data) => json_encode($data));
+
+        $reflection = new \ReflectionMethod(OIDC_Client::class, 'decode_and_verify_jwt');
+        $reflection->setAccessible(true);
+
+        // ES256 is in the hardcoded safe list and should pass with no IdP restriction
+        $header = rtrim(strtr(base64_encode(json_encode(['alg' => 'ES256', 'typ' => 'JWT'])), '+/', '-_'), '=');
+        $payload = rtrim(strtr(base64_encode('{"sub":"test"}'), '+/', '-_'), '=');
+        $signature = rtrim(strtr(base64_encode('fake-sig'), '+/', '-_'), '=');
+
+        $result = $reflection->invoke($client, "$header.$payload.$signature");
+
+        // Should proceed past algorithm checks (fail on signature/key, not algorithm)
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertStringNotContainsString('algorithm', strtolower($result->get_error_message()));
+    }
 }

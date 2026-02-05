@@ -1212,6 +1212,96 @@ class OIDCAdminTest extends OIDCTestCase
     }
 
     /**
+     * Test sanitize_settings parses and stores valid signing algorithms from discovery.
+     */
+    public function testSanitizeSettingsStoresDiscoveredSigningAlgorithms(): void
+    {
+        Functions\when('get_option')->justReturn([]);
+        Functions\when('current_user_can')->justReturn(true);
+        Functions\when('wp_verify_nonce')->justReturn(true);
+
+        $_POST['_wpnonce'] = 'valid-nonce';
+
+        $input = [
+            'id_token_signing_alg_values_supported' => json_encode(['RS256', 'ES256']),
+        ];
+
+        $result = $this->admin->sanitize_settings($input);
+
+        $this->assertSame(['RS256', 'ES256'], $result['id_token_signing_alg_values_supported']);
+    }
+
+    /**
+     * Test sanitize_settings filters out unsafe algorithms from discovery.
+     *
+     * If an IdP's discovery document includes symmetric algorithms, they should
+     * be filtered out by the intersection with OIDC_Client::ALLOWED_JWT_ALGORITHMS.
+     */
+    public function testSanitizeSettingsFiltersUnsafeAlgorithmsFromDiscovery(): void
+    {
+        Functions\when('get_option')->justReturn([]);
+        Functions\when('current_user_can')->justReturn(true);
+        Functions\when('wp_verify_nonce')->justReturn(true);
+
+        $_POST['_wpnonce'] = 'valid-nonce';
+
+        // Simulate an IdP that claims to support HS256 and RS256
+        $input = [
+            'id_token_signing_alg_values_supported' => json_encode(['RS256', 'HS256', 'none']),
+        ];
+
+        $result = $this->admin->sanitize_settings($input);
+
+        // Only RS256 should survive the intersection with ALLOWED_JWT_ALGORITHMS
+        $this->assertSame(['RS256'], $result['id_token_signing_alg_values_supported']);
+    }
+
+    /**
+     * Test sanitize_settings preserves existing algorithms when input is empty.
+     */
+    public function testSanitizeSettingsPreservesExistingAlgorithmsWhenInputEmpty(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'id_token_signing_alg_values_supported' => ['RS256', 'ES256'],
+        ]);
+        Functions\when('current_user_can')->justReturn(true);
+        Functions\when('wp_verify_nonce')->justReturn(true);
+
+        $_POST['_wpnonce'] = 'valid-nonce';
+
+        // No algorithm field in input (form submitted without discovery)
+        $input = [];
+
+        $result = $this->admin->sanitize_settings($input);
+
+        $this->assertSame(['RS256', 'ES256'], $result['id_token_signing_alg_values_supported']);
+    }
+
+    /**
+     * Test sanitize_settings handles invalid JSON in algorithm field.
+     */
+    public function testSanitizeSettingsHandlesInvalidJsonInAlgorithmField(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'id_token_signing_alg_values_supported' => ['RS256'],
+        ]);
+        Functions\when('current_user_can')->justReturn(true);
+        Functions\when('wp_verify_nonce')->justReturn(true);
+
+        $_POST['_wpnonce'] = 'valid-nonce';
+
+        // Invalid JSON in the field
+        $input = [
+            'id_token_signing_alg_values_supported' => 'not-valid-json',
+        ];
+
+        $result = $this->admin->sanitize_settings($input);
+
+        // Should preserve existing value
+        $this->assertSame(['RS256'], $result['id_token_signing_alg_values_supported']);
+    }
+
+    /**
      * Test admin_notices shows domain filtering notice when domains configured.
      */
     public function testAdminNoticesShowsDomainFilteringNotice(): void

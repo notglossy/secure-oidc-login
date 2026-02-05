@@ -355,8 +355,21 @@ class OIDC_Client {
 
 		// SECURITY: Validate algorithm against allowlist to prevent algorithm confusion attacks.
 		// This blocks symmetric algorithms (HS256/384/512), 'none', and any other unexpected values.
+		// First check: must be in the hardcoded safe asymmetric algorithm list.
 		if ( ! in_array( $alg, self::ALLOWED_JWT_ALGORITHMS, true ) ) {
 			return new WP_Error( 'oidc_error', __( 'Unsupported JWT signing algorithm.', 'secure-oidc-login' ) );
+		}
+
+		// Second check: if the IdP declared id_token_signing_alg_values_supported during
+		// discovery, the JWT algorithm must also be in that list. This narrows the allowlist
+		// to only the algorithms the specific IdP actually uses (OIDC Discovery 1.0 Section 3).
+		$idp_algorithms = isset( $this->options['id_token_signing_alg_values_supported'] )
+			&& is_array( $this->options['id_token_signing_alg_values_supported'] )
+			? $this->options['id_token_signing_alg_values_supported']
+			: array();
+
+		if ( ! empty( $idp_algorithms ) && ! in_array( $alg, $idp_algorithms, true ) ) {
+			return new WP_Error( 'oidc_error', __( 'JWT algorithm not supported by the identity provider.', 'secure-oidc-login' ) );
 		}
 
 		// IdP compatibility: Some identity providers omit the "alg" field in their JWKS keys.
