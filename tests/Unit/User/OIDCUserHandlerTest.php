@@ -536,6 +536,96 @@ class OIDCUserHandlerTest extends OIDCTestCase
     }
 
     /**
+     * Test get_or_create_user rejects authentication when sub claim differs between ID token and UserInfo.
+     *
+     * Per OIDC Core spec §5.3.4, the sub in UserInfo MUST match the sub in the ID token.
+     */
+    public function testGetOrCreateUserRejectsSubClaimMismatch(): void
+    {
+        $idTokenClaims = [
+            'sub' => 'legitimate-user-123',
+            'email' => 'user@example.com',
+            'email_verified' => true,
+        ];
+
+        $userinfo = [
+            'sub' => 'attacker-user-456',
+            'email' => 'user@example.com',
+        ];
+
+        $result = $this->handler->get_or_create_user($idTokenClaims, $userinfo);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('oidc_sub_mismatch', $result->get_error_code());
+        $this->assertStringContainsString('mismatch', $result->get_error_message());
+    }
+
+    /**
+     * Test get_or_create_user succeeds when sub claim matches between ID token and UserInfo.
+     */
+    public function testGetOrCreateUserAllowsMatchingSubInUserinfo(): void
+    {
+        $idTokenClaims = [
+            'sub' => 'user-123-abc',
+            'email' => 'old@example.com',
+            'email_verified' => true,
+        ];
+
+        $userinfo = [
+            'sub' => 'user-123-abc',
+            'email' => 'new@example.com',
+            'name' => 'Updated Name',
+        ];
+
+        Functions\when('get_users')->justReturn([]);
+        Functions\when('get_user_by')->alias(function($field, $value) {
+            if ($field === 'ID' && $value === 1) {
+                return new WP_User(1, 'matchingsubuser', 'new@example.com');
+            }
+            return false;
+        });
+        Functions\when('is_email')->justReturn(true);
+        Functions\when('sanitize_user')->alias(fn($username) => $username);
+
+        $result = $this->handler->get_or_create_user($idTokenClaims, $userinfo);
+
+        $this->assertIsObject($result);
+        $this->assertNotInstanceOf(WP_Error::class, $result);
+    }
+
+    /**
+     * Test get_or_create_user succeeds when UserInfo does not contain a sub claim.
+     */
+    public function testGetOrCreateUserAllowsUserinfoWithoutSub(): void
+    {
+        $idTokenClaims = [
+            'sub' => 'user-123-abc',
+            'email' => 'user@example.com',
+            'email_verified' => true,
+        ];
+
+        $userinfo = [
+            'email' => 'updated@example.com',
+            'name' => 'John Doe',
+        ];
+
+        Functions\when('get_users')->justReturn([]);
+        Functions\when('get_user_by')->alias(function($field, $value) {
+            if ($field === 'ID' && $value === 1) {
+                return new WP_User(1, 'nosubuser', 'updated@example.com');
+            }
+            return false;
+        });
+        Functions\when('is_email')->justReturn(true);
+        Functions\when('sanitize_user')->alias(fn($username) => $username);
+
+        $result = $this->handler->get_or_create_user($idTokenClaims, $userinfo);
+
+        $this->assertIsObject($result);
+        $this->assertNotInstanceOf(WP_Error::class, $result);
+    }
+
+    /**
      * Test create_user returns error when email is missing.
      */
     public function testCreateUserReturnsErrorWhenEmailMissing(): void
