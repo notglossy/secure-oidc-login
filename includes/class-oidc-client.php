@@ -47,6 +47,37 @@ class OIDC_Client {
 	const JWKS_CACHE_DURATION = 900;
 
 	/**
+	 * Allowed JWT signing algorithms (asymmetric only).
+	 *
+	 * SECURITY: Only asymmetric algorithms are permitted for OIDC ID token verification.
+	 * Symmetric algorithms (HS256, HS384, HS512) are excluded to prevent algorithm
+	 * confusion attacks where an attacker sets alg=HS256 and uses the public key as
+	 * the HMAC secret. The 'none' algorithm is also excluded.
+	 *
+	 * @var array<int, string>
+	 */
+	const ALLOWED_JWT_ALGORITHMS = array(
+		'RS256', 'RS384', 'RS512',
+		'ES256', 'ES384', 'ES512',
+		'PS256', 'PS384', 'PS512',
+		'EdDSA',
+	);
+
+	/**
+	 * Mapping from JWK key type (kty) to default signing algorithm.
+	 *
+	 * Used to infer a safe algorithm for JWKS keys that lack an 'alg' field,
+	 * rather than trusting the attacker-controlled JWT header.
+	 *
+	 * @var array<string, string>
+	 */
+	const KTY_DEFAULT_ALGORITHM = array(
+		'RSA' => 'RS256',
+		'EC'  => 'ES256',
+		'OKP' => 'EdDSA',
+	);
+
+	/**
 	 * Initialize the client with plugin settings.
 	 */
 	public function __construct() {
@@ -322,12 +353,21 @@ class OIDC_Client {
 		// Default to RS256 (asymmetric) if algorithm not specified - most common for OIDC
 		$alg = isset( $header['alg'] ) ? $header['alg'] : 'RS256';
 
-		// IdP compatibility: Some identity providers omit the "alg" field in their JWKS keys
-		// The Firebase JWT library requires it, so we add it based on the JWT header if missing
+		// SECURITY: Validate algorithm against allowlist to prevent algorithm confusion attacks.
+		// This blocks symmetric algorithms (HS256/384/512), 'none', and any other unexpected values.
+		if ( ! in_array( $alg, self::ALLOWED_JWT_ALGORITHMS, true ) ) {
+			return new WP_Error( 'oidc_error', __( 'Unsupported JWT signing algorithm.', 'secure-oidc-login' ) );
+		}
+
+		// IdP compatibility: Some identity providers omit the "alg" field in their JWKS keys.
+		// The Firebase JWT library requires it, so we infer from the key type (kty) when missing.
+		// SECURITY: We derive the algorithm from the trusted JWKS key type rather than copying
+		// the attacker-controlled JWT header value, preventing algorithm confusion attacks.
 		if ( isset( $jwks['keys'] ) && is_array( $jwks['keys'] ) ) {
 			foreach ( $jwks['keys'] as &$key ) {
 				if ( ! isset( $key['alg'] ) ) {
-					$key['alg'] = $alg;
+					$kty         = isset( $key['kty'] ) ? $key['kty'] : '';
+					$key['alg']  = isset( self::KTY_DEFAULT_ALGORITHM[ $kty ] ) ? self::KTY_DEFAULT_ALGORITHM[ $kty ] : $alg;
 				}
 			}
 			unset( $key ); // Break reference to avoid unexpected behavior
