@@ -57,9 +57,15 @@ class OIDC_Client {
 	 * @var array<int, string>
 	 */
 	const ALLOWED_JWT_ALGORITHMS = array(
-		'RS256', 'RS384', 'RS512',
-		'ES256', 'ES384', 'ES512',
-		'PS256', 'PS384', 'PS512',
+		'RS256',
+		'RS384',
+		'RS512',
+		'ES256',
+		'ES384',
+		'ES512',
+		'PS256',
+		'PS384',
+		'PS512',
 		'EdDSA',
 	);
 
@@ -379,8 +385,8 @@ class OIDC_Client {
 		if ( isset( $jwks['keys'] ) && is_array( $jwks['keys'] ) ) {
 			foreach ( $jwks['keys'] as &$key ) {
 				if ( ! isset( $key['alg'] ) ) {
-					$kty         = isset( $key['kty'] ) ? $key['kty'] : '';
-					$key['alg']  = isset( self::KTY_DEFAULT_ALGORITHM[ $kty ] ) ? self::KTY_DEFAULT_ALGORITHM[ $kty ] : $alg;
+					$kty        = isset( $key['kty'] ) ? $key['kty'] : '';
+					$key['alg'] = isset( self::KTY_DEFAULT_ALGORITHM[ $kty ] ) ? self::KTY_DEFAULT_ALGORITHM[ $kty ] : $alg;
 				}
 			}
 			unset( $key ); // Break reference to avoid unexpected behavior
