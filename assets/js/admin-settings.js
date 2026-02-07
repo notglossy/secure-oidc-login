@@ -60,6 +60,13 @@
 						$('input[name="secure_oidc_login_settings[issuer]"]').val(config.issuer);
 					}
 
+					// Store IdP's supported signing algorithms for JWT validation
+					// Per OIDC Discovery spec, defaults to ["RS256"] if absent
+					var algValues = config.id_token_signing_alg_values_supported || ['RS256'];
+					$('input[name="secure_oidc_login_settings[id_token_signing_alg_values_supported]"]').val(
+						JSON.stringify(algValues)
+					);
+
 					alert(oidcAdminSettings.i18n.discoverySuccess);
 				},
 				error: function(xhr) {

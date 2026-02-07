@@ -218,6 +218,15 @@ class OIDC_Admin {
 			'oidc_provider_section'
 		);
 
+		// Hidden field for storing IdP's supported signing algorithms (populated by discovery)
+		add_settings_field(
+			'id_token_signing_alg_values_supported',
+			'',
+			array( $this, 'render_signing_alg_hidden_field' ),
+			'secure-oidc-login',
+			'oidc_provider_section'
+		);
+
 		add_settings_field(
 			'client_id',
 			__( 'Client ID', 'secure-oidc-login' ),
@@ -753,6 +762,27 @@ class OIDC_Admin {
 			}
 		}
 
+		// Sanitize id_token_signing_alg_values_supported (JSON-encoded array from discovery)
+		// SECURITY: Each algorithm is validated against OIDC_Client::ALLOWED_JWT_ALGORITHMS
+		// to ensure only safe asymmetric algorithms are stored.
+		$alg_input = $input['id_token_signing_alg_values_supported'] ?? '';
+		if ( is_string( $alg_input ) && '' !== $alg_input ) {
+			$alg_decoded = json_decode( $alg_input, true );
+			if ( is_array( $alg_decoded ) ) {
+				$sanitized['id_token_signing_alg_values_supported'] = array_values(
+					array_intersect(
+						array_map( 'sanitize_text_field', $alg_decoded ),
+						OIDC_Client::ALLOWED_JWT_ALGORITHMS
+					)
+				);
+			} else {
+				$sanitized['id_token_signing_alg_values_supported'] = $existing_settings['id_token_signing_alg_values_supported'] ?? array();
+			}
+		} else {
+			// Preserve existing value if input is empty (form submitted without discovery)
+			$sanitized['id_token_signing_alg_values_supported'] = $existing_settings['id_token_signing_alg_values_supported'] ?? array();
+		}
+
 		return $sanitized;
 	}
 
@@ -888,6 +918,24 @@ class OIDC_Admin {
 		<?php else : ?>
 			<p class="description"><?php esc_html_e( 'Enter your identity provider\'s discovery URL to auto-populate endpoints.', 'secure-oidc-login' ); ?></p>
 		<?php endif; ?>
+		<?php
+	}
+
+	/**
+	 * Render a hidden field for storing IdP's supported signing algorithms.
+	 *
+	 * This field is auto-populated during OIDC discovery and stores the
+	 * id_token_signing_alg_values_supported value from the discovery document
+	 * as a JSON-encoded array.
+	 */
+	public function render_signing_alg_hidden_field(): void {
+		$options = get_option( 'secure_oidc_login_settings', array() );
+		$value   = '';
+		if ( isset( $options['id_token_signing_alg_values_supported'] ) && is_array( $options['id_token_signing_alg_values_supported'] ) ) {
+			$value = wp_json_encode( $options['id_token_signing_alg_values_supported'] );
+		}
+		?>
+		<input type="hidden" name="secure_oidc_login_settings[id_token_signing_alg_values_supported]" value="<?php echo esc_attr( $value ); ?>">
 		<?php
 	}
 

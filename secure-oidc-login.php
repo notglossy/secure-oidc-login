@@ -10,8 +10,8 @@ declare(strict_types=1);
  * Requires PHP: 8.1
  * Author: Not Glossy
  * Author URI: https://github.com/notglossy
- * License: GPL v3
- * License URI: https://www.gnu.org/licenses/gpl-3.0.en.html
+ * License: GPL v2 or later
+ * License URI: https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
  * Text Domain: secure-oidc-login
  * Domain Path: /languages
  *
@@ -863,31 +863,32 @@ class Secure_OIDC_Login {
 	 */
 	public function activate(): void {
 		$default_options = array(
-			'client_id'                      => '',
-			'client_secret'                  => '',
-			'authorization_endpoint'         => '',
-			'token_endpoint'                 => '',
-			'userinfo_endpoint'              => '',
-			'end_session_endpoint'           => '',
-			'jwks_uri'                       => '',
-			'issuer'                         => '',
-			'scope'                          => 'openid email profile',
-			'acr_values'                     => '',
-			'enforce_acr'                    => false,
-			'login_button_text'              => 'Login with SSO',
-			'enable_single_logout'           => false,
-			'disable_native_login'           => false,
-			'enable_auto_token_refresh'      => false,
-			'token_refresh_buffer'           => 300,
-			'enforce_refresh_token_rotation' => false,
-			'create_users'                   => true,
-			'require_verified_email'         => true,
-			'default_role'                   => 'subscriber',
-			'username_claim'                 => 'preferred_username',
-			'email_claim'                    => 'email',
-			'first_name_claim'               => 'given_name',
-			'last_name_claim'                => 'family_name',
-			'allowed_email_domains'          => '',
+			'client_id'                             => '',
+			'client_secret'                         => '',
+			'authorization_endpoint'                => '',
+			'token_endpoint'                        => '',
+			'userinfo_endpoint'                     => '',
+			'end_session_endpoint'                  => '',
+			'jwks_uri'                              => '',
+			'issuer'                                => '',
+			'scope'                                 => 'openid email profile',
+			'acr_values'                            => '',
+			'enforce_acr'                           => false,
+			'login_button_text'                     => 'Login with SSO',
+			'enable_single_logout'                  => false,
+			'disable_native_login'                  => false,
+			'enable_auto_token_refresh'             => false,
+			'token_refresh_buffer'                  => 300,
+			'enforce_refresh_token_rotation'        => false,
+			'create_users'                          => true,
+			'require_verified_email'                => true,
+			'default_role'                          => 'subscriber',
+			'username_claim'                        => 'preferred_username',
+			'email_claim'                           => 'email',
+			'first_name_claim'                      => 'given_name',
+			'last_name_claim'                       => 'family_name',
+			'allowed_email_domains'                 => '',
+			'id_token_signing_alg_values_supported' => array(),
 		);
 
 		if ( ! get_option( 'secure_oidc_login_settings' ) ) {

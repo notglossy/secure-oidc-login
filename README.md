@@ -3,7 +3,7 @@
 [![CI](https://github.com/notglossy/secure-oidc-login/actions/workflows/php-quality.yml/badge.svg)](https://github.com/notglossy/secure-oidc-login/actions/workflows/php-quality.yml)
 [![codecov](https://codecov.io/gh/notglossy/secure-oidc-login/branch/main/graph/badge.svg)](https://codecov.io/gh/notglossy/secure-oidc-login)
 [![PHP 8.1+](https://img.shields.io/badge/PHP-8.1%2B-777BB4.svg)](https://php.net/)
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![License: GPL v2+](https://img.shields.io/badge/License-GPL%20v2%2B-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/notglossy/secure-oidc-login)
 
 A secure OpenID Connect (OIDC) authentication plugin for WordPress that allows users to authenticate using any OIDC-compliant identity provider (IdP).
@@ -414,6 +414,7 @@ add_action('secure_oidc_login_user_created', function($user_id, $claims) {
         $user->set_role('administrator');
     }
 }, 10, 2);
+```
 
 ## Security Considerations
 
@@ -474,7 +475,7 @@ This plugin uses the following open-source libraries:
 
 ## License
 
-GPL v3
+GPL v2 or later
 
 ## Contributing
 
