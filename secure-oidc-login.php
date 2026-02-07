@@ -584,6 +584,9 @@ class Secure_OIDC_Login {
 		// Delete nonce to prevent replay attacks
 		delete_transient( 'oidc_nonce_' . $state );
 
+		// Get plugin options for ACR validation and token storage
+		$options = get_option( 'secure_oidc_login_settings' );
+
 		// Validate ACR claim if enforcement is enabled
 		$acr_result = $this->client->validate_acr_claim( $id_token_claims, $options );
 
@@ -613,7 +616,6 @@ class Secure_OIDC_Login {
 		// is leaked, unencrypted tokens could allow session hijacking or information disclosure.
 		// We use Sodium ChaCha20-Poly1305-IETF authenticated encryption for confidentiality and integrity.
 		// SECURITY: Authentication FAILS if encryption fails - we never store plaintext tokens.
-		$options = get_option( 'secure_oidc_login_settings' );
 
 		// Prepare tokens for storage - always include access_token and id_token
 		$tokens_to_store = array(
