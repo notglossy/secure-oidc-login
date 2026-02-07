@@ -10,8 +10,8 @@ declare(strict_types=1);
  * Requires PHP: 8.1
  * Author: Not Glossy
  * Author URI: https://github.com/notglossy
- * License: GPL v3
- * License URI: https://www.gnu.org/licenses/gpl-3.0.en.html
+ * License: GPL v2 or later
+ * License URI: https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
  * Text Domain: secure-oidc-login
  * Domain Path: /languages
  *
