@@ -1115,6 +1115,16 @@ class OIDC_Admin {
 		$field   = $args['field'];
 		$checked = isset( $options[ $field ] ) && $options[ $field ] ? 'checked' : '';
 
+		// Check if this setting is overridden by environment variable
+		$env_var           = 'SECURE_OIDC_' . strtoupper( $field );
+		$env_value         = getenv( $env_var );
+		$is_env_overridden = false !== $env_value && '' !== $env_value;
+
+		if ( $is_env_overridden ) {
+			// Use env var value instead of database value
+			$checked = 'true' === strtolower( (string) $env_value ) ? 'checked' : '';
+		}
+
 		// SECURITY WARNING: Show inline warning when email verification is disabled
 		if ( 'require_verified_email' === $field && ! $checked ) {
 			?>
@@ -1126,12 +1136,22 @@ class OIDC_Admin {
 		}
 
 		printf(
-			'<input type="checkbox" name="secure_oidc_login_settings[%s]" value="1" %s>',
+			'<input type="checkbox" name="secure_oidc_login_settings[%s]" value="1" %s%s>',
 			esc_attr( $field ),
-			$checked
+			$checked,
+			$is_env_overridden ? ' disabled' : ''
 		);
 
-		if ( isset( $args['description'] ) ) {
+		if ( $is_env_overridden ) {
+			printf(
+				'<p class="description" style="color: #2271b1;">%s</p>',
+				sprintf(
+					/* translators: %s: environment variable name */
+					esc_html__( 'This setting is overridden by the %s environment variable.', 'secure-oidc-login' ),
+					esc_html( $env_var )
+				)
+			);
+		} elseif ( isset( $args['description'] ) ) {
 			printf( '<span class="description">%s</span>', esc_html( $args['description'] ) );
 		}
 	}
