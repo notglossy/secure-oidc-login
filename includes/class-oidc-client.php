@@ -367,22 +367,6 @@ class OIDC_Client {
 
 		// Verify acr claim is present in ID token
 		if ( ! isset( $claims['acr'] ) || '' === $claims['acr'] ) {
-			// Log available claims for debugging (exclude sensitive values)
-			$claim_keys          = array_keys( $claims );
-			$auth_related_claims = array();
-			foreach ( array( 'acr', 'acrs', 'amr', 'auth_time', 'azp' ) as $key ) {
-				if ( isset( $claims[ $key ] ) ) {
-					$auth_related_claims[ $key ] = $claims[ $key ];
-				}
-			}
-			error_log(
-				sprintf(
-					'[Secure OIDC Login] ACR claim missing from ID token. Available claims: %s. Auth-related claims present: %s',
-					implode( ', ', $claim_keys ),
-					wp_json_encode( $auth_related_claims )
-				)
-			);
-
 			return new WP_Error(
 				'oidc_acr_missing',
 				__( 'ID token is missing the required acr claim.', 'secure-oidc-login' )
