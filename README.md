@@ -414,6 +414,7 @@ add_action('secure_oidc_login_user_created', function($user_id, $claims) {
         $user->set_role('administrator');
     }
 }, 10, 2);
+```
 
 ## Security Considerations
 
