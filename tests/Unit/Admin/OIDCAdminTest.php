@@ -1211,6 +1211,99 @@ class OIDCAdminTest extends OIDCTestCase
         $this->assertSame('client_secret_basic', $result['token_endpoint_auth_method']);
     }
 
+    // =========================================================================
+    // ACR Values Settings Tests
+    // =========================================================================
+
+    /**
+     * Test sanitize_settings handles acr_values as text field.
+     */
+    public function testSanitizeSettingsHandlesAcrValuesAsTextField(): void
+    {
+        Functions\when('get_option')->justReturn([]);
+        Functions\when('current_user_can')->justReturn(true);
+        Functions\when('wp_verify_nonce')->justReturn(true);
+
+        putenv('SECURE_OIDC_ACR_VALUES');
+
+        $_POST['_wpnonce'] = 'valid-nonce';
+
+        $input = [
+            'acr_values' => 'urn:mace:incommon:iap:silver urn:mace:incommon:iap:bronze',
+        ];
+
+        $result = $this->admin->sanitize_settings($input);
+
+        $this->assertSame('urn:mace:incommon:iap:silver urn:mace:incommon:iap:bronze', $result['acr_values']);
+    }
+
+    /**
+     * Test sanitize_settings handles enforce_acr as boolean checkbox.
+     */
+    public function testSanitizeSettingsHandlesEnforceAcrAsBoolean(): void
+    {
+        Functions\when('get_option')->justReturn([]);
+        Functions\when('current_user_can')->justReturn(true);
+        Functions\when('wp_verify_nonce')->justReturn(true);
+
+        $_POST['_wpnonce'] = 'valid-nonce';
+
+        // Checked
+        $input = ['enforce_acr' => '1'];
+        $result = $this->admin->sanitize_settings($input);
+        $this->assertTrue($result['enforce_acr']);
+
+        // Unchecked (missing from input)
+        $input = [];
+        $result = $this->admin->sanitize_settings($input);
+        $this->assertFalse($result['enforce_acr']);
+    }
+
+    /**
+     * Test sanitize_settings triggers error for acr_values exceeding max length.
+     */
+    public function testSanitizeSettingsTriggersErrorForLongAcrValues(): void
+    {
+        Functions\when('get_option')->justReturn([]);
+        Functions\when('current_user_can')->justReturn(true);
+        Functions\when('wp_verify_nonce')->justReturn(true);
+
+        $settingsErrorAdded = false;
+        Functions\when('add_settings_error')->alias(function ($setting, $code, $message) use (&$settingsErrorAdded) {
+            if ($code === 'acr_values_too_long') {
+                $settingsErrorAdded = true;
+            }
+        });
+
+        putenv('SECURE_OIDC_ACR_VALUES');
+
+        $_POST['_wpnonce'] = 'valid-nonce';
+
+        $input = [
+            'acr_values' => str_repeat('a', 1025),
+        ];
+
+        $result = $this->admin->sanitize_settings($input);
+
+        $this->assertTrue($settingsErrorAdded, 'Settings error should be triggered for long acr_values');
+        // Value should be preserved from existing settings (empty in this case)
+        $this->assertSame('', $result['acr_values']);
+    }
+
+    /**
+     * Test get_max_lengths includes acr_values with value 1024.
+     */
+    public function testGetMaxLengthsIncludesAcrValues(): void
+    {
+        $reflection = new \ReflectionMethod(OIDC_Admin::class, 'get_max_lengths');
+        $reflection->setAccessible(true);
+
+        $maxLengths = $reflection->invoke($this->admin);
+
+        $this->assertArrayHasKey('acr_values', $maxLengths);
+        $this->assertSame(1024, $maxLengths['acr_values']);
+    }
+
     /**
      * Test sanitize_settings parses and stores valid signing algorithms from discovery.
      */

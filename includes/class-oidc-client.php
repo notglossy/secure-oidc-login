@@ -332,6 +332,59 @@ class OIDC_Client {
 	}
 
 	/**
+	 * Validate the acr claim in the ID token against requested ACR values.
+	 *
+	 * When enforce_acr is enabled and acr_values are configured, this method
+	 * verifies that the ID token contains an acr claim matching one of the
+	 * requested values. This ensures the identity provider performed the
+	 * requested level of authentication.
+	 *
+	 * @param array<string, mixed> $claims  The decoded ID token claims.
+	 * @param array<string, mixed> $options Plugin settings from WordPress options.
+	 * @return true|WP_Error True if validation passes, WP_Error on failure.
+	 */
+	public function validate_acr_claim( array $claims, array $options ): bool|WP_Error {
+		$acr_values = Secure_OIDC_Login::get_setting( 'acr_values', $options );
+
+		// Check enforce_acr with explicit env var handling for boolean
+		$enforce_acr = ! empty( $options['enforce_acr'] );
+		$env_enforce = getenv( 'SECURE_OIDC_ENFORCE_ACR' );
+		if ( false !== $env_enforce && '' !== $env_enforce ) {
+			$enforce_acr = 'true' === strtolower( (string) $env_enforce );
+		}
+
+		// If enforcement is off or no ACR values configured, skip validation
+		if ( ! $enforce_acr || empty( trim( $acr_values ) ) ) {
+			return true;
+		}
+
+		// Split on whitespace and filter empty entries
+		$requested_values = array_filter( array_map( 'trim', preg_split( '/\s+/', $acr_values ) ) );
+
+		if ( empty( $requested_values ) ) {
+			return true;
+		}
+
+		// Verify acr claim is present in ID token
+		if ( ! isset( $claims['acr'] ) || '' === $claims['acr'] ) {
+			return new WP_Error(
+				'oidc_acr_missing',
+				__( 'ID token is missing the required acr claim.', 'secure-oidc-login' )
+			);
+		}
+
+		// Verify acr claim matches one of the requested values (strict comparison)
+		if ( ! in_array( (string) $claims['acr'], $requested_values, true ) ) {
+			return new WP_Error(
+				'oidc_acr_mismatch',
+				__( 'ID token acr claim does not match any of the requested ACR values.', 'secure-oidc-login' )
+			);
+		}
+
+		return true;
+	}
+
+	/**
 	 * Decode and verify a JWT using Firebase JWT library.
 	 *
 	 * Performs signature verification, expiration validation, and decoding.

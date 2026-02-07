@@ -163,6 +163,7 @@ class OIDC_Admin {
 			'jwks_uri'               => 2048,
 			'issuer'                 => 512,
 			'scope'                  => 512,
+			'acr_values'             => 1024,
 			'login_button_text'      => 100,
 			'username_claim'         => 100,
 			'email_claim'            => 100,
@@ -348,6 +349,30 @@ class OIDC_Admin {
 			array(
 				'field'   => 'scope',
 				'default' => 'openid email profile',
+			)
+		);
+
+		add_settings_field(
+			'acr_values',
+			__( 'ACR Values', 'secure-oidc-login' ),
+			array( $this, 'render_text_field' ),
+			'secure-oidc-login',
+			'oidc_provider_section',
+			array(
+				'field'       => 'acr_values',
+				'description' => __( 'Space-separated Authentication Context Class Reference values to request from the IdP (e.g., urn:mace:incommon:iap:silver).', 'secure-oidc-login' ),
+			)
+		);
+
+		add_settings_field(
+			'enforce_acr',
+			__( 'Enforce ACR', 'secure-oidc-login' ),
+			array( $this, 'render_checkbox_field' ),
+			'secure-oidc-login',
+			'oidc_provider_section',
+			array(
+				'field'       => 'enforce_acr',
+				'description' => __( 'Require the ID token acr claim to match one of the requested ACR values. Authentication will fail if the claim is missing or does not match.', 'secure-oidc-login' ),
 			)
 		);
 
@@ -590,6 +615,7 @@ class OIDC_Admin {
 			'client_id',
 			'client_secret',
 			'scope',
+			'acr_values',
 			'login_button_text',
 			'username_claim',
 			'email_claim',
@@ -610,7 +636,7 @@ class OIDC_Admin {
 		);
 
 		// Boolean checkbox fields
-		$checkbox_fields = array( 'enable_single_logout', 'create_users', 'require_verified_email', 'disable_native_login', 'enable_auto_token_refresh', 'enforce_refresh_token_rotation' );
+		$checkbox_fields = array( 'enable_single_logout', 'create_users', 'require_verified_email', 'disable_native_login', 'enable_auto_token_refresh', 'enforce_refresh_token_rotation', 'enforce_acr' );
 
 		// Integer number fields with validation
 		$number_fields = array(
@@ -1089,6 +1115,16 @@ class OIDC_Admin {
 		$field   = $args['field'];
 		$checked = isset( $options[ $field ] ) && $options[ $field ] ? 'checked' : '';
 
+		// Check if this setting is overridden by environment variable
+		$env_var           = 'SECURE_OIDC_' . strtoupper( $field );
+		$env_value         = getenv( $env_var );
+		$is_env_overridden = false !== $env_value && '' !== $env_value;
+
+		if ( $is_env_overridden ) {
+			// Use env var value instead of database value
+			$checked = 'true' === strtolower( (string) $env_value ) ? 'checked' : '';
+		}
+
 		// SECURITY WARNING: Show inline warning when email verification is disabled
 		if ( 'require_verified_email' === $field && ! $checked ) {
 			?>
@@ -1100,12 +1136,22 @@ class OIDC_Admin {
 		}
 
 		printf(
-			'<input type="checkbox" name="secure_oidc_login_settings[%s]" value="1" %s>',
+			'<input type="checkbox" name="secure_oidc_login_settings[%s]" value="1" %s%s>',
 			esc_attr( $field ),
-			$checked
+			$checked,
+			$is_env_overridden ? ' disabled' : ''
 		);
 
-		if ( isset( $args['description'] ) ) {
+		if ( $is_env_overridden ) {
+			printf(
+				'<p class="description" style="color: #2271b1;">%s</p>',
+				sprintf(
+					/* translators: %s: environment variable name */
+					esc_html__( 'This setting is overridden by the %s environment variable.', 'secure-oidc-login' ),
+					esc_html( $env_var )
+				)
+			);
+		} elseif ( isset( $args['description'] ) ) {
 			printf( '<span class="description">%s</span>', esc_html( $args['description'] ) );
 		}
 	}
