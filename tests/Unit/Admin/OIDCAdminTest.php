@@ -1576,7 +1576,8 @@ class OIDCAdminTest extends OIDCTestCase
         Functions\when('maybe_serialize')->alias(fn($data) => serialize($data));
         Functions\when('set_transient')->justReturn(true);
         Functions\when('wp_safe_redirect')->alias(function () {
-            // Do nothing — prevent actual redirect
+            // Throw to prevent the subsequent exit() from terminating PHPUnit
+            throw new \RuntimeException('Redirect intercepted');
         });
         Functions\when('admin_url')->justReturn('https://example.com/wp-admin/options-general.php?page=secure-oidc-login');
         Functions\when('wp_cache_delete')->alias(function ($key, $group = '') use (&$deleted_cache_keys) {
@@ -1592,11 +1593,11 @@ class OIDCAdminTest extends OIDCTestCase
 
         $_POST['_wpnonce'] = 'valid-nonce';
 
-        // Prevent exit() from terminating the test
+        // wp_safe_redirect throws to prevent exit() from killing PHPUnit
         try {
             $this->admin->handle_credential_deletion();
-        } catch (\Throwable $e) {
-            // exit() may throw in some test environments
+        } catch (\RuntimeException $e) {
+            $this->assertSame('Redirect intercepted', $e->getMessage());
         }
 
         // Verify both cache keys were deleted
