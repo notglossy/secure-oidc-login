@@ -285,9 +285,16 @@ class OIDC_Client {
 			return new WP_Error( 'oidc_error', __( 'Missing required sub claim in ID token.', 'secure-oidc-login' ) );
 		}
 
-		// Verify the token was issued by the expected IdP
+		// Verify the token was issued by the expected IdP (OIDC Core spec 3.1.3.7)
 		$issuer = $this->get_setting( 'issuer' );
-		if ( ! empty( $issuer ) && $claims['iss'] !== $issuer ) {
+		if ( empty( $issuer ) ) {
+			return $this->handle_error(
+				'id_token_validation',
+				'Issuer setting is not configured. ID token issuer validation cannot be performed.',
+				__( 'Authentication configuration error. Please contact the site administrator.', 'secure-oidc-login' )
+			);
+		}
+		if ( ! isset( $claims['iss'] ) || $claims['iss'] !== $issuer ) {
 			return new WP_Error( 'oidc_error', __( 'Invalid token issuer.', 'secure-oidc-login' ) );
 		}
 
@@ -394,7 +401,7 @@ class OIDC_Client {
 	 * @param bool   $retry Internal flag to prevent infinite retry loop.
 	 * @return array<string, mixed>|WP_Error Decoded claims array or error.
 	 */
-	private function decode_and_verify_jwt( string $jwt, bool $retry = true ): array|WP_Error {
+	protected function decode_and_verify_jwt( string $jwt, bool $retry = true ): array|WP_Error {
 		// Get JWKS from IdP
 		$jwks = $this->get_jwks();
 		if ( is_wp_error( $jwks ) ) {

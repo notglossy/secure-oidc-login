@@ -335,8 +335,10 @@ class OIDC_Admin {
 			'secure-oidc-login',
 			'oidc_provider_section',
 			array(
-				'field' => 'issuer',
-				'type'  => 'url',
+				'field'       => 'issuer',
+				'required'    => true,
+				'type'        => 'url',
+				'description' => __( 'Issuer identifier used to validate ID token iss claims.', 'secure-oidc-login' ),
 			)
 		);
 
@@ -622,7 +624,6 @@ class OIDC_Admin {
 			'first_name_claim',
 			'last_name_claim',
 			'default_role',
-			'issuer',
 			'allowed_email_domains',
 		);
 
@@ -633,6 +634,7 @@ class OIDC_Admin {
 			'userinfo_endpoint',
 			'end_session_endpoint',
 			'jwks_uri',
+			'issuer',
 		);
 
 		// Boolean checkbox fields
