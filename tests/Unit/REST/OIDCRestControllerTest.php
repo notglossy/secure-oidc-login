@@ -107,6 +107,29 @@ class OIDCRestControllerTest extends OIDCTestCase
     }
 
     /**
+     * Test discover_permissions_check logs masked IP address, not raw IP.
+     */
+    public function testDiscoverPermissionsCheckLogsMaskedIp(): void
+    {
+        Functions\when('current_user_can')->justReturn(false);
+
+        $_SERVER['REMOTE_ADDR'] = '203.0.113.45';
+
+        $logFile     = tempnam(sys_get_temp_dir(), 'oidc_test_');
+        $previousLog = ini_set('error_log', $logFile);
+
+        $request = $this->createMock(WP_REST_Request::class);
+        $this->controller->discover_permissions_check($request);
+
+        ini_set('error_log', $previousLog);
+        $logged = file_get_contents($logFile);
+        unlink($logFile);
+
+        $this->assertStringContainsString('203.0.113.xxx', $logged);
+        $this->assertStringNotContainsString('203.0.113.45', $logged);
+    }
+
+    /**
      * Test validate_discovery_url_format accepts valid URLs.
      */
     public function testValidateDiscoveryUrlFormatAcceptsValidUrl(): void

@@ -79,11 +79,12 @@ class OIDC_REST_Controller extends WP_REST_Controller {
 		if ( ! current_user_can( 'manage_options' ) ) {
 			// SECURITY: Log unauthorized API access attempts for security auditing
 			$current_user = wp_get_current_user();
+			$raw_ip       = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
 			$log_msg      = sprintf(
 				'Unauthorized OIDC discovery API access attempt (user_id: %d, user_login: %s, ip: %s)',
 				$current_user->ID,
 				$current_user->user_login ? $current_user->user_login : 'anonymous',
-				$_SERVER['REMOTE_ADDR'] ?? 'unknown'
+				OIDC_Rate_Limiter::mask_ip( $raw_ip )
 			);
 			error_log( '[Secure OIDC Login] ' . $log_msg );
 

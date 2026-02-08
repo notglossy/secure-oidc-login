@@ -488,6 +488,38 @@ class OIDCRateLimiterTest extends OIDCTestCase
     }
 
     /**
+     * Test mask_ip masks IPv4 addresses by replacing the last octet.
+     */
+    public function testMaskIpMasksIpv4Address(): void
+    {
+        $this->assertSame('192.168.1.xxx', OIDC_Rate_Limiter::mask_ip('192.168.1.100'));
+        $this->assertSame('10.0.0.xxx', OIDC_Rate_Limiter::mask_ip('10.0.0.1'));
+        $this->assertSame('0.0.0.xxx', OIDC_Rate_Limiter::mask_ip('0.0.0.0'));
+    }
+
+    /**
+     * Test mask_ip masks IPv6 addresses by replacing the last group.
+     */
+    public function testMaskIpMasksIpv6Address(): void
+    {
+        $this->assertSame(
+            '2001:0db8:85a3::8a2e:0370:xxxx',
+            OIDC_Rate_Limiter::mask_ip('2001:0db8:85a3::8a2e:0370:7334')
+        );
+        $this->assertSame('::xxxx', OIDC_Rate_Limiter::mask_ip('::1'));
+    }
+
+    /**
+     * Test mask_ip returns unknown for invalid input.
+     */
+    public function testMaskIpReturnsUnknownForInvalidInput(): void
+    {
+        $this->assertSame('unknown', OIDC_Rate_Limiter::mask_ip(''));
+        $this->assertSame('unknown', OIDC_Rate_Limiter::mask_ip('not-an-ip'));
+        $this->assertSame('unknown', OIDC_Rate_Limiter::mask_ip('unknown'));
+    }
+
+    /**
      * Test fallback to 0.0.0.0 when no valid IP found.
      */
     public function testFallbackToDefaultIPWhenNoValidIP(): void
