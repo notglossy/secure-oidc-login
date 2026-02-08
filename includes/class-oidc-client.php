@@ -271,9 +271,10 @@ class OIDC_Client {
 	 * @param string $id_token The JWT ID token from the IdP.
 	 * @param string|null $expected_nonce Expected nonce value for validation.
 	 * @param string|null $auth_code Authorization code for c_hash validation.
+	 * @param string|null $access_token Access token for at_hash validation.
 	 * @return array<string, mixed>|WP_Error Decoded claims array or error.
 	 */
-	public function validate_id_token( string $id_token, ?string $expected_nonce = null, ?string $auth_code = null ): array|WP_Error {
+	public function validate_id_token( string $id_token, ?string $expected_nonce = null, ?string $auth_code = null, ?string $access_token = null ): array|WP_Error {
 		// Decode and verify JWT using Firebase JWT library
 		$claims = $this->decode_and_verify_jwt( $id_token );
 		if ( is_wp_error( $claims ) ) {
@@ -332,6 +333,17 @@ class OIDC_Client {
 			$computed_hash = rtrim( strtr( base64_encode( substr( hash( 'sha256', $auth_code, true ), 0, 16 ) ), '+/', '-_' ), '=' );
 			if ( $claims['c_hash'] !== $computed_hash ) {
 				return new WP_Error( 'invalid_c_hash', 'ID token c_hash does not match authorization code' );
+			}
+		}
+
+		// SECURITY: Validate at_hash (access token hash) per OIDC Core 3.1.3.3
+		// The at_hash claim cryptographically binds the access token to the ID token,
+		// preventing token substitution attacks where an attacker pairs a legitimate
+		// ID token with a different access token to get UserInfo for another user.
+		if ( null !== $access_token && isset( $claims['at_hash'] ) ) {
+			$computed_hash = rtrim( strtr( base64_encode( substr( hash( 'sha256', $access_token, true ), 0, 16 ) ), '+/', '-_' ), '=' );
+			if ( $claims['at_hash'] !== $computed_hash ) {
+				return new WP_Error( 'invalid_at_hash', 'ID token at_hash does not match access token' );
 			}
 		}
 

@@ -571,7 +571,7 @@ class Secure_OIDC_Login {
 		$nonce = get_transient( 'oidc_nonce_' . $state );
 
 		// Validate ID token claims (issuer, audience, expiration) and nonce
-		$id_token_claims = $this->client->validate_id_token( $tokens['id_token'], $nonce, $code );
+		$id_token_claims = $this->client->validate_id_token( $tokens['id_token'], $nonce, $code, $tokens['access_token'] );
 
 		if ( is_wp_error( $id_token_claims ) ) {
 			$this->handle_error( $id_token_claims->get_error_message() );
