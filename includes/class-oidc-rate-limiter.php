@@ -213,7 +213,10 @@ class OIDC_Rate_Limiter {
 
 		// Check for proxy headers (only if behind trusted proxy)
 		// WordPress VIP and other hosting providers set this
-		if ( defined( 'SECURE_OIDC_TRUST_PROXY_HEADERS' ) && SECURE_OIDC_TRUST_PROXY_HEADERS ) {
+		$trust_proxy = ( defined( 'SECURE_OIDC_TRUST_PROXY_HEADERS' ) && SECURE_OIDC_TRUST_PROXY_HEADERS )
+			|| filter_var( getenv( 'SECURE_OIDC_TRUST_PROXY_HEADERS' ), FILTER_VALIDATE_BOOLEAN );
+
+		if ( $trust_proxy ) {
 			// Check common proxy headers in order of preference
 			$proxy_headers = array(
 				'HTTP_X_REAL_IP',

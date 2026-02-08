@@ -343,6 +343,12 @@ If your WordPress site runs behind a reverse proxy (nginx, CloudFlare, AWS ALB, 
 define( 'SECURE_OIDC_TRUST_PROXY_HEADERS', true );
 ```
 
+Or via environment variable:
+
+```bash
+SECURE_OIDC_TRUST_PROXY_HEADERS=true
+```
+
 When enabled, the plugin checks these headers in order:
 1. `X-Real-IP`
 2. `X-Forwarded-For` (first IP in the list)

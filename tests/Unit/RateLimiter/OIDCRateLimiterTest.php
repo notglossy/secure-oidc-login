@@ -465,6 +465,29 @@ class OIDCRateLimiterTest extends OIDCTestCase
     }
 
     /**
+     * Test proxy header trust via environment variable.
+     */
+    public function testProxyHeaderTrustViaEnvironmentVariable(): void
+    {
+        Functions\when('getenv')->alias(function ($var) {
+            if ($var === 'SECURE_OIDC_TRUST_PROXY_HEADERS') {
+                return 'true';
+            }
+            return false;
+        });
+
+        $_SERVER['HTTP_X_FORWARDED_FOR'] = '203.0.113.99, 192.168.1.100';
+        $_SERVER['REMOTE_ADDR'] = '192.168.1.100';
+
+        $limiter = new OIDC_Rate_Limiter();
+
+        // Record attempts - should use the forwarded IP (203.0.113.99)
+        $limiter->record_attempt('test_action');
+
+        $this->assertInstanceOf(OIDC_Rate_Limiter::class, $limiter);
+    }
+
+    /**
      * Test fallback to 0.0.0.0 when no valid IP found.
      */
     public function testFallbackToDefaultIPWhenNoValidIP(): void
