@@ -1320,6 +1320,63 @@ class OIDCClientTest extends OIDCTestCase
     }
 
     /**
+     * Test validate_id_token accepts valid at_hash matching the access token.
+     */
+    public function testValidateIdTokenAcceptsValidAtHash(): void
+    {
+        $accessToken = 'test-access-token-value';
+        $atHash = rtrim(strtr(base64_encode(substr(hash('sha256', $accessToken, true), 0, 16)), '+/', '-_'), '=');
+
+        $client = $this->createClientWithStubbedJwt([
+            'sub' => 'user-123',
+            'iss' => 'https://idp.example.com',
+            'aud' => 'test-client-id',
+            'at_hash' => $atHash,
+        ]);
+
+        $result = $client->validate_id_token('fake.jwt.token', null, null, $accessToken);
+
+        $this->assertIsArray($result);
+        $this->assertSame('user-123', $result['sub']);
+    }
+
+    /**
+     * Test validate_id_token rejects mismatched at_hash.
+     */
+    public function testValidateIdTokenRejectsMismatchedAtHash(): void
+    {
+        $client = $this->createClientWithStubbedJwt([
+            'sub' => 'user-123',
+            'iss' => 'https://idp.example.com',
+            'aud' => 'test-client-id',
+            'at_hash' => 'invalid-hash-value',
+        ]);
+
+        $result = $client->validate_id_token('fake.jwt.token', null, null, 'some-access-token');
+
+        $this->assertInstanceOf(\WP_Error::class, $result);
+        $this->assertSame('invalid_at_hash', $result->get_error_code());
+    }
+
+    /**
+     * Test validate_id_token skips at_hash validation when no access token provided.
+     */
+    public function testValidateIdTokenSkipsAtHashWhenNoAccessToken(): void
+    {
+        $client = $this->createClientWithStubbedJwt([
+            'sub' => 'user-123',
+            'iss' => 'https://idp.example.com',
+            'aud' => 'test-client-id',
+            'at_hash' => 'some-hash-value',
+        ]);
+
+        $result = $client->validate_id_token('fake.jwt.token');
+
+        $this->assertIsArray($result);
+        $this->assertSame('user-123', $result['sub']);
+    }
+
+    /**
      * Test that nonce validation is case-sensitive.
      */
     public function testNonceValidationIsCaseSensitive(): void
