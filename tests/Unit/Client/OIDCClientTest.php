@@ -1272,10 +1272,11 @@ class OIDCClientTest extends OIDCTestCase
 
         // Check parameters
         $params = $method->getParameters();
-        $this->assertCount(3, $params, 'validate_id_token should have 3 parameters');
+        $this->assertCount(4, $params, 'validate_id_token should have 4 parameters');
         $this->assertSame('id_token', $params[0]->getName());
         $this->assertSame('expected_nonce', $params[1]->getName());
         $this->assertSame('auth_code', $params[2]->getName());
+        $this->assertSame('access_token', $params[3]->getName());
     }
 
     /**
@@ -1296,6 +1297,83 @@ class OIDCClientTest extends OIDCTestCase
         // Verify our expected c_hash computation
         $this->assertSame(22, strlen($expectedCHash), 'c_hash should be 22 characters for SHA-256');
         $this->assertMatchesRegularExpression('/^[A-Za-z0-9_-]+$/', $expectedCHash, 'c_hash should be base64url encoded');
+    }
+
+    /**
+     * Test at_hash computation follows OIDC spec.
+     *
+     * The at_hash is the base64url encoding of the left-most half of the hash
+     * of the access token using the hash algorithm from the alg header.
+     */
+    public function testAtHashComputationFollowsOidcSpec(): void
+    {
+        $accessToken = 'test-access-token';
+
+        // Per OIDC spec: at_hash = base64url(left-half(sha256(access_token)))
+        $hash = hash('sha256', $accessToken, true);
+        $leftHalf = substr($hash, 0, 16); // Left-most half (16 bytes for SHA-256)
+        $expectedAtHash = rtrim(strtr(base64_encode($leftHalf), '+/', '-_'), '=');
+
+        // Verify our expected at_hash computation
+        $this->assertSame(22, strlen($expectedAtHash), 'at_hash should be 22 characters for SHA-256');
+        $this->assertMatchesRegularExpression('/^[A-Za-z0-9_-]+$/', $expectedAtHash, 'at_hash should be base64url encoded');
+    }
+
+    /**
+     * Test validate_id_token accepts valid at_hash matching the access token.
+     */
+    public function testValidateIdTokenAcceptsValidAtHash(): void
+    {
+        $accessToken = 'test-access-token-value';
+        $atHash = rtrim(strtr(base64_encode(substr(hash('sha256', $accessToken, true), 0, 16)), '+/', '-_'), '=');
+
+        $client = $this->createClientWithStubbedJwt([
+            'sub' => 'user-123',
+            'iss' => 'https://idp.example.com',
+            'aud' => 'test-client-id',
+            'at_hash' => $atHash,
+        ]);
+
+        $result = $client->validate_id_token('fake.jwt.token', null, null, $accessToken);
+
+        $this->assertIsArray($result);
+        $this->assertSame('user-123', $result['sub']);
+    }
+
+    /**
+     * Test validate_id_token rejects mismatched at_hash.
+     */
+    public function testValidateIdTokenRejectsMismatchedAtHash(): void
+    {
+        $client = $this->createClientWithStubbedJwt([
+            'sub' => 'user-123',
+            'iss' => 'https://idp.example.com',
+            'aud' => 'test-client-id',
+            'at_hash' => 'invalid-hash-value',
+        ]);
+
+        $result = $client->validate_id_token('fake.jwt.token', null, null, 'some-access-token');
+
+        $this->assertInstanceOf(\WP_Error::class, $result);
+        $this->assertSame('invalid_at_hash', $result->get_error_code());
+    }
+
+    /**
+     * Test validate_id_token skips at_hash validation when no access token provided.
+     */
+    public function testValidateIdTokenSkipsAtHashWhenNoAccessToken(): void
+    {
+        $client = $this->createClientWithStubbedJwt([
+            'sub' => 'user-123',
+            'iss' => 'https://idp.example.com',
+            'aud' => 'test-client-id',
+            'at_hash' => 'some-hash-value',
+        ]);
+
+        $result = $client->validate_id_token('fake.jwt.token');
+
+        $this->assertIsArray($result);
+        $this->assertSame('user-123', $result['sub']);
     }
 
     /**
