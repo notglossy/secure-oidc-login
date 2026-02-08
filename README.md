@@ -125,7 +125,7 @@ Navigate to **Settings > OIDC Auth** in your WordPress admin panel.
 | Token Endpoint | URL for the token endpoint | Yes |
 | Userinfo Endpoint | URL for the userinfo endpoint | No |
 | End Session Endpoint | URL for logout/end session | No |
-| Issuer | Expected issuer value for token validation | No |
+| Issuer | Expected issuer value for token validation | Yes |
 | Scope | OAuth scopes to request (default: `openid email profile`) | No |
 
 #### Login Settings

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-02-07
+
+### Added
+- `at_hash` claim validation to prevent token substitution attacks (#48)
+- OIDC `acr_values` support with optional enforcement (#41)
+- Environment variable support for `SECURE_OIDC_TRUST_PROXY_HEADERS` (#45)
+
+### Security
+- Mandatory issuer validation in ID token verification (#46)
+- JWT algorithm allowlist to prevent algorithm confusion attacks (#43)
+- Sub claim validation between ID token and UserInfo per OIDC spec §5.3.4 (#42)
+- Removed runtime filter from `get_setting()` to reduce attack surface (#47)
+- Enforced required `token_type` with case-insensitive comparison (#49)
+
+### Fixed
+- Invalidate `alloptions` object cache when plugin settings are saved (#51)
+- Mask IP addresses in log output for GDPR/privacy compliance (#50)
+
+### Changed
+- License changed from GPL v3 to GPL v2 or later (#44)
+
 ## [1.1.0] - 2026-02-02
 
 ### Added
@@ -141,7 +162,8 @@ First stable release. Comprehensive security audit completed with no critical or
 - Flexible email verification
 - PHPStan level 6 compliance
 
-[Unreleased]: https://github.com/notglossy/secure-oidc-login/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/notglossy/secure-oidc-login/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/notglossy/secure-oidc-login/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/notglossy/secure-oidc-login/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/notglossy/secure-oidc-login/compare/v0.6.0-beta...v1.0.0
 [0.6.0-beta]: https://github.com/notglossy/secure-oidc-login/compare/v0.5.0-beta...v0.6.0-beta
