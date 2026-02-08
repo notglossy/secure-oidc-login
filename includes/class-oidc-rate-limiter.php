@@ -274,6 +274,25 @@ class OIDC_Rate_Limiter {
 	}
 
 	/**
+	 * Mask an IP address for privacy-compliant logging.
+	 *
+	 * Truncates the last octet (IPv4) or last group (IPv6) to anonymize
+	 * the specific host while preserving subnet-level information for debugging.
+	 *
+	 * @param string $ip IP address to mask.
+	 * @return string Masked IP address, or 'unknown' if invalid.
+	 */
+	public static function mask_ip( string $ip ): string {
+		if ( filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 ) ) {
+			return preg_replace( '/\.\d+$/', '.xxx', $ip );
+		}
+		if ( filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6 ) ) {
+			return preg_replace( '/:[^:]*$/', ':xxxx', $ip );
+		}
+		return 'unknown';
+	}
+
+	/**
 	 * Log rate limiting events for security auditing.
 	 *
 	 * @param string $action     Action being rate limited.
@@ -286,7 +305,7 @@ class OIDC_Rate_Limiter {
 			'Rate limit %s for action "%s" from IP %s',
 			$event,
 			$action,
-			$ip_address
+			self::mask_ip( $ip_address )
 		);
 
 		if ( $attempts > 0 ) {
