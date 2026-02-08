@@ -136,10 +136,7 @@ class Secure_OIDC_Login {
 		}
 
 		// Fall back to database value
-		$setting = (string) ( $options[ $option_key ] ?? '' );
-
-		// Allow filtering for advanced use cases
-		return apply_filters( 'secure_oidc_login_setting_' . $option_key, $setting, $option_key );
+		return (string) ( $options[ $option_key ] ?? '' );
 	}
 
 	/**
