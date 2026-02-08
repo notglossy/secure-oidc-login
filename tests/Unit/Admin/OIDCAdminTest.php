@@ -1502,4 +1502,120 @@ class OIDCAdminTest extends OIDCTestCase
         $this->assertSame('', $registered_fields['id_token_signing_alg_values_supported']['title']);
         $this->assertSame('oidc_provider_section', $registered_fields['id_token_signing_alg_values_supported']['section']);
     }
+
+    // =========================================================================
+    // Object Cache Invalidation Tests
+    // =========================================================================
+
+    /**
+     * Test constructor registers the update_option cache invalidation hook.
+     */
+    public function testConstructorRegistersSettingsCacheInvalidationHook(): void
+    {
+        $registered_actions = [];
+
+        Functions\when('add_action')->alias(function ($hook, $callback, $priority = 10, $accepted_args = 1) use (&$registered_actions) {
+            $registered_actions[] = [
+                'hook' => $hook,
+                'callback' => $callback,
+                'priority' => $priority,
+                'accepted_args' => $accepted_args,
+            ];
+        });
+
+        $admin = new OIDC_Admin();
+
+        $found = false;
+        foreach ($registered_actions as $action) {
+            if ('update_option_secure_oidc_login_settings' === $action['hook']
+                && is_array($action['callback'])
+                && $action['callback'][1] === 'invalidate_settings_cache'
+            ) {
+                $found = true;
+                $this->assertSame(10, $action['priority']);
+                $this->assertSame(0, $action['accepted_args']);
+                break;
+            }
+        }
+
+        $this->assertTrue($found, 'update_option_secure_oidc_login_settings hook should be registered');
+    }
+
+    /**
+     * Test invalidate_settings_cache deletes the alloptions cache key.
+     */
+    public function testInvalidateSettingsCacheDeletesAlloptionsCache(): void
+    {
+        $deleted_cache_keys = [];
+
+        Functions\when('wp_cache_delete')->alias(function ($key, $group = '') use (&$deleted_cache_keys) {
+            $deleted_cache_keys[] = ['key' => $key, 'group' => $group];
+            return true;
+        });
+
+        $this->admin->invalidate_settings_cache();
+
+        $this->assertCount(1, $deleted_cache_keys);
+        $this->assertSame('alloptions', $deleted_cache_keys[0]['key']);
+        $this->assertSame('options', $deleted_cache_keys[0]['group']);
+    }
+
+    /**
+     * Test handle_credential_deletion clears both option and alloptions cache.
+     */
+    public function testHandleCredentialDeletionClearsBothCacheGroups(): void
+    {
+        $deleted_cache_keys = [];
+
+        Functions\when('current_user_can')->justReturn(true);
+        Functions\when('wp_verify_nonce')->justReturn(true);
+        Functions\when('get_option')->justReturn([
+            'client_id' => 'test-id',
+            'client_secret' => 'test-secret',
+        ]);
+        Functions\when('maybe_serialize')->alias(fn($data) => serialize($data));
+        Functions\when('set_transient')->justReturn(true);
+        Functions\when('wp_safe_redirect')->alias(function () {
+            // Throw to prevent the subsequent exit() from terminating PHPUnit
+            throw new \RuntimeException('Redirect intercepted');
+        });
+        Functions\when('admin_url')->justReturn('https://example.com/wp-admin/options-general.php?page=secure-oidc-login');
+        Functions\when('wp_cache_delete')->alias(function ($key, $group = '') use (&$deleted_cache_keys) {
+            $deleted_cache_keys[] = ['key' => $key, 'group' => $group];
+            return true;
+        });
+
+        // Mock $wpdb
+        $wpdb = \Mockery::mock('wpdb');
+        $wpdb->options = 'wp_options';
+        $wpdb->shouldReceive('update')->once()->andReturn(1);
+        $GLOBALS['wpdb'] = $wpdb;
+
+        $_POST['_wpnonce'] = 'valid-nonce';
+
+        // wp_safe_redirect throws to prevent exit() from killing PHPUnit
+        try {
+            $this->admin->handle_credential_deletion();
+        } catch (\RuntimeException $e) {
+            $this->assertSame('Redirect intercepted', $e->getMessage());
+        }
+
+        // Verify both cache keys were deleted
+        $option_deleted = false;
+        $alloptions_deleted = false;
+
+        foreach ($deleted_cache_keys as $entry) {
+            if ('secure_oidc_login_settings' === $entry['key'] && 'options' === $entry['group']) {
+                $option_deleted = true;
+            }
+            if ('alloptions' === $entry['key'] && 'options' === $entry['group']) {
+                $alloptions_deleted = true;
+            }
+        }
+
+        $this->assertTrue($option_deleted, 'Individual option cache should be deleted');
+        $this->assertTrue($alloptions_deleted, 'alloptions cache should be deleted');
+
+        unset($GLOBALS['wpdb']);
+    }
 }

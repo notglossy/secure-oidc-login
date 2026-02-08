@@ -28,6 +28,7 @@ class OIDC_Admin {
 		add_action( 'admin_post_secure_oidc_delete_credentials', array( $this, 'handle_credential_deletion' ) );
 		add_action( 'admin_notices', array( $this, 'admin_notices' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_scripts' ) );
+		add_action( 'update_option_secure_oidc_login_settings', array( $this, 'invalidate_settings_cache' ), 10, 0 );
 	}
 
 	/**
@@ -95,6 +96,7 @@ class OIDC_Admin {
 			array( 'option_name' => 'secure_oidc_login_settings' )
 		);
 		wp_cache_delete( 'secure_oidc_login_settings', 'options' );
+		wp_cache_delete( 'alloptions', 'options' );
 
 		// Store success message in transient for display after redirect
 		set_transient( 'secure_oidc_credentials_deleted', true, 30 );
@@ -102,6 +104,19 @@ class OIDC_Admin {
 		// Redirect back to settings page
 		wp_safe_redirect( admin_url( 'options-general.php?page=secure-oidc-login' ) );
 		exit;
+	}
+
+	/**
+	 * Invalidate the alloptions object cache after settings are saved.
+	 *
+	 * WordPress caches autoloaded options in the 'alloptions' cache key.
+	 * While update_option() handles this internally, persistent object caches
+	 * (e.g., Memcached) can serve stale data in edge cases such as race
+	 * conditions or multi-server deployments. This explicit invalidation
+	 * provides a defense-in-depth guarantee.
+	 */
+	public function invalidate_settings_cache(): void {
+		wp_cache_delete( 'alloptions', 'options' );
 	}
 
 	/**
