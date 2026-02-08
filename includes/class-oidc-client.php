@@ -247,8 +247,13 @@ class OIDC_Client {
 			return new WP_Error( 'oidc_error', __( 'Invalid token response.', 'secure-oidc-login' ) );
 		}
 
-		// Validate token_type (RFC 6749 section 5.1)
-		if ( ! empty( $tokens['token_type'] ) && 'Bearer' !== $tokens['token_type'] ) {
+		// Validate token_type is present (RFC 6749 section 5.1: REQUIRED field).
+		if ( empty( $tokens['token_type'] ) ) {
+			return new WP_Error( 'oidc_error', __( 'Missing required token_type in token response.', 'secure-oidc-login' ) );
+		}
+
+		// Validate token_type value (RFC 6749 section 5.1: value is case insensitive).
+		if ( strcasecmp( $tokens['token_type'], 'Bearer' ) !== 0 ) {
 			return new WP_Error(
 				'oidc_error',
 				sprintf(
