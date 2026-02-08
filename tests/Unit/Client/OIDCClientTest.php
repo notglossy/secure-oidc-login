@@ -159,6 +159,22 @@ class OIDCClientTest extends OIDCTestCase
     }
 
     /**
+     * Test exchange_code returns error when token_type is missing.
+     */
+    public function testExchangeCodeReturnsErrorWhenTokenTypeMissing(): void
+    {
+        Functions\when('wp_safe_remote_post')->justReturn([
+            'body' => '{"access_token": "test", "id_token": "test"}',
+            'response' => ['code' => 200]
+        ]);
+
+        $result = $this->client->exchange_code('auth-code');
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertStringContainsString('Missing required token_type', $result->get_error_message());
+    }
+
+    /**
      * Test exchange_code returns error for unsupported token type.
      */
     public function testExchangeCodeReturnsErrorForUnsupportedTokenType(): void
@@ -172,6 +188,50 @@ class OIDCClientTest extends OIDCTestCase
 
         $this->assertInstanceOf(WP_Error::class, $result);
         $this->assertStringContainsString('Unsupported token type', $result->get_error_message());
+    }
+
+    /**
+     * Test exchange_code accepts lowercase "bearer" token type per RFC 6749.
+     */
+    public function testExchangeCodeAcceptsLowercaseBearerTokenType(): void
+    {
+        $tokenResponse = [
+            'access_token' => 'test-access-token',
+            'id_token' => 'test-id-token',
+            'token_type' => 'bearer',
+        ];
+
+        Functions\when('wp_safe_remote_post')->justReturn([
+            'body' => json_encode($tokenResponse),
+            'response' => ['code' => 200]
+        ]);
+
+        $result = $this->client->exchange_code('auth-code');
+
+        $this->assertIsArray($result);
+        $this->assertSame('test-access-token', $result['access_token']);
+    }
+
+    /**
+     * Test exchange_code accepts uppercase "BEARER" token type per RFC 6749.
+     */
+    public function testExchangeCodeAcceptsUppercaseBearerTokenType(): void
+    {
+        $tokenResponse = [
+            'access_token' => 'test-access-token',
+            'id_token' => 'test-id-token',
+            'token_type' => 'BEARER',
+        ];
+
+        Functions\when('wp_safe_remote_post')->justReturn([
+            'body' => json_encode($tokenResponse),
+            'response' => ['code' => 200]
+        ]);
+
+        $result = $this->client->exchange_code('auth-code');
+
+        $this->assertIsArray($result);
+        $this->assertSame('test-access-token', $result['access_token']);
     }
 
     /**
