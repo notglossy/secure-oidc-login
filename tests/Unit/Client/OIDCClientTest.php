@@ -2054,6 +2054,113 @@ class OIDCClientTest extends OIDCTestCase
         $this->assertStringNotContainsString('algorithm', strtolower($result->get_error_message()));
     }
 
+    // =========================================================================
+    // Issuer Validation Tests (using anonymous subclass)
+    // =========================================================================
+
+    /**
+     * Create a testable OIDC_Client subclass that stubs decode_and_verify_jwt.
+     *
+     * @param array<string, mixed> $claims Claims to return from decode_and_verify_jwt.
+     * @return OIDC_Client
+     */
+    private function createClientWithStubbedJwt(array $claims): OIDC_Client
+    {
+        return new class($claims) extends OIDC_Client {
+            /** @var array<string, mixed> */
+            private array $stubbedClaims;
+
+            /**
+             * @param array<string, mixed> $claims
+             */
+            public function __construct(array $claims)
+            {
+                parent::__construct();
+                $this->stubbedClaims = $claims;
+            }
+
+            protected function decode_and_verify_jwt(string $jwt, bool $retry = true): array|\WP_Error
+            {
+                return $this->stubbedClaims;
+            }
+        };
+    }
+
+    /**
+     * Test validate_id_token returns error when issuer is not configured.
+     */
+    public function testValidateIdTokenReturnsErrorWhenIssuerNotConfigured(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'client_id' => 'test-client-id',
+            'jwks_uri' => 'https://idp.example.com/.well-known/jwks.json',
+            // issuer intentionally missing
+        ]);
+
+        $client = $this->createClientWithStubbedJwt([
+            'sub' => 'user-123',
+            'iss' => 'https://idp.example.com',
+            'aud' => 'test-client-id',
+        ]);
+
+        $result = $client->validate_id_token('fake.jwt.token');
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertStringContainsString('configuration error', $result->get_error_message());
+    }
+
+    /**
+     * Test validate_id_token returns error when issuer does not match.
+     */
+    public function testValidateIdTokenReturnsErrorWhenIssuerMismatch(): void
+    {
+        $client = $this->createClientWithStubbedJwt([
+            'sub' => 'user-123',
+            'iss' => 'https://evil-idp.example.com',
+            'aud' => 'test-client-id',
+        ]);
+
+        $result = $client->validate_id_token('fake.jwt.token');
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertStringContainsString('Invalid token issuer', $result->get_error_message());
+    }
+
+    /**
+     * Test validate_id_token succeeds when issuer matches.
+     */
+    public function testValidateIdTokenSucceedsWhenIssuerMatches(): void
+    {
+        $client = $this->createClientWithStubbedJwt([
+            'sub' => 'user-123',
+            'iss' => 'https://idp.example.com',
+            'aud' => 'test-client-id',
+        ]);
+
+        $result = $client->validate_id_token('fake.jwt.token');
+
+        $this->assertIsArray($result);
+        $this->assertSame('user-123', $result['sub']);
+        $this->assertSame('https://idp.example.com', $result['iss']);
+    }
+
+    /**
+     * Test validate_id_token returns error when iss claim is missing from token.
+     */
+    public function testValidateIdTokenReturnsErrorWhenIssClaimMissing(): void
+    {
+        $client = $this->createClientWithStubbedJwt([
+            'sub' => 'user-123',
+            // 'iss' intentionally missing
+            'aud' => 'test-client-id',
+        ]);
+
+        $result = $client->validate_id_token('fake.jwt.token');
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertStringContainsString('Invalid token issuer', $result->get_error_message());
+    }
+
     /**
      * Test decode_and_verify_jwt uses only hardcoded list when no IdP algorithms stored.
      *
