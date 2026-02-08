@@ -140,6 +140,14 @@ class OIDC_Token_Refresh {
 			return $error;
 		}
 
+		// Validate id_token if present (OIDC Core Section 12.2)
+		if ( ! empty( $tokens['id_token'] ) ) {
+			$id_token_validation = $this->validate_refresh_id_token( $user_id, $tokens );
+			if ( is_wp_error( $id_token_validation ) ) {
+				return $id_token_validation;
+			}
+		}
+
 		// Check for refresh token rotation
 		$rotation_result = $this->handle_rotation( $user_id, $tokens, $refresh_token );
 		if ( is_wp_error( $rotation_result ) ) {
@@ -244,6 +252,48 @@ class OIDC_Token_Refresh {
 					__( 'Token refresh failed: refresh token rotation required but IdP returned same token.', 'secure-oidc-login' )
 				);
 			}
+		}
+
+		return true;
+	}
+
+	/**
+	 * Validate id_token received during token refresh.
+	 *
+	 * Per OIDC Core Section 12.2, refreshed id_tokens must have their iss, sub,
+	 * and aud validated. The sub claim must match the originally authenticated subject.
+	 *
+	 * @param int                  $user_id The WordPress user ID.
+	 * @param array<string, mixed> $tokens  New tokens from IdP including id_token.
+	 * @return true|WP_Error True if validation passed, WP_Error on failure.
+	 */
+	private function validate_refresh_id_token( int $user_id, array $tokens ): bool|WP_Error {
+		// Validate JWT signature, issuer, audience, expiration, and at_hash
+		$claims = $this->client->validate_id_token( $tokens['id_token'], null, null, $tokens['access_token'] ?? null );
+		if ( is_wp_error( $claims ) ) {
+			$this->log_refresh_failure( $user_id, 'Refreshed id_token validation failed: ' . $claims->get_error_message() );
+			return new WP_Error(
+				'oidc_refresh_id_token_invalid',
+				__( 'Token refresh failed: refreshed id_token failed validation.', 'secure-oidc-login' )
+			);
+		}
+
+		// Verify sub claim matches stored subject (OIDC Core Section 12.2)
+		$stored_subject = get_user_meta( $user_id, 'oidc_subject', true );
+		if ( empty( $stored_subject ) ) {
+			$this->log_refresh_failure( $user_id, 'No stored OIDC subject found for sub claim verification' );
+			return new WP_Error(
+				'oidc_refresh_subject_missing',
+				__( 'Token refresh failed: no stored subject for verification.', 'secure-oidc-login' )
+			);
+		}
+
+		if ( ! isset( $claims['sub'] ) || $claims['sub'] !== $stored_subject ) {
+			$this->log_refresh_failure( $user_id, 'Refreshed id_token sub claim does not match stored subject' );
+			return new WP_Error(
+				'oidc_refresh_subject_mismatch',
+				__( 'Token refresh failed: subject mismatch in refreshed id_token.', 'secure-oidc-login' )
+			);
 		}
 
 		return true;

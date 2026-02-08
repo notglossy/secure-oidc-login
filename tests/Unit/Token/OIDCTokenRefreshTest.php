@@ -1061,6 +1061,8 @@ class OIDCTokenRefreshTest extends OIDCTestCase
             'enforce_refresh_token_rotation' => false,
         ]);
 
+        Functions\when('get_user_meta')->justReturn('test-subject-123');
+
         // Response includes id_token (some IdPs return this on refresh)
         $tokens = [
             'access_token' => 'new-access-token',
@@ -1080,6 +1082,13 @@ class OIDCTokenRefreshTest extends OIDCTestCase
             ->with('old-refresh-token')
             ->once()
             ->andReturn($tokens);
+
+        // id_token must be validated during refresh (OIDC Core Section 12.2)
+        $this->client
+            ->shouldReceive('validate_id_token')
+            ->with('new-id-token.jwt.here', null, null, 'new-access-token')
+            ->once()
+            ->andReturn(['sub' => 'test-subject-123', 'iss' => 'https://idp.example.com']);
 
         $this->token_manager
             ->shouldReceive('was_refresh_token_rotated')
@@ -1141,5 +1150,300 @@ class OIDCTokenRefreshTest extends OIDCTestCase
 
         // Options should be cached after first call
         $this->assertSame(1, $call_count);
+    }
+
+    /**
+     * Test refresh fails when id_token validation fails (e.g. bad signature).
+     */
+    public function testRefreshFailsWhenIdTokenValidationFails(): void
+    {
+        $user_id = 123;
+
+        Functions\when('get_option')->justReturn([
+            'enforce_refresh_token_rotation' => false,
+        ]);
+
+        $tokens = [
+            'access_token' => 'new-access-token',
+            'refresh_token' => 'new-refresh-token',
+            'id_token' => 'invalid-id-token.jwt.here',
+            'expires_in' => 3600,
+        ];
+
+        $this->token_manager
+            ->shouldReceive('get_refresh_token')
+            ->with($user_id)
+            ->once()
+            ->andReturn('old-refresh-token');
+
+        $this->client
+            ->shouldReceive('refresh_token')
+            ->with('old-refresh-token')
+            ->once()
+            ->andReturn($tokens);
+
+        // validate_id_token returns error (bad signature)
+        $this->client
+            ->shouldReceive('validate_id_token')
+            ->with('invalid-id-token.jwt.here', null, null, 'new-access-token')
+            ->once()
+            ->andReturn(new WP_Error('oidc_error', 'Invalid JWT signature'));
+
+        // store_tokens should NOT be called
+        $this->token_manager
+            ->shouldNotReceive('store_tokens');
+
+        $result = $this->refresh->refresh($user_id);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('oidc_refresh_id_token_invalid', $result->get_error_code());
+    }
+
+    /**
+     * Test refresh fails when id_token sub claim mismatches stored subject.
+     */
+    public function testRefreshFailsWhenIdTokenSubMismatch(): void
+    {
+        $user_id = 123;
+
+        Functions\when('get_option')->justReturn([
+            'enforce_refresh_token_rotation' => false,
+        ]);
+
+        // Stored subject is different from the one in the refreshed id_token
+        Functions\when('get_user_meta')->justReturn('original-subject-123');
+
+        $tokens = [
+            'access_token' => 'new-access-token',
+            'refresh_token' => 'new-refresh-token',
+            'id_token' => 'new-id-token.jwt.here',
+            'expires_in' => 3600,
+        ];
+
+        $this->token_manager
+            ->shouldReceive('get_refresh_token')
+            ->with($user_id)
+            ->once()
+            ->andReturn('old-refresh-token');
+
+        $this->client
+            ->shouldReceive('refresh_token')
+            ->with('old-refresh-token')
+            ->once()
+            ->andReturn($tokens);
+
+        // validate_id_token succeeds but returns a different sub
+        $this->client
+            ->shouldReceive('validate_id_token')
+            ->with('new-id-token.jwt.here', null, null, 'new-access-token')
+            ->once()
+            ->andReturn(['sub' => 'different-subject-456', 'iss' => 'https://idp.example.com']);
+
+        // store_tokens should NOT be called
+        $this->token_manager
+            ->shouldNotReceive('store_tokens');
+
+        $result = $this->refresh->refresh($user_id);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('oidc_refresh_subject_mismatch', $result->get_error_code());
+    }
+
+    /**
+     * Test refresh fails when no stored subject exists for verification.
+     */
+    public function testRefreshFailsWhenNoStoredSubjectWithIdToken(): void
+    {
+        $user_id = 123;
+
+        Functions\when('get_option')->justReturn([
+            'enforce_refresh_token_rotation' => false,
+        ]);
+
+        // No stored oidc_subject in user meta
+        Functions\when('get_user_meta')->justReturn('');
+
+        $tokens = [
+            'access_token' => 'new-access-token',
+            'refresh_token' => 'new-refresh-token',
+            'id_token' => 'new-id-token.jwt.here',
+            'expires_in' => 3600,
+        ];
+
+        $this->token_manager
+            ->shouldReceive('get_refresh_token')
+            ->with($user_id)
+            ->once()
+            ->andReturn('old-refresh-token');
+
+        $this->client
+            ->shouldReceive('refresh_token')
+            ->with('old-refresh-token')
+            ->once()
+            ->andReturn($tokens);
+
+        // validate_id_token succeeds
+        $this->client
+            ->shouldReceive('validate_id_token')
+            ->with('new-id-token.jwt.here', null, null, 'new-access-token')
+            ->once()
+            ->andReturn(['sub' => 'test-subject-123', 'iss' => 'https://idp.example.com']);
+
+        // store_tokens should NOT be called
+        $this->token_manager
+            ->shouldNotReceive('store_tokens');
+
+        $result = $this->refresh->refresh($user_id);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('oidc_refresh_subject_missing', $result->get_error_code());
+    }
+
+    /**
+     * Test refresh succeeds without id_token in response (validation skipped).
+     */
+    public function testRefreshSucceedsWithoutIdTokenInResponse(): void
+    {
+        $user_id = 123;
+
+        Functions\when('get_option')->justReturn([
+            'enforce_refresh_token_rotation' => false,
+        ]);
+
+        // No id_token in response
+        $tokens = [
+            'access_token' => 'new-access-token',
+            'refresh_token' => 'new-refresh-token',
+            'expires_in' => 3600,
+        ];
+
+        $this->token_manager
+            ->shouldReceive('get_refresh_token')
+            ->with($user_id)
+            ->once()
+            ->andReturn('old-refresh-token');
+
+        $this->client
+            ->shouldReceive('refresh_token')
+            ->with('old-refresh-token')
+            ->once()
+            ->andReturn($tokens);
+
+        // validate_id_token should NOT be called when no id_token present
+        $this->client
+            ->shouldNotReceive('validate_id_token');
+
+        $this->token_manager
+            ->shouldReceive('was_refresh_token_rotated')
+            ->with($user_id, 'new-refresh-token')
+            ->once()
+            ->andReturn(true);
+
+        $this->token_manager
+            ->shouldReceive('store_tokens')
+            ->with($user_id, $tokens)
+            ->once()
+            ->andReturn(true);
+
+        $result = $this->refresh->refresh($user_id);
+        $this->assertTrue($result);
+    }
+
+    /**
+     * Test refresh skips id_token validation when id_token is empty string.
+     */
+    public function testRefreshSkipsValidationForEmptyIdToken(): void
+    {
+        $user_id = 123;
+
+        Functions\when('get_option')->justReturn([
+            'enforce_refresh_token_rotation' => false,
+        ]);
+
+        // Empty string id_token should be treated as absent
+        $tokens = [
+            'access_token' => 'new-access-token',
+            'refresh_token' => 'new-refresh-token',
+            'id_token' => '',
+            'expires_in' => 3600,
+        ];
+
+        $this->token_manager
+            ->shouldReceive('get_refresh_token')
+            ->with($user_id)
+            ->once()
+            ->andReturn('old-refresh-token');
+
+        $this->client
+            ->shouldReceive('refresh_token')
+            ->with('old-refresh-token')
+            ->once()
+            ->andReturn($tokens);
+
+        // validate_id_token should NOT be called for empty id_token
+        $this->client
+            ->shouldNotReceive('validate_id_token');
+
+        $this->token_manager
+            ->shouldReceive('was_refresh_token_rotated')
+            ->with($user_id, 'new-refresh-token')
+            ->once()
+            ->andReturn(true);
+
+        $this->token_manager
+            ->shouldReceive('store_tokens')
+            ->with($user_id, $tokens)
+            ->once()
+            ->andReturn(true);
+
+        $result = $this->refresh->refresh($user_id);
+        $this->assertTrue($result);
+    }
+
+    /**
+     * Test refresh fails when at_hash validation fails in id_token.
+     */
+    public function testRefreshFailsWhenAtHashValidationFails(): void
+    {
+        $user_id = 123;
+
+        Functions\when('get_option')->justReturn([
+            'enforce_refresh_token_rotation' => false,
+        ]);
+
+        $tokens = [
+            'access_token' => 'new-access-token',
+            'refresh_token' => 'new-refresh-token',
+            'id_token' => 'id-token-with-bad-at-hash.jwt.here',
+            'expires_in' => 3600,
+        ];
+
+        $this->token_manager
+            ->shouldReceive('get_refresh_token')
+            ->with($user_id)
+            ->once()
+            ->andReturn('old-refresh-token');
+
+        $this->client
+            ->shouldReceive('refresh_token')
+            ->with('old-refresh-token')
+            ->once()
+            ->andReturn($tokens);
+
+        // validate_id_token returns at_hash error
+        $this->client
+            ->shouldReceive('validate_id_token')
+            ->with('id-token-with-bad-at-hash.jwt.here', null, null, 'new-access-token')
+            ->once()
+            ->andReturn(new WP_Error('oidc_error', 'at_hash claim validation failed'));
+
+        // store_tokens should NOT be called
+        $this->token_manager
+            ->shouldNotReceive('store_tokens');
+
+        $result = $this->refresh->refresh($user_id);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('oidc_refresh_id_token_invalid', $result->get_error_code());
     }
 }
