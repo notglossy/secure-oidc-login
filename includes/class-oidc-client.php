@@ -150,12 +150,15 @@ class OIDC_Client {
 		$client_id     = $this->get_setting( 'client_id' );
 		$client_secret = $this->get_setting( 'client_secret' );
 
+		// Token endpoint request parameters for OAuth 2.0 Authorization Code Flow
 		$token_params = array(
-			'grant_type'   => 'authorization_code',
-			'code'         => $code,
-			'redirect_uri' => $this->get_callback_url(),
+			'grant_type'   => 'authorization_code',  // Specifies the grant type being used
+			'code'         => $code,                 // The authorization code received from the IdP redirect
+			'redirect_uri' => $this->get_callback_url(), // Must match the redirect URI from the auth request
 		);
 
+		// HTTP headers for the token request
+		// Content-Type must be application/x-www-form-urlencoded per OAuth 2.0 spec (RFC 6749 Section 4.1.3)
 		$headers = array(
 			'Content-Type' => 'application/x-www-form-urlencoded',
 		);
@@ -205,15 +208,20 @@ class OIDC_Client {
 			);
 		}
 
-		$status_code  = (int) wp_remote_retrieve_response_code( $response );
-		$body         = wp_remote_retrieve_body( $response );
-		$content_type = wp_remote_retrieve_header( $response, 'content-type' );
+		// Extract response components from the token endpoint HTTP response
+		$status_code  = (int) wp_remote_retrieve_response_code( $response );  // HTTP status code (e.g., 200, 400)
+		$body         = wp_remote_retrieve_body( $response );                  // Raw response body
+		$content_type = wp_remote_retrieve_header( $response, 'content-type' ); // Content-Type header
+
+		// Handle case where header might be an array (multiple values)
 		if ( is_array( $content_type ) ) {
 			$content_type = $content_type[0] ?? '';
 		}
-		// Ensure content_type is a string for stripos() in PHP 8+
+
+		// Ensure content_type is a string for stripos() in PHP 8+.
 		$content_type = (string) $content_type;
 
+		// Check if the server is returning a proper json reponse
 		if ( stripos( $content_type, 'application/json' ) === false ) {
 			return $this->handle_error(
 				'token_exchange',
@@ -228,6 +236,7 @@ class OIDC_Client {
 
 		$tokens = json_decode( $body, true );
 
+		// Check if we recieved OK from server
 		if ( 200 !== $status_code ) {
 			// Log detailed IdP error but show generic message to users
 			$detailed_error = sprintf(
@@ -243,6 +252,8 @@ class OIDC_Client {
 			);
 		}
 
+		// Validate that both required tokens are present in the response.
+		// Per OAuth 2.0 / OIDC spec, the token endpoint must return access_token and id_token.
 		if ( empty( $tokens['access_token'] ) || empty( $tokens['id_token'] ) ) {
 			return new WP_Error( 'oidc_error', __( 'Invalid token response.', 'secure-oidc-login' ) );
 		}
@@ -280,7 +291,7 @@ class OIDC_Client {
 	 * @return array<string, mixed>|WP_Error Decoded claims array or error.
 	 */
 	public function validate_id_token( string $id_token, ?string $expected_nonce = null, ?string $auth_code = null, ?string $access_token = null ): array|WP_Error {
-		// Decode and verify JWT using Firebase JWT library
+		// Decode and verify JWT signature (OIDC Core Section 3.1.3.7, steps 6-7).
 		$claims = $this->decode_and_verify_jwt( $id_token );
 		if ( is_wp_error( $claims ) ) {
 			return $claims;
@@ -292,6 +303,7 @@ class OIDC_Client {
 		}
 
 		// Verify the token was issued by the expected IdP (OIDC Core spec 3.1.3.7)
+		// If we are missing the issuer in settings, fail since there is nothing to compare against.
 		$issuer = $this->get_setting( 'issuer' );
 		if ( empty( $issuer ) ) {
 			return $this->handle_error(
@@ -300,11 +312,13 @@ class OIDC_Client {
 				__( 'Authentication configuration error. Please contact the site administrator.', 'secure-oidc-login' )
 			);
 		}
+
+		// Verify the 'iss' claim matches the expected issuer (OIDC Core Section 3.1.3.7, step 2).
 		if ( ! isset( $claims['iss'] ) || $claims['iss'] !== $issuer ) {
 			return new WP_Error( 'oidc_error', __( 'Invalid token issuer.', 'secure-oidc-login' ) );
 		}
 
-		// Verify the token was issued for this client
+		// Verify the token was issued for this client (OIDC Core Section 3.1.3.7, steps 3-4).
 		$client_id = $this->get_setting( 'client_id' );
 		$aud       = is_array( $claims['aud'] ) ? $claims['aud'] : array( $claims['aud'] );
 		if ( ! in_array( $client_id, $aud, true ) ) {
@@ -352,6 +366,7 @@ class OIDC_Client {
 			}
 		}
 
+		// All validation checks passed; return the verified claims.
 		return $claims;
 	}
 
@@ -370,11 +385,18 @@ class OIDC_Client {
 	public function validate_acr_claim( array $claims, array $options ): bool|WP_Error {
 		$acr_values = Secure_OIDC_Login::get_setting( 'acr_values', $options );
 
-		// Check enforce_acr with explicit env var handling for boolean
+		// Determine whether ACR enforcement is enabled. The plugin setting is
+		// used as default, but can be overridden by the SECURE_OIDC_ENFORCE_ACR
+		// environment variable when set (accepts "true"/"false").
 		$enforce_acr = ! empty( $options['enforce_acr'] );
 		$env_enforce = getenv( 'SECURE_OIDC_ENFORCE_ACR' );
+
 		if ( false !== $env_enforce && '' !== $env_enforce ) {
-			$enforce_acr = 'true' === strtolower( (string) $env_enforce );
+			if ( 'true' === strtolower( (string) $env_enforce ) ) {
+				$enforce_acr = true;
+			} else {
+				$enforce_acr = false;
+			}
 		}
 
 		// If enforcement is off or no ACR values configured, skip validation
@@ -385,6 +407,7 @@ class OIDC_Client {
 		// Split on whitespace and filter empty entries
 		$requested_values = array_filter( array_map( 'trim', preg_split( '/\s+/', $acr_values ) ) );
 
+		// No valid ACR values remain after parsing; nothing to enforce.
 		if ( empty( $requested_values ) ) {
 			return true;
 		}
@@ -425,8 +448,10 @@ class OIDC_Client {
 			return $jwks;
 		}
 
-		// Extract algorithm from JWT header to handle IdP compatibility
+		// Split JWT into its three dot-separated components: header, payload, and signature.
 		$tks = explode( '.', $jwt );
+
+		// If we don't have all 3 parts, return an error.
 		if ( count( $tks ) !== 3 ) {
 			return new WP_Error( 'oidc_error', __( 'Invalid JWT format.', 'secure-oidc-login' ) );
 		}
@@ -446,11 +471,15 @@ class OIDC_Client {
 		// Second check: if the IdP declared id_token_signing_alg_values_supported during
 		// discovery, the JWT algorithm must also be in that list. This narrows the allowlist
 		// to only the algorithms the specific IdP actually uses (OIDC Discovery 1.0 Section 3).
-		$idp_algorithms = isset( $this->options['id_token_signing_alg_values_supported'] )
+		if ( isset( $this->options['id_token_signing_alg_values_supported'] )
 			&& is_array( $this->options['id_token_signing_alg_values_supported'] )
-			? $this->options['id_token_signing_alg_values_supported']
-			: array();
+		) {
+			$idp_algorithms = $this->options['id_token_signing_alg_values_supported'];
+		} else {
+			$idp_algorithms = array();
+		}
 
+		// Reject the token if the IdP advertised supported algorithms and this one isn't among them.
 		if ( ! empty( $idp_algorithms ) && ! in_array( $alg, $idp_algorithms, true ) ) {
 			return new WP_Error( 'oidc_error', __( 'JWT algorithm not supported by the identity provider.', 'secure-oidc-login' ) );
 		}
@@ -586,6 +615,8 @@ class OIDC_Client {
 		}
 
 		$status_code = (int) wp_remote_retrieve_response_code( $response );
+
+		// If the sever returns anthing other than OK, retun an error.
 		if ( 200 !== $status_code ) {
 			return $this->handle_error(
 				'jwks_fetch',
@@ -597,6 +628,7 @@ class OIDC_Client {
 		$body = wp_remote_retrieve_body( $response );
 		$jwks = json_decode( $body, true );
 
+		// Ensure the JWKS response is valid and contains a "keys" array per RFC 7517 Section 5.
 		if ( ! $jwks || ! isset( $jwks['keys'] ) || ! is_array( $jwks['keys'] ) ) {
 			return new WP_Error( 'oidc_error', __( 'Invalid JWKS response.', 'secure-oidc-login' ) );
 		}
@@ -655,6 +687,7 @@ class OIDC_Client {
 			$weak_salts[] = 'SECURE_AUTH_SALT';
 		}
 
+		// Log a one-time warning if WordPress salts are weak, as they are used for JWKS cache HMAC integrity.
 		if ( ! empty( $weak_salts ) ) {
 			error_log(
 				'[Secure OIDC Login] Security warning: Weak WordPress salts detected (' .
@@ -685,7 +718,9 @@ class OIDC_Client {
 		// Check salt strength and log warning if weak (once per request).
 		$this->check_salt_strength();
 
+		// Serialize the JWKS to JSON for storage and HMAC computation.
 		$data = wp_json_encode( $jwks );
+
 		// Concatenate WordPress authentication salts to create HMAC key
 		// These constants are defined in wp-config.php and not stored in the database
 		$key  = defined( 'SECURE_AUTH_KEY' ) ? SECURE_AUTH_KEY : '';
@@ -708,7 +743,9 @@ class OIDC_Client {
 			return false;
 		}
 
+		// Recompute the HMAC from the cached JWKS to verify it hasn't been tampered with.
 		$expected_hmac = $this->generate_jwks_hmac( $cached_data['jwks'] );
+
 		// Use hash_equals() for timing-safe comparison (prevents timing attacks)
 		return hash_equals( $expected_hmac, $cached_data['hmac'] );
 	}
@@ -755,6 +792,7 @@ class OIDC_Client {
 		// Ensure content_type is a string for stripos() in PHP 8+
 		$content_type = (string) $content_type;
 
+		// If we do not recieve a valid json reponse, return an error.
 		if ( stripos( $content_type, 'application/json' ) === false ) {
 			return $this->handle_error(
 				'userinfo',
@@ -767,6 +805,7 @@ class OIDC_Client {
 			);
 		}
 
+		// If we did not reiceve OK from the server, return an error.
 		if ( 200 !== $status_code ) {
 			return $this->handle_error(
 				'userinfo',
@@ -775,12 +814,15 @@ class OIDC_Client {
 			);
 		}
 
+		// Decode the UserInfo response JSON into an associative array.
 		$userinfo = json_decode( $body, true );
 
+		// If we dont have valid data, return an error.
 		if ( ! $userinfo ) {
 			return new WP_Error( 'oidc_error', __( 'Invalid userinfo response.', 'secure-oidc-login' ) );
 		}
 
+		// Return the verified UserInfo claims.
 		return $userinfo;
 	}
 
@@ -859,6 +901,7 @@ class OIDC_Client {
 		// Ensure content_type is a string for stripos() in PHP 8+
 		$content_type = (string) $content_type;
 
+		// If we didnt recieve a valid JSON response, return an error.
 		if ( stripos( $content_type, 'application/json' ) === false ) {
 			return $this->handle_error(
 				'token_refresh',
@@ -871,8 +914,10 @@ class OIDC_Client {
 			);
 		}
 
+		// Decode response early — error responses also contain JSON with diagnostic fields (RFC 6749 Section 5.2).
 		$tokens = json_decode( $body, true );
 
+		// If we didnt recieve OK from the server return an error.
 		if ( 200 !== $status_code ) {
 			// Log detailed IdP error but show generic message to users
 			$detailed_error = sprintf(
@@ -925,6 +970,7 @@ class OIDC_Client {
 		// Ensure content_type is a string for stripos() in PHP 8+
 		$content_type = (string) $content_type;
 
+		// If we didnt recieve a valid JSON response, return an error.
 		if ( stripos( $content_type, 'application/json' ) === false ) {
 			return new WP_Error(
 				'oidc_error',
@@ -932,12 +978,14 @@ class OIDC_Client {
 			);
 		}
 
+		// If the server did not return OK, return an error.
 		if ( 200 !== $status_code ) {
 			return new WP_Error( 'oidc_error', __( 'Failed to discover OIDC configuration.', 'secure-oidc-login' ) );
 		}
 
 		$config = json_decode( $body, true );
 
+		// If the config is invalid, return an error.
 		if ( ! $config ) {
 			return new WP_Error( 'oidc_error', __( 'Invalid discovery response.', 'secure-oidc-login' ) );
 		}

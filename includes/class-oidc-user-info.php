@@ -308,22 +308,27 @@ class OIDC_User_Info {
 	 * @return string A suitable display name.
 	 */
 	public function get_display_name(): string {
+		// Priority 1: Use full name if available (e.g., "John Doe")
 		if ( $this->name !== null ) {
 			return $this->name;
 		}
 
+		// Priority 2: Combine given name and family name if both available
 		if ( $this->given_name !== null && $this->family_name !== null ) {
 			return $this->given_name . ' ' . $this->family_name;
 		}
 
+		// Priority 3: Use given name (first name) alone
 		if ( $this->given_name !== null ) {
 			return $this->given_name;
 		}
 
+		// Priority 4: Fall back to preferred username
 		if ( $this->preferred_username !== null ) {
 			return $this->preferred_username;
 		}
 
+		// Priority 5: Final fallback to subject identifier (sub)
 		return $this->sub;
 	}
 
