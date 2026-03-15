@@ -22,26 +22,13 @@ if ( ! defined( 'ABSPATH' ) ) {
  * - Compatibility: Pure-PHP fallback ensures availability on all WordPress installations
  * - Standard: IETF RFC 8439, used in TLS 1.3 and modern security protocols
  *
- * BACKWARD COMPATIBILITY: Supports decrypting legacy OpenSSL AES-256-GCM tokens (v1).
- * New tokens are encrypted with Sodium ChaCha20-Poly1305 (v2).
+ * All new tokens are encrypted with Sodium ChaCha20-Poly1305 (v2).
  */
 class OIDC_Token_Crypto {
 	// Current version (Sodium ChaCha20-Poly1305-IETF)
 	const PREFIX_V2       = 'enc:v2:';
 	const NONCE_LENGTH_V2 = 12; // SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_NPUBBYTES
 	const KEY_LENGTH_V2   = 32; // SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_KEYBYTES
-
-	// Legacy version (OpenSSL AES-256-GCM) - kept for backward compatibility
-	const PREFIX_V1     = 'enc:v1:';
-	const CIPHER_V1     = 'aes-256-gcm';
-	const IV_LENGTH_V1  = 12;
-	const TAG_LENGTH_V1 = 16;
-
-	// Deprecated constants for backward compatibility
-	const PREFIX     = self::PREFIX_V1;
-	const CIPHER     = self::CIPHER_V1;
-	const IV_LENGTH  = self::IV_LENGTH_V1;
-	const TAG_LENGTH = self::TAG_LENGTH_V1;
 
 	/**
 	 * Check if the environment supports required Sodium functions.
@@ -61,20 +48,6 @@ class OIDC_Token_Crypto {
 		// Either via native PHP extension or sodium_compat pure-PHP fallback
 		return function_exists( 'sodium_crypto_aead_chacha20poly1305_ietf_encrypt' )
 			&& function_exists( 'sodium_crypto_aead_chacha20poly1305_ietf_decrypt' );
-	}
-
-	/**
-	 * Check if OpenSSL v1 decryption is available (for backward compatibility).
-	 *
-	 * @return bool
-	 */
-	private static function is_openssl_supported(): bool {
-		if ( ! function_exists( 'openssl_encrypt' ) || ! function_exists( 'openssl_decrypt' ) ) {
-			return false;
-		}
-
-		$ciphers = openssl_get_cipher_methods( true );
-		return in_array( self::CIPHER_V1, $ciphers, true );
 	}
 
 	/**
@@ -131,11 +104,9 @@ class OIDC_Token_Crypto {
 	/**
 	 * Decrypt a stored token if it is encrypted.
 	 *
-	 * SECURITY: Handles backward compatibility with multiple encryption versions:
-	 * - v2 (current): Sodium ChaCha20-Poly1305-IETF
-	 * - v1 (legacy): OpenSSL AES-256-GCM
+	 * SECURITY: Only v2 (Sodium ChaCha20-Poly1305-IETF) tokens are supported.
 	 *
-	 * SECURITY: Plaintext tokens are NO LONGER SUPPORTED as of v0.5.0.
+	 * SECURITY: Plaintext and legacy v1 tokens are NO LONGER SUPPORTED.
 	 * Users with legacy plaintext tokens must re-authenticate to generate
 	 * properly encrypted tokens. This change prevents database leak attacks
 	 * from exposing sensitive session tokens.
@@ -153,17 +124,15 @@ class OIDC_Token_Crypto {
 		// Route to appropriate decryption method based on version prefix
 		if ( strpos( $value, self::PREFIX_V2 ) === 0 ) {
 			return self::decrypt_v2_sodium( $value );
-		} elseif ( strpos( $value, self::PREFIX_V1 ) === 0 ) {
-			return self::decrypt_v1_openssl( $value );
-		} else {
-			// SECURITY: Plaintext tokens are no longer supported as of v0.5.0
-			// Users must re-authenticate to generate properly encrypted tokens
-			self::log_error( 'Plaintext token rejected - user must re-authenticate for encrypted token storage.' );
-			return new WP_Error(
-				'oidc_plaintext_token_rejected',
-				__( 'Your session has expired. Please log in again.', 'secure-oidc-login' )
-			);
 		}
+
+		// SECURITY: Only v2 tokens are supported. Legacy v1 and plaintext tokens
+		// require re-authentication to generate properly encrypted tokens.
+		self::log_error( 'Unsupported token format rejected - user must re-authenticate for encrypted token storage.' );
+		return new WP_Error(
+			'oidc_plaintext_token_rejected',
+			__( 'Your session has expired. Please log in again.', 'secure-oidc-login' )
+		);
 	}
 
 	/**
@@ -222,55 +191,6 @@ class OIDC_Token_Crypto {
 	}
 
 	/**
-	 * Decrypt a v1 token encrypted with OpenSSL AES-256-GCM (legacy).
-	 *
-	 * @param string $value Encrypted token with v1 prefix.
-	 * @return string|WP_Error Decrypted token or error.
-	 */
-	private static function decrypt_v1_openssl( string $value ): string|WP_Error {
-		if ( ! self::is_openssl_supported() ) {
-			return new WP_Error(
-				'oidc_encryption_unavailable',
-				__( 'OpenSSL AES-256-GCM is not available on this server for legacy token decryption.', 'secure-oidc-login' )
-			);
-		}
-
-		// Remove prefix and decode base64 payload
-		$payload = substr( $value, strlen( self::PREFIX_V1 ) );
-		$decoded = base64_decode( $payload, true );
-
-		if ( false === $decoded ) {
-			return new WP_Error( 'oidc_decryption_failed', __( 'Invalid encrypted token payload.', 'secure-oidc-login' ) );
-		}
-
-		// Validate minimum length: IV (12 bytes) + tag (16 bytes) = 28 bytes minimum
-		if ( strlen( $decoded ) < ( self::IV_LENGTH_V1 + self::TAG_LENGTH_V1 ) ) {
-			return new WP_Error( 'oidc_decryption_failed', __( 'Encrypted token payload is too short.', 'secure-oidc-login' ) );
-		}
-
-		// Extract components from concatenated binary data
-		// Byte structure: [0-11: IV][12-27: tag][28+: ciphertext]
-		$iv         = substr( $decoded, 0, self::IV_LENGTH_V1 );
-		$tag        = substr( $decoded, self::IV_LENGTH_V1, self::TAG_LENGTH_V1 );
-		$ciphertext = substr( $decoded, self::IV_LENGTH_V1 + self::TAG_LENGTH_V1 );
-
-		try {
-			$key       = self::get_key();
-			$plaintext = openssl_decrypt( $ciphertext, self::CIPHER_V1, $key, OPENSSL_RAW_DATA, $iv, $tag );
-
-			if ( false === $plaintext ) {
-				return new WP_Error( 'oidc_decryption_failed', __( 'Failed to decrypt token.', 'secure-oidc-login' ) );
-			}
-
-			return $plaintext;
-
-		} catch ( Exception $e ) {
-			self::log_error( 'Token decryption (v1) failed: ' . $e->getMessage() );
-			return new WP_Error( 'oidc_decryption_failed', __( 'Failed to decrypt token.', 'secure-oidc-login' ) );
-		}
-	}
-
-	/**
 	 * Log an internal error message (without exposing sensitive data).
 	 *
 	 * @param string $message Message to log.
@@ -286,10 +206,6 @@ class OIDC_Token_Crypto {
 	 * from wp-config.php (AUTH_KEY, SECURE_AUTH_KEY, etc.) with the provided string.
 	 * This creates a site-specific encryption key that is not stored in the database.
 	 *
-	 * The same key is used for both Sodium ChaCha20-Poly1305 (v2) and OpenSSL
-	 * AES-256-GCM (v1) to ensure tokens encrypted with v1 can still be decrypted
-	 * after the migration to v2.
-	 *
 	 * SECURITY: If WordPress salts are rotated (e.g., after a security incident),
 	 * all previously encrypted tokens will become undecryptable. This is intentional
 	 * behavior - salt rotation should invalidate all sessions. Refer to WordPress
@@ -300,7 +216,7 @@ class OIDC_Token_Crypto {
 	private static function get_key(): string {
 		// wp_salt() creates a hash from WordPress auth salts + our string
 		$salt = wp_salt( 'secure_oidc_token' );
-		// Hash to exactly 256 bits (32 bytes) - suitable for both ChaCha20 and AES-256
+		// Hash to exactly 256 bits (32 bytes) for ChaCha20-Poly1305
 		return hash( 'sha256', $salt, true );
 	}
 }
