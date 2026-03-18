@@ -229,135 +229,19 @@ class OIDCTokenCryptoTest extends OIDCTestCase
         $this->assertSame(12, OIDC_Token_Crypto::NONCE_LENGTH_V2);
         $this->assertSame(32, OIDC_Token_Crypto::KEY_LENGTH_V2);
 
-        // Legacy constants
-        $this->assertSame('enc:v1:', OIDC_Token_Crypto::PREFIX_V1);
-        $this->assertSame('aes-256-gcm', OIDC_Token_Crypto::CIPHER_V1);
     }
 
     /**
-     * Test v1 legacy token handling when OpenSSL is available.
+     * Test decrypt_if_needed rejects legacy v1 tokens.
      */
-    public function testV1LegacyTokenDecryptionIfSupported(): void
+    public function testDecryptIfNeededRejectsV1Tokens(): void
     {
-        // Skip if OpenSSL AES-256-GCM is not available
-        if (!function_exists('openssl_encrypt') || !in_array('aes-256-gcm', openssl_get_cipher_methods(true))) {
-            $this->markTestSkipped('OpenSSL AES-256-GCM not available');
-        }
-
-        // Create a v1 encrypted token manually to test backward compatibility
-        // This simulates tokens encrypted before the Sodium migration
-        $key = hash('sha256', 'test-salt-value-for-unit-testing', true);
-        $plaintext = 'legacy-token-value';
-        $iv = random_bytes(12);
-        $tag = '';
-
-        $ciphertext = openssl_encrypt($plaintext, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag);
-        $v1Token = 'enc:v1:' . base64_encode($iv . $tag . $ciphertext);
+        $v1Token = 'enc:v1:' . base64_encode('some-encrypted-data');
 
         $result = OIDC_Token_Crypto::decrypt_if_needed($v1Token);
 
-        $this->assertSame($plaintext, $result);
-    }
-
-    /**
-     * Test decrypt_if_needed returns error for invalid v1 base64 payload.
-     */
-    public function testDecryptIfNeededReturnsErrorForInvalidV1Base64(): void
-    {
-        $invalid = 'enc:v1:not-valid-base64!!!';
-
-        $result = OIDC_Token_Crypto::decrypt_if_needed($invalid);
-
         $this->assertInstanceOf(WP_Error::class, $result);
-        $this->assertSame('oidc_decryption_failed', $result->get_error_code());
-    }
-
-    /**
-     * Test decrypt_if_needed returns error for truncated v1 payload.
-     */
-    public function testDecryptIfNeededReturnsErrorForTruncatedV1Payload(): void
-    {
-        // Create a payload shorter than required minimum (IV 12 + tag 16 = 28 bytes)
-        $shortPayload = 'enc:v1:' . base64_encode('tooshort');
-
-        $result = OIDC_Token_Crypto::decrypt_if_needed($shortPayload);
-
-        $this->assertInstanceOf(WP_Error::class, $result);
-        $this->assertSame('oidc_decryption_failed', $result->get_error_code());
-    }
-
-    /**
-     * Test decrypt_if_needed returns error for tampered v1 payload.
-     */
-    public function testDecryptIfNeededReturnsErrorForTamperedV1Payload(): void
-    {
-        // Skip if OpenSSL AES-256-GCM is not available
-        if (!function_exists('openssl_encrypt') || !in_array('aes-256-gcm', openssl_get_cipher_methods(true))) {
-            $this->markTestSkipped('OpenSSL AES-256-GCM not available');
-        }
-
-        // Create valid v1 token
-        $key = hash('sha256', 'test-salt-value-for-unit-testing', true);
-        $plaintext = 'test-token';
-        $iv = random_bytes(12);
-        $tag = '';
-
-        $ciphertext = openssl_encrypt($plaintext, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag);
-        $v1Token = 'enc:v1:' . base64_encode($iv . $tag . $ciphertext);
-
-        // Tamper with the payload
-        $tampered = $v1Token . 'tampered';
-
-        $result = OIDC_Token_Crypto::decrypt_if_needed($tampered);
-
-        $this->assertInstanceOf(WP_Error::class, $result);
-    }
-
-    /**
-     * Test v1 round-trip with complex content for backward compatibility.
-     */
-    public function testV1RoundTripWithComplexContent(): void
-    {
-        // Skip if OpenSSL AES-256-GCM is not available
-        if (!function_exists('openssl_encrypt') || !in_array('aes-256-gcm', openssl_get_cipher_methods(true))) {
-            $this->markTestSkipped('OpenSSL AES-256-GCM not available');
-        }
-
-        // Simulate complex JWT-like token
-        $plaintext = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMTIzIiwibmFtZSI6IkpvaG4ifQ.signature';
-        $key = hash('sha256', 'test-salt-value-for-unit-testing', true);
-        $iv = random_bytes(12);
-        $tag = '';
-
-        $ciphertext = openssl_encrypt($plaintext, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag);
-        $v1Token = 'enc:v1:' . base64_encode($iv . $tag . $ciphertext);
-
-        $result = OIDC_Token_Crypto::decrypt_if_needed($v1Token);
-
-        $this->assertSame($plaintext, $result);
-    }
-
-    /**
-     * Test v1 decryption with special characters.
-     */
-    public function testV1DecryptionWithSpecialCharacters(): void
-    {
-        // Skip if OpenSSL AES-256-GCM is not available
-        if (!function_exists('openssl_encrypt') || !in_array('aes-256-gcm', openssl_get_cipher_methods(true))) {
-            $this->markTestSkipped('OpenSSL AES-256-GCM not available');
-        }
-
-        $plaintext = "test\n\t\rwith special @#$%";
-        $key = hash('sha256', 'test-salt-value-for-unit-testing', true);
-        $iv = random_bytes(12);
-        $tag = '';
-
-        $ciphertext = openssl_encrypt($plaintext, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag);
-        $v1Token = 'enc:v1:' . base64_encode($iv . $tag . $ciphertext);
-
-        $result = OIDC_Token_Crypto::decrypt_if_needed($v1Token);
-
-        $this->assertSame($plaintext, $result);
+        $this->assertSame('oidc_plaintext_token_rejected', $result->get_error_code());
     }
 
     /**
@@ -511,83 +395,6 @@ class OIDCTokenCryptoTest extends OIDCTestCase
     }
 
     /**
-     * Test v1 decryption with minimal payload (edge case).
-     */
-    public function testV1DecryptionWithMinimalPayload(): void
-    {
-        // Skip if OpenSSL AES-256-GCM is not available
-        if (!function_exists('openssl_encrypt') || !in_array('aes-256-gcm', openssl_get_cipher_methods(true))) {
-            $this->markTestSkipped('OpenSSL AES-256-GCM not available');
-        }
-
-        $plaintext = 'x'; // Single character
-        $key = hash('sha256', 'test-salt-value-for-unit-testing', true);
-        $iv = random_bytes(12);
-        $tag = '';
-
-        $ciphertext = openssl_encrypt($plaintext, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag);
-        $v1Token = 'enc:v1:' . base64_encode($iv . $tag . $ciphertext);
-
-        $result = OIDC_Token_Crypto::decrypt_if_needed($v1Token);
-
-        $this->assertSame($plaintext, $result);
-    }
-
-    /**
-     * Test v1 decryption with corrupted tag fails.
-     */
-    public function testV1DecryptionWithCorruptedTagFails(): void
-    {
-        // Skip if OpenSSL AES-256-GCM is not available
-        if (!function_exists('openssl_encrypt') || !in_array('aes-256-gcm', openssl_get_cipher_methods(true))) {
-            $this->markTestSkipped('OpenSSL AES-256-GCM not available');
-        }
-
-        $plaintext = 'test-token';
-        $key = hash('sha256', 'test-salt-value-for-unit-testing', true);
-        $iv = random_bytes(12);
-        $tag = '';
-
-        $ciphertext = openssl_encrypt($plaintext, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag);
-
-        // Corrupt the tag by flipping bits
-        $corruptedTag = $tag ^ str_repeat("\xFF", strlen($tag));
-        $v1Token = 'enc:v1:' . base64_encode($iv . $corruptedTag . $ciphertext);
-
-        $result = OIDC_Token_Crypto::decrypt_if_needed($v1Token);
-
-        $this->assertInstanceOf(WP_Error::class, $result);
-        $this->assertSame('oidc_decryption_failed', $result->get_error_code());
-    }
-
-    /**
-     * Test v1 decryption with corrupted ciphertext fails.
-     */
-    public function testV1DecryptionWithCorruptedCiphertextFails(): void
-    {
-        // Skip if OpenSSL AES-256-GCM is not available
-        if (!function_exists('openssl_encrypt') || !in_array('aes-256-gcm', openssl_get_cipher_methods(true))) {
-            $this->markTestSkipped('OpenSSL AES-256-GCM not available');
-        }
-
-        $plaintext = 'test-token';
-        $key = hash('sha256', 'test-salt-value-for-unit-testing', true);
-        $iv = random_bytes(12);
-        $tag = '';
-
-        $ciphertext = openssl_encrypt($plaintext, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag);
-
-        // Corrupt the ciphertext
-        $corruptedCiphertext = 'corrupted' . substr($ciphertext, 9);
-        $v1Token = 'enc:v1:' . base64_encode($iv . $tag . $corruptedCiphertext);
-
-        $result = OIDC_Token_Crypto::decrypt_if_needed($v1Token);
-
-        $this->assertInstanceOf(WP_Error::class, $result);
-        $this->assertSame('oidc_decryption_failed', $result->get_error_code());
-    }
-
-    /**
      * Test v2 decryption with corrupted nonce doesn't return original plaintext.
      *
      * When the nonce is corrupted, AEAD authentication should fail.
@@ -678,22 +485,6 @@ class OIDCTokenCryptoTest extends OIDCTestCase
     }
 
     /**
-     * Test v1 token with exact minimum length (IV + tag only, no ciphertext).
-     */
-    public function testV1TokenWithExactMinimumLength(): void
-    {
-        // 12 bytes IV + 16 bytes tag = 28 bytes minimum
-        $minPayload = str_repeat('x', 28);
-        $v1Token = 'enc:v1:' . base64_encode($minPayload);
-
-        $result = OIDC_Token_Crypto::decrypt_if_needed($v1Token);
-
-        // Should fail decryption (invalid content) but not fail length check
-        $this->assertInstanceOf(WP_Error::class, $result);
-        $this->assertSame('oidc_decryption_failed', $result->get_error_code());
-    }
-
-    /**
      * Test v2 token with exact minimum length (nonce + tag only).
      *
      * A 28-byte payload (12 nonce + 16 tag with empty ciphertext) passes the
@@ -716,21 +507,6 @@ class OIDCTokenCryptoTest extends OIDCTestCase
             // it should at least be empty or garbage, not a valid token
             $this->assertTrue(strlen($result) === 0 || $result === false);
         }
-    }
-
-    /**
-     * Test v1 payload with only IV (too short).
-     */
-    public function testV1PayloadWithOnlyIvTooShort(): void
-    {
-        // Only 12 bytes (IV only, no tag)
-        $shortPayload = str_repeat('x', 12);
-        $v1Token = 'enc:v1:' . base64_encode($shortPayload);
-
-        $result = OIDC_Token_Crypto::decrypt_if_needed($v1Token);
-
-        $this->assertInstanceOf(WP_Error::class, $result);
-        $this->assertSame('oidc_decryption_failed', $result->get_error_code());
     }
 
     /**
@@ -760,37 +536,4 @@ class OIDCTokenCryptoTest extends OIDCTestCase
         $this->assertStringContainsString('log in again', $result->get_error_message());
     }
 
-    /**
-     * Test v1 and v2 tokens produce different encrypted outputs for same input.
-     */
-    public function testV1AndV2ProduceDifferentOutputsForSameInput(): void
-    {
-        // Skip if OpenSSL AES-256-GCM is not available
-        if (!function_exists('openssl_encrypt') || !in_array('aes-256-gcm', openssl_get_cipher_methods(true))) {
-            $this->markTestSkipped('OpenSSL AES-256-GCM not available');
-        }
-
-        $plaintext = 'test-token';
-
-        // Create v1 token
-        $key = hash('sha256', 'test-salt-value-for-unit-testing', true);
-        $iv = random_bytes(12);
-        $tag = '';
-        $ciphertext = openssl_encrypt($plaintext, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag);
-        $v1Token = 'enc:v1:' . base64_encode($iv . $tag . $ciphertext);
-
-        // Create v2 token
-        $v2Token = OIDC_Token_Crypto::encrypt($plaintext);
-
-        // Different prefixes
-        $this->assertStringStartsWith('enc:v1:', $v1Token);
-        $this->assertStringStartsWith('enc:v2:', $v2Token);
-
-        // Both should decrypt to same plaintext
-        $decrypted1 = OIDC_Token_Crypto::decrypt_if_needed($v1Token);
-        $decrypted2 = OIDC_Token_Crypto::decrypt_if_needed($v2Token);
-
-        $this->assertSame($plaintext, $decrypted1);
-        $this->assertSame($plaintext, $decrypted2);
-    }
 }
