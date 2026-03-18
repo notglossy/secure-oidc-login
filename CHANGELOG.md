@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-03-18
+
+### Fixed
+- Validate `id_token` during token refresh per OIDC Core Section 12.2 (#52)
+
+### Changed
+- Removed legacy OpenSSL v1 encryption backward compatibility (#53)
+- Improved code documentation
+
 ## [1.2.0] - 2026-02-07
 
 ### Added
@@ -162,7 +171,8 @@ First stable release. Comprehensive security audit completed with no critical or
 - Flexible email verification
 - PHPStan level 6 compliance
 
-[Unreleased]: https://github.com/notglossy/secure-oidc-login/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/notglossy/secure-oidc-login/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/notglossy/secure-oidc-login/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/notglossy/secure-oidc-login/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/notglossy/secure-oidc-login/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/notglossy/secure-oidc-login/compare/v0.6.0-beta...v1.0.0
