@@ -1437,6 +1437,146 @@ class OIDCClientTest extends OIDCTestCase
     }
 
     /**
+     * Test get_hash_params_for_alg returns correct params for all supported algorithms.
+     */
+    public function testGetHashParamsForAlg(): void
+    {
+        $reflection = new \ReflectionMethod(OIDC_Client::class, 'get_hash_params_for_alg');
+        $reflection->setAccessible(true);
+
+        // *256 algorithms → SHA-256, 16 bytes
+        foreach (['RS256', 'ES256', 'PS256'] as $alg) {
+            $result = $reflection->invoke(null, $alg);
+            $this->assertSame(['sha256', 16], $result, "Algorithm $alg should use SHA-256");
+        }
+
+        // *384 algorithms → SHA-384, 24 bytes
+        foreach (['RS384', 'ES384', 'PS384'] as $alg) {
+            $result = $reflection->invoke(null, $alg);
+            $this->assertSame(['sha384', 24], $result, "Algorithm $alg should use SHA-384");
+        }
+
+        // *512 algorithms → SHA-512, 32 bytes
+        foreach (['RS512', 'ES512', 'PS512'] as $alg) {
+            $result = $reflection->invoke(null, $alg);
+            $this->assertSame(['sha512', 32], $result, "Algorithm $alg should use SHA-512");
+        }
+
+        // EdDSA → SHA-512, 32 bytes
+        $result = $reflection->invoke(null, 'EdDSA');
+        $this->assertSame(['sha512', 32], $result, 'EdDSA should use SHA-512');
+    }
+
+    /**
+     * Test validate_id_token accepts valid at_hash with RS384 (SHA-384).
+     */
+    public function testValidateIdTokenAcceptsValidAtHashWithRS384(): void
+    {
+        $accessToken = 'test-access-token-value';
+        $atHash = rtrim(strtr(base64_encode(substr(hash('sha384', $accessToken, true), 0, 24)), '+/', '-_'), '=');
+
+        $client = $this->createClientWithStubbedJwt([
+            '__jwt_alg' => 'RS384',
+            'sub' => 'user-123',
+            'iss' => 'https://idp.example.com',
+            'aud' => 'test-client-id',
+            'at_hash' => $atHash,
+        ]);
+
+        $result = $client->validate_id_token('fake.jwt.token', null, null, $accessToken);
+
+        $this->assertIsArray($result);
+        $this->assertSame('user-123', $result['sub']);
+    }
+
+    /**
+     * Test validate_id_token accepts valid at_hash with RS512 (SHA-512).
+     */
+    public function testValidateIdTokenAcceptsValidAtHashWithRS512(): void
+    {
+        $accessToken = 'test-access-token-value';
+        $atHash = rtrim(strtr(base64_encode(substr(hash('sha512', $accessToken, true), 0, 32)), '+/', '-_'), '=');
+
+        $client = $this->createClientWithStubbedJwt([
+            '__jwt_alg' => 'RS512',
+            'sub' => 'user-123',
+            'iss' => 'https://idp.example.com',
+            'aud' => 'test-client-id',
+            'at_hash' => $atHash,
+        ]);
+
+        $result = $client->validate_id_token('fake.jwt.token', null, null, $accessToken);
+
+        $this->assertIsArray($result);
+        $this->assertSame('user-123', $result['sub']);
+    }
+
+    /**
+     * Test validate_id_token rejects SHA-256 at_hash when algorithm is RS384.
+     *
+     * If the JWT is signed with RS384 but at_hash was computed with SHA-256,
+     * validation should fail because the hash algorithm doesn't match.
+     */
+    public function testValidateIdTokenRejectsSha256AtHashWithRS384(): void
+    {
+        $accessToken = 'test-access-token-value';
+        // Compute at_hash with wrong algorithm (SHA-256 instead of SHA-384)
+        $wrongAtHash = rtrim(strtr(base64_encode(substr(hash('sha256', $accessToken, true), 0, 16)), '+/', '-_'), '=');
+
+        $client = $this->createClientWithStubbedJwt([
+            '__jwt_alg' => 'RS384',
+            'sub' => 'user-123',
+            'iss' => 'https://idp.example.com',
+            'aud' => 'test-client-id',
+            'at_hash' => $wrongAtHash,
+        ]);
+
+        $result = $client->validate_id_token('fake.jwt.token', null, null, $accessToken);
+
+        $this->assertInstanceOf(\WP_Error::class, $result);
+        $this->assertSame('invalid_at_hash', $result->get_error_code());
+    }
+
+    /**
+     * Test validate_id_token accepts valid c_hash with RS384 (SHA-384).
+     */
+    public function testValidateIdTokenAcceptsValidCHashWithRS384(): void
+    {
+        $authCode = 'test-authorization-code';
+        $cHash = rtrim(strtr(base64_encode(substr(hash('sha384', $authCode, true), 0, 24)), '+/', '-_'), '=');
+
+        $client = $this->createClientWithStubbedJwt([
+            '__jwt_alg' => 'RS384',
+            'sub' => 'user-123',
+            'iss' => 'https://idp.example.com',
+            'aud' => 'test-client-id',
+            'c_hash' => $cHash,
+        ]);
+
+        $result = $client->validate_id_token('fake.jwt.token', null, $authCode);
+
+        $this->assertIsArray($result);
+        $this->assertSame('user-123', $result['sub']);
+    }
+
+    /**
+     * Test validate_id_token does not leak __jwt_alg into returned claims.
+     */
+    public function testValidateIdTokenStripsJwtAlgFromClaims(): void
+    {
+        $client = $this->createClientWithStubbedJwt([
+            'sub' => 'user-123',
+            'iss' => 'https://idp.example.com',
+            'aud' => 'test-client-id',
+        ]);
+
+        $result = $client->validate_id_token('fake.jwt.token');
+
+        $this->assertIsArray($result);
+        $this->assertArrayNotHasKey('__jwt_alg', $result);
+    }
+
+    /**
      * Test that nonce validation is case-sensitive.
      */
     public function testNonceValidationIsCaseSensitive(): void
@@ -2219,7 +2359,7 @@ class OIDCClientTest extends OIDCTestCase
 
             protected function decode_and_verify_jwt(string $jwt, bool $retry = true): array|\WP_Error
             {
-                return $this->stubbedClaims;
+                return array_merge(['__jwt_alg' => 'RS256'], $this->stubbedClaims);
             }
         };
     }

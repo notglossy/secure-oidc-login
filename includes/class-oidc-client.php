@@ -84,6 +84,34 @@ class OIDC_Client {
 	);
 
 	/**
+	 * Get the hash algorithm and left-half byte count for a JWT signing algorithm.
+	 *
+	 * Per OIDC Core Section 3.3.2.11, the hash used for at_hash and c_hash must
+	 * correspond to the alg header parameter of the ID token's JOSE header:
+	 *   - *256 algorithms → SHA-256, left 128 bits (16 bytes)
+	 *   - *384 algorithms → SHA-384, left 192 bits (24 bytes)
+	 *   - *512 algorithms → SHA-512, left 256 bits (32 bytes)
+	 *
+	 * @param string $alg The JWT signing algorithm (e.g., 'RS256', 'ES384', 'PS512', 'EdDSA').
+	 * @return array{0: string, 1: int} Array of [hash_algorithm, left_half_bytes].
+	 */
+	private static function get_hash_params_for_alg( string $alg ): array {
+		if ( preg_match( '/(\d{3})$/', $alg, $matches ) ) {
+			$bits = (int) $matches[1];
+		} elseif ( 'EdDSA' === $alg ) {
+			$bits = 512; // Ed25519 uses SHA-512 internally
+		} else {
+			$bits = 256; // Safe default
+		}
+
+		return match ( $bits ) {
+			384 => array( 'sha384', 24 ),
+			512 => array( 'sha512', 32 ),
+			default => array( 'sha256', 16 ),
+		};
+	}
+
+	/**
 	 * Initialize the client with plugin settings.
 	 */
 	public function __construct() {
@@ -297,6 +325,10 @@ class OIDC_Client {
 			return $claims;
 		}
 
+		// Extract and remove the internal JWT algorithm marker set by decode_and_verify_jwt.
+		$jwt_alg = $claims['__jwt_alg'] ?? 'RS256';
+		unset( $claims['__jwt_alg'] );
+
 		// Verify required 'sub' claim is present (OIDC Core spec 2.2)
 		if ( empty( $claims['sub'] ) ) {
 			return new WP_Error( 'oidc_error', __( 'Missing required sub claim in ID token.', 'secure-oidc-login' ) );
@@ -348,8 +380,9 @@ class OIDC_Client {
 		// not match, preventing the token from being accepted. This binds the ID token to the
 		// specific authorization code used in this exchange.
 		if ( null !== $auth_code && isset( $claims['c_hash'] ) ) {
-			// Per spec: c_hash is left-most half of SHA-256 hash, base64url encoded
-			$computed_hash = rtrim( strtr( base64_encode( substr( hash( 'sha256', $auth_code, true ), 0, 16 ) ), '+/', '-_' ), '=' );
+			// Per spec: c_hash is base64url of left-most half of hash, using the alg's hash function.
+			list( $hash_alg, $hash_len ) = self::get_hash_params_for_alg( $jwt_alg );
+			$computed_hash = rtrim( strtr( base64_encode( substr( hash( $hash_alg, $auth_code, true ), 0, $hash_len ) ), '+/', '-_' ), '=' );
 			if ( $claims['c_hash'] !== $computed_hash ) {
 				return new WP_Error( 'invalid_c_hash', 'ID token c_hash does not match authorization code' );
 			}
@@ -360,7 +393,8 @@ class OIDC_Client {
 		// preventing token substitution attacks where an attacker pairs a legitimate
 		// ID token with a different access token to get UserInfo for another user.
 		if ( null !== $access_token && isset( $claims['at_hash'] ) ) {
-			$computed_hash = rtrim( strtr( base64_encode( substr( hash( 'sha256', $access_token, true ), 0, 16 ) ), '+/', '-_' ), '=' );
+			list( $hash_alg, $hash_len ) = self::get_hash_params_for_alg( $jwt_alg );
+			$computed_hash = rtrim( strtr( base64_encode( substr( hash( $hash_alg, $access_token, true ), 0, $hash_len ) ), '+/', '-_' ), '=' );
 			if ( $claims['at_hash'] !== $computed_hash ) {
 				return new WP_Error( 'invalid_at_hash', 'ID token at_hash does not match access token' );
 			}
@@ -522,7 +556,9 @@ class OIDC_Client {
 			$decoded = JWT::decode( $jwt, $keys );
 
 			// Convert stdClass to array for consistency with existing code
-			return json_decode( json_encode( $decoded ), true );
+			$claims          = json_decode( json_encode( $decoded ), true );
+			$claims['__jwt_alg'] = $alg;
+			return $claims;
 
 		} catch ( \Firebase\JWT\SignatureInvalidException $e ) {
 			// Signature verification failed - could be due to IdP key rotation
