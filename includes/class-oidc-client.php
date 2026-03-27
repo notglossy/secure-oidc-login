@@ -382,7 +382,7 @@ class OIDC_Client {
 		if ( null !== $auth_code && isset( $claims['c_hash'] ) ) {
 			// Per spec: c_hash is base64url of left-most half of hash, using the alg's hash function.
 			list( $hash_alg, $hash_len ) = self::get_hash_params_for_alg( $jwt_alg );
-			$computed_hash = rtrim( strtr( base64_encode( substr( hash( $hash_alg, $auth_code, true ), 0, $hash_len ) ), '+/', '-_' ), '=' );
+			$computed_hash               = rtrim( strtr( base64_encode( substr( hash( $hash_alg, $auth_code, true ), 0, $hash_len ) ), '+/', '-_' ), '=' );
 			if ( $claims['c_hash'] !== $computed_hash ) {
 				return new WP_Error( 'invalid_c_hash', 'ID token c_hash does not match authorization code' );
 			}
@@ -394,7 +394,7 @@ class OIDC_Client {
 		// ID token with a different access token to get UserInfo for another user.
 		if ( null !== $access_token && isset( $claims['at_hash'] ) ) {
 			list( $hash_alg, $hash_len ) = self::get_hash_params_for_alg( $jwt_alg );
-			$computed_hash = rtrim( strtr( base64_encode( substr( hash( $hash_alg, $access_token, true ), 0, $hash_len ) ), '+/', '-_' ), '=' );
+			$computed_hash               = rtrim( strtr( base64_encode( substr( hash( $hash_alg, $access_token, true ), 0, $hash_len ) ), '+/', '-_' ), '=' );
 			if ( $claims['at_hash'] !== $computed_hash ) {
 				return new WP_Error( 'invalid_at_hash', 'ID token at_hash does not match access token' );
 			}
@@ -556,7 +556,7 @@ class OIDC_Client {
 			$decoded = JWT::decode( $jwt, $keys );
 
 			// Convert stdClass to array for consistency with existing code
-			$claims          = json_decode( json_encode( $decoded ), true );
+			$claims              = json_decode( json_encode( $decoded ), true );
 			$claims['__jwt_alg'] = $alg;
 			return $claims;
 
