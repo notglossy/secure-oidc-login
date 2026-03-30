@@ -63,7 +63,10 @@ class OIDC_Token_Crypto {
 	 */
 	public static function encrypt( string $plaintext ): string|WP_Error {
 		if ( '' === $plaintext ) {
-			return '';
+			return new WP_Error(
+				'oidc_encrypt_empty_input',
+				__( 'Cannot encrypt an empty string.', 'secure-oidc-login' )
+			);
 		}
 
 		if ( ! self::is_supported() ) {
@@ -118,7 +121,10 @@ class OIDC_Token_Crypto {
 	 */
 	public static function decrypt_if_needed( string $value ): string|WP_Error {
 		if ( '' === $value ) {
-			return '';
+			return new WP_Error(
+				'oidc_decrypt_empty_input',
+				__( 'Cannot decrypt an empty string.', 'secure-oidc-login' )
+			);
 		}
 
 		// Route to appropriate decryption method based on version prefix

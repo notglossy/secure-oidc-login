@@ -42,13 +42,14 @@ class OIDCTokenCryptoTest extends OIDCTestCase
     }
 
     /**
-     * Test encrypt returns empty string for empty input.
+     * Test encrypt returns WP_Error for empty input.
      */
-    public function testEncryptReturnsEmptyStringForEmptyInput(): void
+    public function testEncryptReturnsWpErrorForEmptyInput(): void
     {
         $result = OIDC_Token_Crypto::encrypt('');
 
-        $this->assertSame('', $result);
+        $this->assertInstanceOf(\WP_Error::class, $result);
+        $this->assertSame('oidc_encrypt_empty_input', $result->get_error_code());
     }
 
     /**
@@ -78,13 +79,14 @@ class OIDCTokenCryptoTest extends OIDCTestCase
     }
 
     /**
-     * Test decrypt_if_needed returns empty string for empty input.
+     * Test decrypt_if_needed returns WP_Error for empty input.
      */
-    public function testDecryptIfNeededReturnsEmptyStringForEmptyInput(): void
+    public function testDecryptIfNeededReturnsWpErrorForEmptyInput(): void
     {
         $result = OIDC_Token_Crypto::decrypt_if_needed('');
 
-        $this->assertSame('', $result);
+        $this->assertInstanceOf(\WP_Error::class, $result);
+        $this->assertSame('oidc_decrypt_empty_input', $result->get_error_code());
     }
 
     /**
