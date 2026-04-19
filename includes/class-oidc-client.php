@@ -182,7 +182,7 @@ class OIDC_Client {
 		$token_params = array(
 			'grant_type'   => 'authorization_code',  // Specifies the grant type being used
 			'code'         => $code,                 // The authorization code received from the IdP redirect
-			'redirect_uri' => $this->get_callback_url(), // Must match the redirect URI from the auth request
+			'redirect_uri' => Secure_OIDC_Login::get_callback_url(), // Must match the redirect URI from the auth request
 		);
 
 		// HTTP headers for the token request
@@ -1030,14 +1030,5 @@ class OIDC_Client {
 		}
 
 		return $config;
-	}
-
-	/**
-	 * Get the OIDC callback URL for this site.
-	 *
-	 * @return string The callback URL.
-	 */
-	private function get_callback_url(): string {
-		return add_query_arg( 'oidc_callback', '1', home_url( '/' ) );
 	}
 }
