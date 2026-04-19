@@ -1116,8 +1116,8 @@ class OIDC_Admin {
 		// state backups. Render an empty input with a placeholder when a value
 		// is already stored; sanitize_settings() preserves the existing value
 		// when the submitted field is empty.
-		$displayed_value   = $is_credential_field ? '' : $value;
-		$placeholder_attr  = '';
+		$displayed_value  = $is_credential_field ? '' : $value;
+		$placeholder_attr = '';
 		if ( $is_credential_field && '' !== $value ) {
 			$placeholder_attr = ' placeholder="' . esc_attr( '••••••••••••' ) . '"';
 		}
