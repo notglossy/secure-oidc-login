@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-04-19
+
+### Security
+- Use JWT alg-appropriate hash for `at_hash` and `c_hash` validation (#54)
+- Prevent `client_secret` leakage in admin form and preserve on empty submission (#58)
+- Validate `azp` claim whenever present, not only on multi-audience tokens (#59)
+
+### Fixed
+- Return `WP_Error` for empty input in `encrypt()` and `decrypt_if_needed()` (#55)
+- Unslash OIDC callback `$_GET` parameters before sanitization (#57)
+- Fix CSS escaping and mismatched HTML tags on the login page (#60)
+
+### Changed
+- Remove remaining legacy OpenSSL v1 encryption decrypt path; v1 tokens now trigger re-authentication (#56)
+- Consolidate callback URL generation to `Secure_OIDC_Login::get_callback_url()` (#61)
+- Remove unused OIDC value object classes (#62)
+
 ## [1.3.0] - 2026-03-18
 
 ### Fixed
@@ -171,7 +188,8 @@ First stable release. Comprehensive security audit completed with no critical or
 - Flexible email verification
 - PHPStan level 6 compliance
 
-[Unreleased]: https://github.com/notglossy/secure-oidc-login/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/notglossy/secure-oidc-login/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/notglossy/secure-oidc-login/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/notglossy/secure-oidc-login/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/notglossy/secure-oidc-login/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/notglossy/secure-oidc-login/compare/v1.0.0...v1.1.0
