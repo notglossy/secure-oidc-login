@@ -595,6 +595,122 @@ class OIDCAdminTest extends OIDCTestCase
     }
 
     /**
+     * Test render_password_field never emits the stored client_secret value into the DOM.
+     */
+    public function testRenderPasswordFieldDoesNotLeakStoredClientSecret(): void
+    {
+        Functions\when('get_option')->justReturn(['client_secret' => 'super-secret-value']);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+        Functions\when('esc_html__')->alias(fn($v, $d) => $v);
+        Functions\when('__')->alias(fn($v, $d) => $v);
+
+        putenv('SECURE_OIDC_ALLOW_UNSAFE=true');
+        putenv('SECURE_OIDC_CLIENT_SECRET');
+
+        ob_start();
+        $this->admin->render_password_field(['field' => 'client_secret']);
+        $output = ob_get_clean();
+
+        // The stored value must never appear in the rendered input.
+        $this->assertStringNotContainsString('super-secret-value', $output);
+        $this->assertStringContainsString('value=""', $output);
+        // A placeholder signals that a value is already stored.
+        $this->assertStringContainsString('placeholder="', $output);
+
+        putenv('SECURE_OIDC_ALLOW_UNSAFE');
+    }
+
+    /**
+     * Test render_password_field omits placeholder when no client_secret is stored.
+     */
+    public function testRenderPasswordFieldOmitsPlaceholderWhenNoStoredSecret(): void
+    {
+        Functions\when('get_option')->justReturn([]);
+        Functions\when('esc_attr')->alias(fn($v) => $v);
+        Functions\when('esc_html')->alias(fn($v) => $v);
+        Functions\when('esc_html__')->alias(fn($v, $d) => $v);
+        Functions\when('__')->alias(fn($v, $d) => $v);
+
+        putenv('SECURE_OIDC_ALLOW_UNSAFE=true');
+        putenv('SECURE_OIDC_CLIENT_SECRET');
+
+        ob_start();
+        $this->admin->render_password_field(['field' => 'client_secret']);
+        $output = ob_get_clean();
+
+        $this->assertStringContainsString('value=""', $output);
+        $this->assertStringNotContainsString('placeholder="', $output);
+
+        putenv('SECURE_OIDC_ALLOW_UNSAFE');
+    }
+
+    /**
+     * Test sanitize_settings preserves existing client_secret when submitted value is empty.
+     *
+     * The admin form intentionally renders an empty input for client_secret so
+     * the stored value is never echoed into the DOM. Saving the form without
+     * re-entering the secret must therefore keep the existing value instead
+     * of wiping it.
+     */
+    public function testSanitizeSettingsPreservesClientSecretOnEmptySubmission(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'client_id' => 'existing-client-id',
+            'client_secret' => 'existing-client-secret',
+        ]);
+        Functions\when('current_user_can')->justReturn(true);
+        Functions\when('wp_verify_nonce')->justReturn(true);
+
+        putenv('SECURE_OIDC_ALLOW_UNSAFE=true');
+        putenv('SECURE_OIDC_CLIENT_ID');
+        putenv('SECURE_OIDC_CLIENT_SECRET');
+
+        $_POST['_wpnonce'] = 'valid-nonce';
+
+        $input = [
+            'client_id' => 'existing-client-id',
+            'client_secret' => '',
+        ];
+
+        $result = $this->admin->sanitize_settings($input);
+
+        $this->assertSame('existing-client-secret', $result['client_secret']);
+
+        putenv('SECURE_OIDC_ALLOW_UNSAFE');
+    }
+
+    /**
+     * Test sanitize_settings replaces client_secret when a new non-empty value is submitted.
+     */
+    public function testSanitizeSettingsReplacesClientSecretOnNonEmptySubmission(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'client_id' => 'existing-client-id',
+            'client_secret' => 'existing-client-secret',
+        ]);
+        Functions\when('current_user_can')->justReturn(true);
+        Functions\when('wp_verify_nonce')->justReturn(true);
+
+        putenv('SECURE_OIDC_ALLOW_UNSAFE=true');
+        putenv('SECURE_OIDC_CLIENT_ID');
+        putenv('SECURE_OIDC_CLIENT_SECRET');
+
+        $_POST['_wpnonce'] = 'valid-nonce';
+
+        $input = [
+            'client_id' => 'existing-client-id',
+            'client_secret' => 'rotated-client-secret',
+        ];
+
+        $result = $this->admin->sanitize_settings($input);
+
+        $this->assertSame('rotated-client-secret', $result['client_secret']);
+
+        putenv('SECURE_OIDC_ALLOW_UNSAFE');
+    }
+
+    /**
      * Test sanitize_settings preserves existing credentials when unsafe mode disabled.
      */
     public function testSanitizeSettingsPreservesExistingCredentialsWithoutUnsafeMode(): void
