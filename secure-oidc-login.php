@@ -241,10 +241,9 @@ class Secure_OIDC_Login {
 			?>
 			<div style="margin: 20px 0; text-align: center;">
 				<p style="margin-bottom: 10px;"><?php echo esc_html__( 'Or', 'secure-oidc-login' ); ?></p>
-					<a href="<?php echo esc_url( $login_url ); ?>" class="button button-primary button-large" style="width: 100%;">
-						<?php echo esc_html( $button_text ); ?>
-					</a>
-				</p>
+				<a href="<?php echo esc_url( $login_url ); ?>" class="button button-primary button-large" style="width: 100%;">
+					<?php echo esc_html( $button_text ); ?>
+				</a>
 			</div>
 			<?php
 		}
@@ -328,9 +327,18 @@ class Secure_OIDC_Login {
 				display: none !important;
 			}
 
+			<?php
+			// Strip characters that could break out of the CSS string literal
+			// or the surrounding <style> block (backslashes, quotes, newlines, '<').
+			$sso_message = str_replace(
+				array( '\\', '"', "'", "\r", "\n", '<' ),
+				'',
+				__( 'Single Sign-On authentication is required.', 'secure-oidc-login' )
+			);
+			?>
 			/* Add message above the form */
 			#loginform::before {
-				content: "<?php echo esc_js( __( 'Single Sign-On authentication is required.', 'secure-oidc-login' ) ); ?>";
+				content: "<?php echo $sso_message; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- sanitized above for CSS context ?>";
 				display: block;
 				text-align: center;
 				margin-bottom: 20px;
