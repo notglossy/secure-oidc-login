@@ -357,11 +357,14 @@ class OIDC_Client {
 			return new WP_Error( 'oidc_error', __( 'Invalid token audience.', 'secure-oidc-login' ) );
 		}
 
-		// If multiple audiences, verify azp claim matches client_id (OIDC Core spec 3.1.3.7)
-		if ( count( $aud ) > 1 ) {
-			if ( empty( $claims['azp'] ) || $claims['azp'] !== $client_id ) {
-				return new WP_Error( 'oidc_error', __( 'Invalid or missing azp claim for multi-audience token.', 'secure-oidc-login' ) );
-			}
+		// If multiple audiences, the azp claim MUST be present (OIDC Core spec 3.1.3.7, step 5).
+		if ( count( $aud ) > 1 && empty( $claims['azp'] ) ) {
+			return new WP_Error( 'oidc_error', __( 'Invalid or missing azp claim for multi-audience token.', 'secure-oidc-login' ) );
+		}
+
+		// If the azp claim is present, it MUST match client_id (OIDC Core spec 3.1.3.7, step 6).
+		if ( isset( $claims['azp'] ) && $claims['azp'] !== $client_id ) {
+			return new WP_Error( 'oidc_error', __( 'Invalid azp claim.', 'secure-oidc-login' ) );
 		}
 
 		// Validate nonce to prevent replay attacks (OIDC Core spec 3.1.3.7)
