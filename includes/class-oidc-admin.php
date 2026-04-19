@@ -687,6 +687,16 @@ class OIDC_Admin {
 					$sanitized[ $field ] = $existing_settings[ $field ] ?? '';
 					continue;
 				}
+
+				// The admin form never renders the stored client_secret into the
+				// DOM (see render_password_field). Treat an empty submission as
+				// "keep the existing value" so saving the form doesn't wipe the
+				// stored secret. Admins clear the secret explicitly via the
+				// "Remove Stored Credentials" control.
+				if ( 'client_secret' === $field && '' === $value && ! empty( $existing_settings[ $field ] ) ) {
+					$sanitized[ $field ] = $existing_settings[ $field ];
+					continue;
+				}
 			}
 
 			// Validate length if max length is defined for this field
@@ -1087,6 +1097,9 @@ class OIDC_Admin {
 			} else {
 				// Unsafe mode is enabled - show security warning
 				$description_message = __( 'Warning: Storing client secrets in the database is a security risk. Use environment variables in production.', 'secure-oidc-login' );
+				if ( '' !== $value ) {
+					$description_message .= ' ' . __( 'A value is already saved; leave this field blank to keep it, or enter a new value to replace it.', 'secure-oidc-login' );
+				}
 			}
 		}
 
@@ -1096,13 +1109,27 @@ class OIDC_Admin {
 			$autocomplete_attr = ' autocomplete="new-password"';
 		}
 
+		// SECURITY: Never render a stored credential value into the DOM. The
+		// admin page is only visible to users with manage_options, but echoing
+		// the secret into an <input value="..."> still leaks it to browser
+		// extensions, DevTools, page caches, autofill storage, and session-
+		// state backups. Render an empty input with a placeholder when a value
+		// is already stored; sanitize_settings() preserves the existing value
+		// when the submitted field is empty.
+		$displayed_value  = $is_credential_field ? '' : $value;
+		$placeholder_attr = '';
+		if ( $is_credential_field && '' !== $value ) {
+			$placeholder_attr = ' placeholder="' . esc_attr( '••••••••••••' ) . '"';
+		}
+
 		printf(
-			'<input type="password" name="secure_oidc_login_settings[%s]" value="%s" class="regular-text"%s%s%s>',
+			'<input type="password" name="secure_oidc_login_settings[%s]" value="%s" class="regular-text"%s%s%s%s>',
 			esc_attr( $field ),
-			esc_attr( $value ),
+			esc_attr( $displayed_value ),
 			$maxlength,
 			$is_disabled ? ' disabled' : '',
-			$autocomplete_attr
+			$autocomplete_attr,
+			$placeholder_attr
 		);
 
 		if ( $is_env_overridden ) {
