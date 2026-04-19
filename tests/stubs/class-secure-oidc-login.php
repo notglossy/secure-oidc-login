@@ -36,4 +36,14 @@ class Secure_OIDC_Login
         // and just return the database/options value
         return (string) ($options[$option_key] ?? '');
     }
+
+    /**
+     * Get the OIDC callback URL for this site.
+     *
+     * @return string The callback URL to be registered with the IdP.
+     */
+    public static function get_callback_url(): string
+    {
+        return add_query_arg('oidc_callback', '1', home_url('/'));
+    }
 }

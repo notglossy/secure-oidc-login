@@ -472,7 +472,7 @@ class Secure_OIDC_Login {
 		set_transient( 'oidc_code_verifier_' . $state, $code_verifier, $state_ttl );
 		$code_challenge = $this->generate_code_challenge( $code_verifier );
 
-		$redirect_uri = $this->get_callback_url();
+		$redirect_uri = self::get_callback_url();
 		$scope        = 'openid email profile';
 
 		if ( ! empty( $options['scope'] ) ) {
@@ -781,7 +781,7 @@ class Secure_OIDC_Login {
 	 *
 	 * @return string The callback URL to be registered with the IdP.
 	 */
-	public function get_callback_url(): string {
+	public static function get_callback_url(): string {
 		return add_query_arg( 'oidc_callback', '1', home_url( '/' ) );
 	}
 
