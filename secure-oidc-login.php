@@ -528,7 +528,7 @@ class Secure_OIDC_Login {
 			return;
 		}
 
-		$state        = sanitize_text_field( $_GET['state'] );
+		$state        = sanitize_text_field( wp_unslash( $_GET['state'] ) );
 		$stored_state = get_transient( 'oidc_state_' . $state );
 
 		if ( ! $stored_state ) {
@@ -542,9 +542,9 @@ class Secure_OIDC_Login {
 		if ( ! empty( $_GET['error'] ) ) {
 			// Keep if-then for nested condition clarity
 			if ( ! empty( $_GET['error_description'] ) ) {
-				$error_description = sanitize_text_field( $_GET['error_description'] );
+				$error_description = sanitize_text_field( wp_unslash( $_GET['error_description'] ) );
 			} else {
-				$error_description = sanitize_text_field( $_GET['error'] );
+				$error_description = sanitize_text_field( wp_unslash( $_GET['error'] ) );
 			}
 			$this->handle_error( $error_description );
 			return;
@@ -555,7 +555,7 @@ class Secure_OIDC_Login {
 			return;
 		}
 
-		$code          = sanitize_text_field( $_GET['code'] );
+		$code          = sanitize_text_field( wp_unslash( $_GET['code'] ) );
 		$code_verifier = get_transient( 'oidc_code_verifier_' . $state );
 		delete_transient( 'oidc_code_verifier_' . $state );
 
