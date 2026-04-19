@@ -67,10 +67,6 @@ require_once __DIR__ . '/stubs/class-wp-rest-server.php';
 require_once __DIR__ . '/stubs/class-secure-oidc-login.php';
 
 // Load plugin class files
-require_once dirname(__DIR__) . '/includes/class-oidc-config.php';
-require_once dirname(__DIR__) . '/includes/class-oidc-token-response.php';
-require_once dirname(__DIR__) . '/includes/class-oidc-claims.php';
-require_once dirname(__DIR__) . '/includes/class-oidc-user-info.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-token-crypto.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-admin.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-client.php';
