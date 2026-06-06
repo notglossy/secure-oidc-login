@@ -118,5 +118,9 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: build/coverage/clover.xml
-          fail_ci_if_error: true
+          # Coverage upload is observability, not a merge gate. Codecov's CLI GPG
+          # signature verification fails intermittently on ephemeral runners
+          # (codecov/codecov-action#1876); don't let that transient infra issue
+          # block PRs. The verification itself stays enabled.
+          fail_ci_if_error: false
           verbose: true
