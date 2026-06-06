@@ -208,7 +208,13 @@ class OIDC_Rate_Limiter {
 
 		// Standard REMOTE_ADDR (most reliable)
 		if ( ! empty( $_SERVER['REMOTE_ADDR'] ) ) {
-			$ip = sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ) );
+			$remote_addr = sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ) );
+			// Match the proxy-header path: only accept a syntactically valid IP, so a
+			// non-IP value (e.g. a UNIX socket path on some SAPIs) cannot become a
+			// rate-limit key. Invalid values fall through to a proxy header or 0.0.0.0.
+			if ( filter_var( $remote_addr, FILTER_VALIDATE_IP ) ) {
+				$ip = $remote_addr;
+			}
 		}
 
 		// Check for proxy headers (only if behind trusted proxy)
