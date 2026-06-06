@@ -13,14 +13,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
-          fetch-depth: 0   # full history so the diff resolves
+          fetch-depth: 0   # full history so before/base SHAs resolve
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '24'
 
       - name: Install OCR
         run: npm install -g @alibaba-group/open-code-review
@@ -35,18 +35,30 @@ jobs:
           NO_COLOR: "1"
           TERM: dumb
         run: |
+          # On a push to an existing PR (synchronize), review only what that
+          # push changed (before..head). On open/reopen, review the full PR
+          # diff against the base branch.
+          ZERO="0000000000000000000000000000000000000000"
+          if [ "${{ github.event.action }}" = "synchronize" ] && [ "${{ github.event.before }}" != "$ZERO" ]; then
+            FROM="${{ github.event.before }}"
+          else
+            FROM="origin/${{ github.event.pull_request.base.ref }}"
+          fi
+          echo "Reviewing $FROM -> ${{ github.event.pull_request.head.sha }}"
+
           ocr review \
-            --from "origin/${{ github.event.pull_request.base.ref }}" \
+            --from "$FROM" \
             --to "${{ github.event.pull_request.head.sha }}" \
             --format json \
             --audience agent \
+            --timeout 20 \
             > review.json || true
           # show it in the log for debugging
           cat review.json
 
       - name: Post inline review comments
         if: always()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
@@ -60,11 +72,17 @@ jobs:
             }
 
             const comments = Array.isArray(data.comments) ? data.comments : [];
+            const warnings = Array.isArray(data.warnings) ? data.warnings : [];
             const s = data.summary || {};
 
+            // Note any files that could not be fully reviewed (timeouts, etc.)
+            const warnNote = warnings.length > 0
+              ? `\n\n⚠️ ${warnings.length} file(s) could not be fully reviewed (e.g. timeout). Results may be incomplete.`
+              : '';
+
             const header = comments.length === 0
-              ? '## 🤖 AI Code Review\n\n✅ No issues found. Looks good.'
-              : `## 🤖 AI Code Review\n\nFound **${comments.length}** issue(s) across **${s.files_reviewed ?? '?'}** file(s).`;
+              ? '## 🤖 AI Code Review\n\n✅ No issues found in the reviewed changes.' + warnNote
+              : `## 🤖 AI Code Review\n\nFound **${comments.length}** issue(s) across **${s.files_reviewed ?? '?'}** file(s).` + warnNote;
 
             // No issues: post a summary comment and stop
             if (comments.length === 0) {
