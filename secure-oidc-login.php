@@ -553,6 +553,8 @@ class Secure_OIDC_Login {
 		$stored_state = get_transient( 'oidc_state_' . $state );
 
 		if ( ! $stored_state ) {
+			// Clear any stale binding cookie from this expired/unknown flow.
+			$this->clear_state_cookie();
 			$this->handle_error( __( 'Invalid or expired state parameter.', 'secure-oidc-login' ) );
 			return;
 		}
