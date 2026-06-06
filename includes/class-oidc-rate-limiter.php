@@ -247,6 +247,10 @@ class OIDC_Rate_Limiter {
 
 		// Fallback if no valid IP found
 		if ( empty( $ip ) ) {
+			// No usable client IP: invalid/empty REMOTE_ADDR and no trusted proxy header.
+			// Warn admins — all such requests share one rate-limit key, which fails safe
+			// (over-limiting) but signals a server/proxy misconfiguration worth fixing.
+			error_log( '[Secure OIDC Login] Could not determine client IP for rate limiting; falling back to 0.0.0.0. Check the server REMOTE_ADDR / reverse-proxy configuration.' );
 			$ip = '0.0.0.0';
 		}
 
