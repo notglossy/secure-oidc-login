@@ -893,28 +893,28 @@ class OIDC_Admin {
 	 * Render the Identity Provider settings section description.
 	 */
 	public function render_provider_section(): void {
-		echo '<p>' . __( 'Configure your OIDC identity provider settings. You can use the discovery URL to auto-populate the endpoints.', 'secure-oidc-login' ) . '</p>';
+		echo '<p>' . esc_html__( 'Configure your OIDC identity provider settings. You can use the discovery URL to auto-populate the endpoints.', 'secure-oidc-login' ) . '</p>';
 	}
 
 	/**
 	 * Render the Login settings section description.
 	 */
 	public function render_login_section(): void {
-		echo '<p>' . __( 'Configure how the OIDC login appears and behaves.', 'secure-oidc-login' ) . '</p>';
+		echo '<p>' . esc_html__( 'Configure how the OIDC login appears and behaves.', 'secure-oidc-login' ) . '</p>';
 	}
 
 	/**
 	 * Render the Token Management settings section description.
 	 */
 	public function render_token_section(): void {
-		echo '<p>' . __( 'Configure automatic token refresh and rotation security settings.', 'secure-oidc-login' ) . '</p>';
+		echo '<p>' . esc_html__( 'Configure automatic token refresh and rotation security settings.', 'secure-oidc-login' ) . '</p>';
 	}
 
 	/**
 	 * Render the User settings section description.
 	 */
 	public function render_user_section(): void {
-		echo '<p>' . __( 'Configure how OIDC users are mapped to WordPress users.', 'secure-oidc-login' ) . '</p>';
+		echo '<p>' . esc_html__( 'Configure how OIDC users are mapped to WordPress users.', 'secure-oidc-login' ) . '</p>';
 	}
 
 	/**
@@ -1029,8 +1029,8 @@ class OIDC_Admin {
 			esc_attr( $type ),
 			esc_attr( $field ),
 			esc_attr( $value ),
-			$required,
-			$maxlength,
+			$required, // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Literal 'required' or '' set above; no dynamic data.
+			$maxlength, // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Attribute string pre-escaped with esc_attr() above.
 			$is_disabled ? ' disabled' : ''
 		);
 
@@ -1126,10 +1126,10 @@ class OIDC_Admin {
 			'<input type="password" name="secure_oidc_login_settings[%s]" value="%s" class="regular-text"%s%s%s%s>',
 			esc_attr( $field ),
 			esc_attr( $displayed_value ),
-			$maxlength,
+			$maxlength, // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Attribute string pre-escaped with esc_attr() above.
 			$is_disabled ? ' disabled' : '',
-			$autocomplete_attr,
-			$placeholder_attr
+			$autocomplete_attr, // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Literal ' autocomplete="new-password"' or '' set above.
+			$placeholder_attr // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Attribute string pre-escaped with esc_attr() above.
 		);
 
 		if ( $is_env_overridden ) {
@@ -1182,7 +1182,7 @@ class OIDC_Admin {
 		printf(
 			'<input type="checkbox" name="secure_oidc_login_settings[%s]" value="1" %s%s>',
 			esc_attr( $field ),
-			$checked,
+			$checked, // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Literal 'checked' or '' set above; no dynamic data.
 			$is_env_overridden ? ' disabled' : ''
 		);
 
@@ -1230,8 +1230,8 @@ class OIDC_Admin {
 				'<label><input type="radio" name="secure_oidc_login_settings[%s]" value="%s" %s%s> %s</label><br>',
 				esc_attr( $field ),
 				esc_attr( $option_value ),
-				$checked,
-				$disabled,
+				$checked, // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Output of WP checked() helper, already safe.
+				$disabled, // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Literal ' disabled' or '' set above; no dynamic data.
 				esc_html( $label )
 			);
 		}

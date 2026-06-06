@@ -208,7 +208,7 @@ class OIDC_Rate_Limiter {
 
 		// Standard REMOTE_ADDR (most reliable)
 		if ( ! empty( $_SERVER['REMOTE_ADDR'] ) ) {
-			$ip = $_SERVER['REMOTE_ADDR'];
+			$ip = sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ) );
 		}
 
 		// Check for proxy headers (only if behind trusted proxy)
@@ -227,7 +227,7 @@ class OIDC_Rate_Limiter {
 			foreach ( $proxy_headers as $header ) {
 				if ( ! empty( $_SERVER[ $header ] ) ) {
 					// X-Forwarded-For can contain multiple IPs, take the first (client IP)
-					$forwarded_ips = explode( ',', $_SERVER[ $header ] );
+					$forwarded_ips = explode( ',', sanitize_text_field( wp_unslash( $_SERVER[ $header ] ) ) );
 					$forwarded_ip  = trim( $forwarded_ips[0] );
 
 					// Validate it's a real IP address
