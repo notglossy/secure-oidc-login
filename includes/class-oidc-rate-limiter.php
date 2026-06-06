@@ -250,7 +250,13 @@ class OIDC_Rate_Limiter {
 			// No usable client IP: invalid/empty REMOTE_ADDR and no trusted proxy header.
 			// Warn admins — all such requests share one rate-limit key, which fails safe
 			// (over-limiting) but signals a server/proxy misconfiguration worth fixing.
-			error_log( '[Secure OIDC Login] Could not determine client IP for rate limiting; falling back to 0.0.0.0. Check the server REMOTE_ADDR / reverse-proxy configuration.' );
+			// Throttle to once per hour: get_client_ip() runs on every rate-limit
+			// operation, so an unthrottled warning would flood the log while a server
+			// stays misconfigured.
+			if ( false === get_transient( 'oidc_ip_resolve_warning' ) ) {
+				error_log( '[Secure OIDC Login] Could not determine client IP for rate limiting; falling back to 0.0.0.0. Check the server REMOTE_ADDR / reverse-proxy configuration.' );
+				set_transient( 'oidc_ip_resolve_warning', 1, HOUR_IN_SECONDS );
+			}
 			$ip = '0.0.0.0';
 		}
 
