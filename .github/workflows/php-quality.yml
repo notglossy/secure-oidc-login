@@ -15,16 +15,16 @@ on:
 jobs:
   phpcs:
     name: PHPCS Code Standards
-    runs-on: ubuntu-latest
+    runs-on: code-review
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.1'
+          php-version: '8.2'
           coverage: none
           tools: composer
 
@@ -47,16 +47,16 @@ jobs:
 
   phpstan:
     name: PHPStan Static Analysis
-    runs-on: ubuntu-latest
+    runs-on: code-review
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.1'
+          php-version: '8.2'
           coverage: none
           tools: composer
 
@@ -79,16 +79,16 @@ jobs:
 
   tests:
     name: PHPUnit Tests
-    runs-on: ubuntu-latest
+    runs-on: code-review
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.1'
+          php-version: '8.2'
           extensions: sodium, json, mbstring
           coverage: pcov
           tools: composer
@@ -98,7 +98,7 @@ jobs:
         run: echo "dir=$(composer config cache-files-dir)" >> $GITHUB_OUTPUT
 
       - name: Cache Composer dependencies
-        uses: actions/cache@v3
+        uses: actions/cache@v5
         with:
           path: ${{ steps.composer-cache.outputs.dir }}
           key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.lock') }}
@@ -114,7 +114,7 @@ jobs:
         run: composer run-script test -- --coverage-clover build/coverage/clover.xml
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: build/coverage/clover.xml
