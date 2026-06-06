@@ -30,7 +30,11 @@ class OIDC_State_Binding {
 	/**
 	 * Generate a fresh high-entropy browser-binding secret.
 	 *
-	 * @return string A 32-character alphanumeric secret.
+	 * Uses the URL/cookie-safe mixed-case alphanumeric set (a-z, A-Z, 0-9):
+	 * 32 chars over a 62-char alphabet is ~190 bits, well beyond what is needed,
+	 * while avoiding special characters that complicate cookie transport.
+	 *
+	 * @return string A 32-character mixed-case alphanumeric secret.
 	 */
 	public static function generate(): string {
 		return wp_generate_password( 32, false );
@@ -54,7 +58,10 @@ class OIDC_State_Binding {
 	 * @return bool True only when the cookie secret hashes to the stored value.
 	 */
 	public static function is_valid( $stored_hash, string $cookie_value ): bool {
-		if ( empty( $stored_hash ) || ! is_string( $stored_hash ) || '' === $cookie_value ) {
+		// Reject non-string stored values first (e.g. legacy `true` transients),
+		// then empty hash or empty cookie. Type check first makes the intent explicit
+		// and avoids empty()'s '0'-is-empty quirk (a SHA-256 hash is never empty/'0').
+		if ( ! is_string( $stored_hash ) || '' === $stored_hash || '' === $cookie_value ) {
 			return false;
 		}
 

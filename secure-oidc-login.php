@@ -837,7 +837,7 @@ class Secure_OIDC_Login {
 			array(
 				'expires'  => time() + $ttl,
 				'path'     => defined( 'COOKIEPATH' ) && COOKIEPATH ? COOKIEPATH : '/',
-				'domain'   => defined( 'COOKIE_DOMAIN' ) ? COOKIE_DOMAIN : '',
+				'domain'   => ( defined( 'COOKIE_DOMAIN' ) && COOKIE_DOMAIN ) ? COOKIE_DOMAIN : '',
 				'secure'   => is_ssl(),
 				'httponly' => true,
 				'samesite' => 'Lax',
@@ -858,7 +858,7 @@ class Secure_OIDC_Login {
 			array(
 				'expires'  => time() - 3600,
 				'path'     => defined( 'COOKIEPATH' ) && COOKIEPATH ? COOKIEPATH : '/',
-				'domain'   => defined( 'COOKIE_DOMAIN' ) ? COOKIE_DOMAIN : '',
+				'domain'   => ( defined( 'COOKIE_DOMAIN' ) && COOKIE_DOMAIN ) ? COOKIE_DOMAIN : '',
 				'secure'   => is_ssl(),
 				'httponly' => true,
 				'samesite' => 'Lax',
