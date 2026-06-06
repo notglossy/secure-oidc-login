@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/notglossy/secure-oidc-login/actions/workflows/php-quality.yml/badge.svg)](https://github.com/notglossy/secure-oidc-login/actions/workflows/php-quality.yml)
 [![codecov](https://codecov.io/gh/notglossy/secure-oidc-login/branch/main/graph/badge.svg)](https://codecov.io/gh/notglossy/secure-oidc-login)
-[![PHP 8.1+](https://img.shields.io/badge/PHP-8.1%2B-777BB4.svg)](https://php.net/)
+[![PHP 8.2+](https://img.shields.io/badge/PHP-8.2%2B-777BB4.svg)](https://php.net/)
 [![License: GPL v2+](https://img.shields.io/badge/License-GPL%20v2%2B-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/notglossy/secure-oidc-login)
 
