@@ -15,7 +15,7 @@ on:
 jobs:
   phpcs:
     name: PHPCS Code Standards
-    runs-on: code-review
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
@@ -47,7 +47,7 @@ jobs:
 
   phpstan:
     name: PHPStan Static Analysis
-    runs-on: code-review
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
@@ -79,7 +79,7 @@ jobs:
 
   tests:
     name: PHPUnit Tests
-    runs-on: code-review
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
