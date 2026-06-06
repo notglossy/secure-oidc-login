@@ -54,6 +54,7 @@ if ( ! class_exists( 'Firebase\JWT\JWT' ) ) {
 }
 
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-client.php';
+require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-state-binding.php';
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-admin.php';
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-user-handler.php';
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-token-crypto.php';
@@ -71,6 +72,13 @@ require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-token-refresh.p
  * @since 0.1.0
  */
 class Secure_OIDC_Login {
+	/**
+	 * Name of the cookie that binds the OIDC flow to the initiating browser.
+	 *
+	 * @var string
+	 */
+	const STATE_COOKIE = 'secure_oidc_state';
+
 	/** @var Secure_OIDC_Login|null Singleton instance */
 	private static $instance = null;
 
@@ -452,10 +460,15 @@ class Secure_OIDC_Login {
 		$state_ttl = $this->get_state_ttl();
 
 		// SECURITY: State parameter prevents CSRF attacks by linking the callback
-		// to this specific authorization request. Attackers cannot trick users into
-		// authenticating with an attacker-controlled account (session fixation).
-		$state = wp_generate_password( 32, false );
-		set_transient( 'oidc_state_' . $state, true, $state_ttl );
+		// to this specific authorization request. To prevent login-CSRF / forced-login
+		// (session fixation), the flow is also bound to the initiating browser: a fresh
+		// secret is set as an HttpOnly cookie and only its hash is stored server-side.
+		// On callback the flow proceeds only if the browser presents the matching cookie,
+		// so an attacker cannot trick a victim into completing the attacker's flow.
+		$state         = wp_generate_password( 32, false );
+		$state_binding = OIDC_State_Binding::generate();
+		$this->set_state_cookie( $state_binding, $state_ttl );
+		set_transient( 'oidc_state_' . $state, OIDC_State_Binding::hash( $state_binding ), $state_ttl );
 
 		// SECURITY: Nonce prevents token replay attacks. The nonce is embedded in
 		// the ID token by the IdP and must match our expected value. This ensures
@@ -540,11 +553,31 @@ class Secure_OIDC_Login {
 		$stored_state = get_transient( 'oidc_state_' . $state );
 
 		if ( ! $stored_state ) {
+			// Clear any stale binding cookie from this expired/unknown flow.
+			$this->clear_state_cookie();
 			$this->handle_error( __( 'Invalid or expired state parameter.', 'secure-oidc-login' ) );
 			return;
 		}
 
+		// SECURITY: Confirm this callback comes from the browser that initiated the
+		// flow. The state transient holds the hash of a secret that was set as an
+		// HttpOnly cookie on initiation; a forwarded callback opened in any other
+		// browser lacks that cookie and is rejected (login-CSRF / session fixation).
+		$state_cookie = isset( $_COOKIE[ self::STATE_COOKIE ] )
+			? sanitize_text_field( wp_unslash( $_COOKIE[ self::STATE_COOKIE ] ) )
+			: '';
+
+		if ( ! OIDC_State_Binding::is_valid( $stored_state, $state_cookie ) ) {
+			delete_transient( 'oidc_state_' . $state );
+			delete_transient( 'oidc_nonce_' . $state );
+			delete_transient( 'oidc_code_verifier_' . $state );
+			$this->clear_state_cookie();
+			$this->handle_error( __( 'Login could not be verified for this browser. Please try again.', 'secure-oidc-login' ) );
+			return;
+		}
+
 		delete_transient( 'oidc_state_' . $state );
+		$this->clear_state_cookie();
 
 		// Check for errors returned by the IdP
 		if ( ! empty( $_GET['error'] ) ) {
@@ -783,6 +816,54 @@ class Secure_OIDC_Login {
 	 */
 	public static function get_callback_url(): string {
 		return add_query_arg( 'oidc_callback', '1', home_url( '/' ) );
+	}
+
+	/**
+	 * Set the browser-binding cookie for the OIDC flow.
+	 *
+	 * SECURITY: SameSite=Lax (not Strict) is required so the cookie is sent on
+	 * the IdP's top-level cross-site redirect back to the callback. HttpOnly
+	 * keeps it out of JavaScript; Secure is gated on is_ssl() so HTTP dev still works.
+	 *
+	 * @since 1.3.2
+	 *
+	 * @param string $value The binding secret to store in the browser.
+	 * @param int    $ttl   Cookie lifetime in seconds (matches the state TTL).
+	 */
+	private function set_state_cookie( string $value, int $ttl ): void {
+		setcookie(
+			self::STATE_COOKIE,
+			$value,
+			array(
+				'expires'  => time() + $ttl,
+				'path'     => defined( 'COOKIEPATH' ) && COOKIEPATH ? COOKIEPATH : '/',
+				'domain'   => ( defined( 'COOKIE_DOMAIN' ) && COOKIE_DOMAIN ) ? COOKIE_DOMAIN : '',
+				'secure'   => is_ssl(),
+				'httponly' => true,
+				'samesite' => 'Lax',
+			)
+		);
+	}
+
+	/**
+	 * Clear the browser-binding cookie once the flow is consumed.
+	 *
+	 * @since 1.3.2
+	 */
+	private function clear_state_cookie(): void {
+		unset( $_COOKIE[ self::STATE_COOKIE ] );
+		setcookie(
+			self::STATE_COOKIE,
+			'',
+			array(
+				'expires'  => time() - 3600,
+				'path'     => defined( 'COOKIEPATH' ) && COOKIEPATH ? COOKIEPATH : '/',
+				'domain'   => ( defined( 'COOKIE_DOMAIN' ) && COOKIE_DOMAIN ) ? COOKIE_DOMAIN : '',
+				'secure'   => is_ssl(),
+				'httponly' => true,
+				'samesite' => 'Lax',
+			)
+		);
 	}
 
 	/**
