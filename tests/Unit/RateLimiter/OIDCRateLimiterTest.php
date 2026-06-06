@@ -535,14 +535,17 @@ class OIDCRateLimiterTest extends OIDCTestCase
     }
 
     /**
-     * Test the unresolvable-IP warning is logged at most once per window.
+     * Test the unresolvable-IP warning is logged at most once per hour.
      *
      * get_client_ip() runs on every rate-limit operation, so the fallback
-     * warning is throttled behind a transient. Force the no-IP fallback and
-     * verify two operations produce exactly one warning.
+     * warning is throttled behind a 1-hour transient. Force the no-IP fallback
+     * and verify two operations produce exactly one warning.
      */
     public function testUnresolvableIpWarningIsThrottled(): void
     {
+        // Preserve the global state this test mutates.
+        $savedServer = $_SERVER;
+
         // Remove every IP source so get_client_ip() must use the 0.0.0.0 fallback.
         unset(
             $_SERVER['REMOTE_ADDR'],
@@ -555,16 +558,19 @@ class OIDCRateLimiterTest extends OIDCTestCase
         $logFile     = tempnam(sys_get_temp_dir(), 'oidc-iplog');
         $previousLog = ini_set('error_log', $logFile);
 
-        $limiter = new OIDC_Rate_Limiter();
-        $limiter->is_rate_limited('test_action');
-        $limiter->is_rate_limited('test_action');
+        try {
+            $limiter = new OIDC_Rate_Limiter();
+            $limiter->is_rate_limited('test_action');
+            $limiter->is_rate_limited('test_action');
 
-        ini_set('error_log', $previousLog);
-        $logContents = (string) file_get_contents($logFile);
-        unlink($logFile);
-
-        $occurrences = substr_count($logContents, 'Could not determine client IP for rate limiting');
-        $this->assertSame(1, $occurrences, 'Warning should be logged once per window, not on every call');
+            $logContents = (string) file_get_contents($logFile);
+            $occurrences = substr_count($logContents, 'Could not determine client IP for rate limiting');
+            $this->assertSame(1, $occurrences, 'Warning should be logged once per hour, not on every call');
+        } finally {
+            ini_set('error_log', $previousLog);
+            unlink($logFile);
+            $_SERVER = $savedServer;
+        }
     }
 
     /**

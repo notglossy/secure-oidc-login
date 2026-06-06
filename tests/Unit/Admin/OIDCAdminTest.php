@@ -1738,8 +1738,8 @@ class OIDCAdminTest extends OIDCTestCase
     /**
      * Test the settings-section descriptions render escaped paragraph text.
      *
-     * Covers render_provider_section/login_section/token_section/user_section,
-     * which output their text via esc_html__().
+     * Covers render_provider_section, render_login_section, render_token_section,
+     * render_user_section, which output their text via esc_html__().
      */
     public function testRenderSectionDescriptionsOutputEscapedParagraphs(): void
     {
