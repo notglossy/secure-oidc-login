@@ -208,7 +208,13 @@ class OIDC_Rate_Limiter {
 
 		// Standard REMOTE_ADDR (most reliable)
 		if ( ! empty( $_SERVER['REMOTE_ADDR'] ) ) {
-			$ip = $_SERVER['REMOTE_ADDR'];
+			$remote_addr = sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ) );
+			// Match the proxy-header path: only accept a syntactically valid IP, so a
+			// non-IP value (e.g. a UNIX socket path on some SAPIs) cannot become a
+			// rate-limit key. Invalid values fall through to a proxy header or 0.0.0.0.
+			if ( filter_var( $remote_addr, FILTER_VALIDATE_IP ) ) {
+				$ip = $remote_addr;
+			}
 		}
 
 		// Check for proxy headers (only if behind trusted proxy)
@@ -227,7 +233,7 @@ class OIDC_Rate_Limiter {
 			foreach ( $proxy_headers as $header ) {
 				if ( ! empty( $_SERVER[ $header ] ) ) {
 					// X-Forwarded-For can contain multiple IPs, take the first (client IP)
-					$forwarded_ips = explode( ',', $_SERVER[ $header ] );
+					$forwarded_ips = explode( ',', sanitize_text_field( wp_unslash( $_SERVER[ $header ] ) ) );
 					$forwarded_ip  = trim( $forwarded_ips[0] );
 
 					// Validate it's a real IP address
@@ -241,6 +247,16 @@ class OIDC_Rate_Limiter {
 
 		// Fallback if no valid IP found
 		if ( empty( $ip ) ) {
+			// No usable client IP: invalid/empty REMOTE_ADDR and no trusted proxy header.
+			// Warn admins — all such requests share one rate-limit key, which fails safe
+			// (over-limiting) but signals a server/proxy misconfiguration worth fixing.
+			// Throttle to once per hour: get_client_ip() runs on every rate-limit
+			// operation, so an unthrottled warning would flood the log while a server
+			// stays misconfigured.
+			if ( false === get_transient( 'oidc_ip_resolve_warning' ) ) {
+				error_log( '[Secure OIDC Login] Could not determine client IP for rate limiting; falling back to 0.0.0.0. Check the server REMOTE_ADDR / reverse-proxy configuration.' );
+				set_transient( 'oidc_ip_resolve_warning', 1, HOUR_IN_SECONDS );
+			}
 			$ip = '0.0.0.0';
 		}
 

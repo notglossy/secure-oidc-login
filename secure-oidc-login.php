@@ -181,6 +181,7 @@ class Secure_OIDC_Login {
 		load_plugin_textdomain( 'secure-oidc-login', false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
 
 		// Handle OIDC callback from identity provider
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Routing flag only; the callback is authenticated by the state param + HttpOnly cookie binding, not a WP nonce.
 		if ( isset( $_GET['oidc_callback'] ) && $_GET['oidc_callback'] === '1' ) {
 			// Start output buffering to prevent any stray output from blocking redirects
 			// The buffer will be automatically discarded when exit is called
@@ -189,6 +190,7 @@ class Secure_OIDC_Login {
 		}
 
 		// Handle OIDC login initiation from login form
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Routing flag only; initiate_login() issues a fresh state/PKCE challenge, so a WP nonce does not apply.
 		if ( isset( $_GET['oidc_login'] ) && $_GET['oidc_login'] === '1' ) {
 			$this->initiate_login();
 		}
@@ -292,9 +294,12 @@ class Secure_OIDC_Login {
 			return false;
 		}
 
-		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- This is a feature flag, not user input
+		// Emergency bypass is gated by the server-controlled env var checked above; this is a
+		// read-only feature flag with no CSRF-sensitive side effect, so a WP nonce does not apply.
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended, WordPress.Security.NonceVerification.Missing
 		return ( isset( $_GET['native'] ) && $_GET['native'] === '1' ) ||
 				( isset( $_POST['native'] ) && $_POST['native'] === '1' );
+		// phpcs:enable WordPress.Security.NonceVerification.Recommended, WordPress.Security.NonceVerification.Missing
 	}
 
 	/**
@@ -408,12 +413,13 @@ class Secure_OIDC_Login {
 	 * @return string Updated error messages including OIDC errors.
 	 */
 	public function display_login_errors( $errors ): string {
-		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Reading error message from URL parameter
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended -- Read-only display of an error message returned in the redirect URL; no state change, so a WP nonce does not apply.
 		if ( ! empty( $_GET['oidc_error'] ) ) {
 			$oidc_error = sanitize_text_field( wp_unslash( $_GET['oidc_error'] ) );
 			$errors    .= '<strong>' . esc_html__( 'SSO Error', 'secure-oidc-login' ) . ':</strong> ';
 			$errors    .= esc_html( $oidc_error ) . '<br />';
 		}
+		// phpcs:enable WordPress.Security.NonceVerification.Recommended
 		return $errors;
 	}
 
@@ -452,7 +458,7 @@ class Secure_OIDC_Login {
 		$authorization_endpoint = self::get_setting( 'authorization_endpoint', $options );
 
 		if ( empty( $client_id ) || empty( $authorization_endpoint ) ) {
-			wp_die( __( 'OIDC is not properly configured.', 'secure-oidc-login' ) );
+			wp_die( esc_html__( 'OIDC is not properly configured.', 'secure-oidc-login' ) );
 		}
 
 		// Get state/nonce TTL from environment or use default (5 minutes)
@@ -511,7 +517,7 @@ class Secure_OIDC_Login {
 
 		$auth_url = $authorization_endpoint . '?' . http_build_query( $auth_params );
 
-		wp_redirect( $auth_url );
+		wp_redirect( $auth_url ); // phpcs:ignore WordPress.Security.SafeRedirect.wp_redirect_wp_redirect -- Redirect to the external IdP authorization endpoint; wp_safe_redirect() would reject the off-site host.
 		exit;
 	}
 
@@ -543,6 +549,11 @@ class Secure_OIDC_Login {
 		// Record this callback attempt
 		$this->rate_limiter->record_attempt( 'callback' );
 
+		// SECURITY: This callback arrives as a top-level redirect from the IdP, so it is
+		// authenticated by the `state` parameter bound to an HttpOnly cookie (validated via
+		// OIDC_State_Binding::is_valid() below), per OIDC Core 3.1.2.7 — WP nonces do not apply
+		// to the IdP redirect. Disable NonceVerification for the parameter-reading block.
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended
 		// Verify state to prevent CSRF
 		if ( empty( $_GET['state'] ) ) {
 			$this->handle_error( __( 'Missing state parameter.', 'secure-oidc-login' ) );
@@ -599,6 +610,7 @@ class Secure_OIDC_Login {
 		$code          = sanitize_text_field( wp_unslash( $_GET['code'] ) );
 		$code_verifier = get_transient( 'oidc_code_verifier_' . $state );
 		delete_transient( 'oidc_code_verifier_' . $state );
+		// phpcs:enable WordPress.Security.NonceVerification.Recommended
 
 		// Exchange authorization code for access/ID tokens
 		$tokens = $this->client->exchange_code( $code, $code_verifier );
@@ -703,12 +715,12 @@ class Secure_OIDC_Login {
 
 		// Use wp_redirect() since we've already validated the URL with wp_validate_redirect()
 		// wp_safe_redirect() can fail in some edge cases even with valid URLs
-		if ( ! wp_redirect( $redirect_url ) ) {
+		if ( ! wp_redirect( $redirect_url ) ) { // phpcs:ignore WordPress.Security.SafeRedirect.wp_redirect_wp_redirect -- URL already constrained by wp_validate_redirect() above.
 			// Fallback: If redirect fails (headers already sent), display a link
 			wp_die(
 				sprintf(
 					/* translators: %s: URL to redirect to */
-					__( 'Authentication successful. <a href="%s">Click here to continue</a>.', 'secure-oidc-login' ),
+					__( 'Authentication successful. <a href="%s">Click here to continue</a>.', 'secure-oidc-login' ), // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Hardcoded translatable string with intentional safe markup; the dynamic URL is escaped via esc_url() below.
 					esc_url( $redirect_url )
 				)
 			);
@@ -759,7 +771,7 @@ class Secure_OIDC_Login {
 
 			$logout_url = $end_session_endpoint . '?' . http_build_query( $logout_params );
 
-			wp_redirect( $logout_url );
+			wp_redirect( $logout_url ); // phpcs:ignore WordPress.Security.SafeRedirect.wp_redirect_wp_redirect -- Redirect to the external IdP end-session endpoint; wp_safe_redirect() would reject the off-site host.
 			exit;
 		}
 	}
@@ -932,12 +944,12 @@ class Secure_OIDC_Login {
 		$login_url = add_query_arg( 'oidc_error', urlencode( $message ), $login_url );
 
 		// Use wp_redirect() instead of wp_safe_redirect() since wp_login_url() is always safe
-		if ( ! wp_redirect( $login_url ) ) {
+		if ( ! wp_redirect( $login_url ) ) { // phpcs:ignore WordPress.Security.SafeRedirect.wp_redirect_wp_redirect -- Target is wp_login_url() (always same-site); see note above on wp_safe_redirect() edge cases.
 			// Fallback: If redirect fails (headers already sent), display error with link
 			wp_die(
 				sprintf(
 					/* translators: 1: Error message, 2: Login URL */
-					__( '<strong>Authentication Error:</strong> %1$s<br><br><a href="%2$s">Return to login page</a>', 'secure-oidc-login' ),
+					__( '<strong>Authentication Error:</strong> %1$s<br><br><a href="%2$s">Return to login page</a>', 'secure-oidc-login' ), // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Hardcoded translatable string with intentional safe markup; the dynamic args are escaped via esc_html()/esc_url() below.
 					esc_html( $message ),
 					esc_url( $login_url )
 				)

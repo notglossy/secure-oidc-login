@@ -38,6 +38,10 @@
 		<exclude name="WordPress.Files.FileName.InvalidClassFileName"/>
 	</rule>
 
+	<!-- Security sniffs (escaping, nonce/input validation, safe redirects).
+	     These live in WordPress-Extra, so WordPress-Core alone does not run them. -->
+	<rule ref="WordPress.Security"/>
+
 	<!-- Minimum WordPress version -->
 	<config name="minimum_wp_version" value="5.0"/>
 

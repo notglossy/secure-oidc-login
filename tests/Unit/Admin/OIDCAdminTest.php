@@ -1734,4 +1734,29 @@ class OIDCAdminTest extends OIDCTestCase
 
         unset($GLOBALS['wpdb']);
     }
+
+    /**
+     * Test the settings-section descriptions render escaped paragraph text.
+     *
+     * Covers render_provider_section, render_login_section, render_token_section,
+     * render_user_section, which output their text via esc_html__().
+     */
+    public function testRenderSectionDescriptionsOutputEscapedParagraphs(): void
+    {
+        $sections = [
+            'render_provider_section' => 'identity provider',
+            'render_login_section'    => 'OIDC login appears',
+            'render_token_section'    => 'token refresh',
+            'render_user_section'     => 'mapped to WordPress users',
+        ];
+
+        foreach ($sections as $method => $needle) {
+            ob_start();
+            $this->admin->{$method}();
+            $output = ob_get_clean();
+
+            $this->assertStringContainsString('<p>', $output, "{$method} should render a paragraph");
+            $this->assertStringContainsString($needle, $output, "{$method} should render its description text");
+        }
+    }
 }
