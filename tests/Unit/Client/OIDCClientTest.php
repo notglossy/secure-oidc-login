@@ -1577,16 +1577,126 @@ class OIDCClientTest extends OIDCTestCase
     }
 
     /**
-     * Test that nonce validation is case-sensitive.
+     * Test validate_id_token skips nonce validation when no nonce is expected.
+     *
+     * Covers the null-skip branch: when $expected_nonce is null, the nonce claim
+     * is neither required nor compared.
+     */
+    public function testValidateIdTokenSkipsNonceCheckWhenExpectedNonceIsNull(): void
+    {
+        $client = $this->createClientWithStubbedJwt([
+            'sub' => 'user-123',
+            'iss' => 'https://idp.example.com',
+            'aud' => 'test-client-id',
+            // No 'nonce' claim — must still succeed when none is expected.
+        ]);
+
+        $result = $client->validate_id_token('fake.jwt.token', null);
+
+        $this->assertIsArray($result);
+        $this->assertSame('user-123', $result['sub']);
+    }
+
+    /**
+     * Test validate_id_token rejects a token missing the nonce claim when one is expected.
+     *
+     * Covers the missing-claim branch (OIDC Core 3.1.3.7).
+     */
+    public function testValidateIdTokenRejectsMissingNonceClaim(): void
+    {
+        $client = $this->createClientWithStubbedJwt([
+            'sub' => 'user-123',
+            'iss' => 'https://idp.example.com',
+            'aud' => 'test-client-id',
+            // No 'nonce' claim, but a nonce is expected below.
+        ]);
+
+        $result = $client->validate_id_token('fake.jwt.token', 'expected-nonce-value');
+
+        $this->assertInstanceOf(\WP_Error::class, $result);
+        $this->assertSame('missing_nonce', $result->get_error_code());
+    }
+
+    /**
+     * Test validate_id_token rejects a nonce that does not match the expected value.
+     *
+     * Covers the mismatch branch — the core replay-attack defense.
+     */
+    public function testValidateIdTokenRejectsMismatchedNonce(): void
+    {
+        $client = $this->createClientWithStubbedJwt([
+            'sub' => 'user-123',
+            'iss' => 'https://idp.example.com',
+            'aud' => 'test-client-id',
+            'nonce' => 'actual-nonce-from-token',
+        ]);
+
+        $result = $client->validate_id_token('fake.jwt.token', 'different-expected-nonce');
+
+        $this->assertInstanceOf(\WP_Error::class, $result);
+        $this->assertSame('invalid_nonce', $result->get_error_code());
+    }
+
+    /**
+     * Test validate_id_token accepts a token whose nonce matches the expected value.
+     */
+    public function testValidateIdTokenAcceptsMatchingNonce(): void
+    {
+        $client = $this->createClientWithStubbedJwt([
+            'sub' => 'user-123',
+            'iss' => 'https://idp.example.com',
+            'aud' => 'test-client-id',
+            'nonce' => 'matching-nonce',
+        ]);
+
+        $result = $client->validate_id_token('fake.jwt.token', 'matching-nonce');
+
+        $this->assertIsArray($result);
+        $this->assertSame('user-123', $result['sub']);
+    }
+
+    /**
+     * Test that nonce validation is case-sensitive (strict comparison).
      */
     public function testNonceValidationIsCaseSensitive(): void
     {
-        // This is tested by verifying the method uses strict comparison
-        // Actual validation tested via validate_id_token integration
-        $nonce1 = 'TestNonce123';
-        $nonce2 = 'testnonce123';
+        $client = $this->createClientWithStubbedJwt([
+            'sub' => 'user-123',
+            'iss' => 'https://idp.example.com',
+            'aud' => 'test-client-id',
+            'nonce' => 'TestNonce123',
+        ]);
 
-        $this->assertNotSame($nonce1, $nonce2, 'Nonces should be case-sensitive');
+        // Same characters, different case — must be rejected by the strict (!==) check.
+        $result = $client->validate_id_token('fake.jwt.token', 'testnonce123');
+
+        $this->assertInstanceOf(\WP_Error::class, $result);
+        $this->assertSame('invalid_nonce', $result->get_error_code());
+    }
+
+    /**
+     * Test the expired/missing nonce-transient path fails closed.
+     *
+     * In handle_callback the expected nonce comes from get_transient(), which
+     * returns false when the transient is missing or expired. Under strict_types
+     * that false hits the ?string $expected_nonce parameter and throws a
+     * TypeError, aborting authentication rather than silently skipping the nonce
+     * check (which null would do). This locks in that fails-closed guarantee.
+     */
+    public function testValidateIdTokenRejectsNonStringNonceFromExpiredTransient(): void
+    {
+        $client = $this->createClientWithStubbedJwt([
+            'sub' => 'user-123',
+            'iss' => 'https://idp.example.com',
+            'aud' => 'test-client-id',
+            'nonce' => 'some-nonce',
+        ]);
+
+        $this->expectException(\TypeError::class);
+
+        // false is what get_transient() returns for a missing/expired nonce; it
+        // must not be accepted as "no nonce expected".
+        $client->validate_id_token('fake.jwt.token', false);
     }
 
     /**
