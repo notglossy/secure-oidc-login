@@ -1,8 +1,9 @@
 name: AI Code Review
 
-# on:
-#  pull_request:
-#    types: [opened, synchronize, reopened]
+on:
+  workflow_dispatch:
+  # pull_request:
+  #  types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
