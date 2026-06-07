@@ -12,7 +12,6 @@ wp-content/backups/
 # Composer dependencies and executables
 vendor/
 composer.phar
-composer.lock
 
 # Node dependencies and build outputs
 node_modules/
