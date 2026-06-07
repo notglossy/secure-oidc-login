@@ -12,7 +12,13 @@ ignore:
   - "vendor/**/*"
   - "tests/**/*"
   - "build/**/*"
-  - "secure-oidc-login.php"  # Bootstrap file with initialization code - tested via integration tests
+  # Bootstrap + request-lifecycle code: registers WordPress hooks and runs the
+  # OIDC callback/login/logout flows, which complete by redirecting and calling
+  # exit(), so they cannot be exercised in-process by unit tests. The security-
+  # critical logic these flows delegate to IS unit-tested under tests/Unit/
+  # (ID-token/nonce validation, user provisioning, token storage, rate limiting,
+  # state binding); end-to-end behavior is verified manually.
+  - "secure-oidc-login.php"
 
 comment:
   layout: "reach,diff,flags,files"
