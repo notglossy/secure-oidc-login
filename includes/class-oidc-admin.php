@@ -842,7 +842,10 @@ class OIDC_Admin {
 				'default' => 'client_secret_basic',
 			),
 			'prompt'                     => array(
-				'allowed' => array( '', 'none', 'login', 'consent', 'select_account' ),
+				// 'none' is intentionally excluded: it fails interactive logins with
+				// login_required whenever the IdP has no session. Developers who need
+				// it can use the secure_oidc_login_auth_params filter.
+				'allowed' => array( '', 'login', 'consent', 'select_account' ),
 				'default' => '',
 			),
 		);

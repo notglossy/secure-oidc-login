@@ -3006,6 +3006,39 @@ class OIDCClientTest extends OIDCTestCase
     }
 
     /**
+     * Test the jti replay cache lifetime covers the token's full validity window.
+     *
+     * A fixed cache TTL shorter than the token's exp would let the same logout
+     * token be replayed once the cache entry expires while the JWT is still valid.
+     */
+    public function testValidateLogoutTokenJtiCacheCoversTokenLifetime(): void
+    {
+        $captured_ttl = null;
+        Functions\when('set_transient')->alias(function ($key, $value, $ttl) use (&$captured_ttl) {
+            if (str_starts_with((string) $key, 'oidc_bcl_jti_')) {
+                $captured_ttl = $ttl;
+            }
+            return true;
+        });
+
+        // Token valid for one hour - the replay cache must last at least that long
+        $client = $this->createClientWithStubbedJwt(
+            $this->getSampleLogoutTokenClaims(['exp' => time() + 3600])
+        );
+
+        $result = $client->validate_logout_token('header.payload.signature');
+
+        $this->assertIsArray($result);
+        $this->assertGreaterThanOrEqual(3600, $captured_ttl);
+        // And it is capped at one day even for absurd exp values
+        $client = $this->createClientWithStubbedJwt(
+            $this->getSampleLogoutTokenClaims(['exp' => time() + 10 * 86400, 'jti' => 'jti-far-future'])
+        );
+        $client->validate_logout_token('header.payload.signature');
+        $this->assertLessThanOrEqual(86400, $captured_ttl);
+    }
+
+    /**
      * Test validate_logout_token rejects a replayed jti.
      */
     public function testValidateLogoutTokenRejectsReplayedJti(): void

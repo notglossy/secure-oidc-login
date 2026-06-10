@@ -606,8 +606,9 @@ class OIDC_Client {
 		}
 
 		// REPLAY PROTECTION: each jti may only be used once (step 8). The cache
-		// window only needs to cover the token's validity, which exp already
-		// bounds; 10 minutes comfortably exceeds typical logout token lifetimes.
+		// must outlive the token's JWT validity, so the TTL is derived from exp
+		// (plus clock-skew leeway), with a floor of 10 minutes and a cap of one
+		// day to keep a misconfigured IdP from creating long-lived transients.
 		if ( empty( $claims['jti'] ) || ! is_string( $claims['jti'] ) ) {
 			return new WP_Error( 'oidc_error', __( 'Logout token is missing the required jti claim.', 'secure-oidc-login' ) );
 		}
@@ -616,7 +617,9 @@ class OIDC_Client {
 		if ( false !== get_transient( $jti_key ) ) {
 			return new WP_Error( 'oidc_error', __( 'Logout token has already been used.', 'secure-oidc-login' ) );
 		}
-		set_transient( $jti_key, 1, 600 );
+
+		$jti_ttl = min( max( (int) $claims['exp'] - time() + self::get_jwt_leeway(), 600 ), DAY_IN_SECONDS );
+		set_transient( $jti_key, 1, $jti_ttl );
 
 		return $claims;
 	}

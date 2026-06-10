@@ -1130,9 +1130,12 @@ class OIDCRestControllerTest extends OIDCTestCase
     }
 
     /**
-     * Test backchannel_logout returns 429 when rate limited.
+     * Test backchannel_logout returns 400 when rate limited.
+     *
+     * 400 rather than 429 keeps the response within the status codes defined by
+     * OIDC Back-Channel Logout 1.0 Section 2.8.
      */
-    public function testBackchannelLogoutReturns429WhenRateLimited(): void
+    public function testBackchannelLogoutReturns400WhenRateLimited(): void
     {
         Functions\when('get_option')->justReturn(['enable_backchannel_logout' => true]);
 
@@ -1145,6 +1148,6 @@ class OIDCRestControllerTest extends OIDCTestCase
 
         $result = $controller->backchannel_logout($request);
 
-        $this->assertSame(429, $result->get_status());
+        $this->assertSame(400, $result->get_status());
     }
 }

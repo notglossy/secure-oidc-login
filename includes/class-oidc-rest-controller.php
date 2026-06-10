@@ -110,9 +110,11 @@ class OIDC_REST_Controller extends WP_REST_Controller {
 	 * @return WP_REST_Response The logout response.
 	 */
 	public function backchannel_logout( WP_REST_Request $request ): WP_REST_Response {
-		// SECURITY: Rate limit to blunt brute-force attempts against token validation
+		// SECURITY: Rate limit to blunt brute-force attempts against token validation.
+		// 400 (not 429) keeps the response within the status codes defined by OIDC
+		// Back-Channel Logout 1.0 Section 2.8, which strictly conforming IdPs expect.
 		if ( $this->rate_limiter->is_rate_limited( 'backchannel_logout' ) ) {
-			return $this->backchannel_response( array( 'error' => 'invalid_request' ), 429 );
+			return $this->backchannel_response( array( 'error' => 'invalid_request' ), 400 );
 		}
 		$this->rate_limiter->record_attempt( 'backchannel_logout' );
 
