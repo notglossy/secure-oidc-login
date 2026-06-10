@@ -118,8 +118,18 @@ class OIDC_REST_Controller extends WP_REST_Controller {
 		}
 		$this->rate_limiter->record_attempt( 'backchannel_logout' );
 
+		// The SECURE_OIDC_ENABLE_BACKCHANNEL_LOGOUT environment variable overrides the
+		// stored setting, matching how the admin UI presents env-managed checkboxes
+		// (same true/false convention as SECURE_OIDC_ENFORCE_ACR).
 		$options = get_option( 'secure_oidc_login_settings', array() );
-		if ( empty( $options['enable_backchannel_logout'] ) ) {
+		$enabled = ! empty( $options['enable_backchannel_logout'] );
+
+		$env_enabled = getenv( 'SECURE_OIDC_ENABLE_BACKCHANNEL_LOGOUT' );
+		if ( false !== $env_enabled && '' !== $env_enabled ) {
+			$enabled = 'true' === strtolower( (string) $env_enabled );
+		}
+
+		if ( ! $enabled ) {
 			// Feature disabled: respond 400 rather than 404 to avoid signaling
 			// whether the plugin is installed vs. merely unconfigured.
 			return $this->backchannel_response( array( 'error' => 'invalid_request' ), 400 );

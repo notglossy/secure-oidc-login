@@ -1121,6 +1121,47 @@ class OIDCRestControllerTest extends OIDCTestCase
     }
 
     /**
+     * Test the SECURE_OIDC_ENABLE_BACKCHANNEL_LOGOUT env var overrides the stored setting.
+     */
+    public function testBackchannelLogoutHonorsEnvOverride(): void
+    {
+        putenv('SECURE_OIDC_ENABLE_BACKCHANNEL_LOGOUT=true');
+
+        try {
+            // Stored setting disabled, but the env var enables the endpoint
+            Functions\when('get_option')->justReturn(['enable_backchannel_logout' => false]);
+
+            [$controller, $request] = $this->buildBackchannelScenario(true, 'valid.logout.token');
+
+            $result = $controller->backchannel_logout($request);
+
+            $this->assertSame(200, $result->get_status());
+        } finally {
+            putenv('SECURE_OIDC_ENABLE_BACKCHANNEL_LOGOUT');
+        }
+    }
+
+    /**
+     * Test the env var can also disable the endpoint despite the stored setting.
+     */
+    public function testBackchannelLogoutEnvOverrideCanDisable(): void
+    {
+        putenv('SECURE_OIDC_ENABLE_BACKCHANNEL_LOGOUT=false');
+
+        try {
+            Functions\when('get_option')->justReturn(['enable_backchannel_logout' => true]);
+
+            [$controller, $request] = $this->buildBackchannelScenario(null, 'any.logout.token');
+
+            $result = $controller->backchannel_logout($request);
+
+            $this->assertSame(400, $result->get_status());
+        } finally {
+            putenv('SECURE_OIDC_ENABLE_BACKCHANNEL_LOGOUT');
+        }
+    }
+
+    /**
      * Test backchannel_logout returns 400 for an empty token.
      */
     public function testBackchannelLogoutReturns400OnEmptyToken(): void

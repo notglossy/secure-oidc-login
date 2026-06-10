@@ -3030,6 +3030,14 @@ class OIDCClientTest extends OIDCTestCase
 
         $this->assertIsArray($result);
         $this->assertGreaterThanOrEqual(3600, $captured_ttl);
+
+        // A short-lived token still gets the 10-minute minimum replay-cache TTL
+        $client = $this->createClientWithStubbedJwt(
+            $this->getSampleLogoutTokenClaims(['exp' => time() + 30, 'jti' => 'jti-short'])
+        );
+        $client->validate_logout_token('header.payload.signature');
+        $this->assertGreaterThanOrEqual(600, $captured_ttl);
+
         // And it is capped at one day even for absurd exp values
         $client = $this->createClientWithStubbedJwt(
             $this->getSampleLogoutTokenClaims(['exp' => time() + 10 * 86400, 'jti' => 'jti-far-future'])
