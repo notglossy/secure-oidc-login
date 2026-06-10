@@ -904,7 +904,7 @@ class OIDCRestControllerTest extends OIDCTestCase
     }
 
     /**
-     * Test discover handles JSON array instead of object.
+     * Test discover rejects a JSON array - a list is not a provider configuration.
      */
     public function testDiscoverHandlesJsonArrayInsteadOfObject(): void
     {
@@ -923,8 +923,64 @@ class OIDCRestControllerTest extends OIDCTestCase
 
         $result = $this->controller->discover($request);
 
-        // JSON array should be valid - it's an array in PHP
-        $this->assertInstanceOf(WP_REST_Response::class, $result);
+        // A JSON list has no issuer, so document validation must reject it
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('oidc_discovery_missing_issuer', $result->get_error_code());
+    }
+
+    /**
+     * Test discover rejects a document whose issuer does not match the discovery URL.
+     *
+     * Per OIDC Discovery 1.0 Section 4.3 the issuer must equal the discovery URL
+     * with the well-known suffix removed; accepting a mismatched document would
+     * configure this client against a different provider's endpoints.
+     */
+    public function testDiscoverRejectsIssuerMismatch(): void
+    {
+        Functions\when('wp_http_validate_url')->alias(fn($url) => $url);
+
+        $config = $this->getSampleOIDCConfig();
+        $config['issuer'] = 'https://other-idp.example.net';
+
+        Functions\when('wp_safe_remote_get')->justReturn([
+            'body' => json_encode($config),
+            'response' => ['code' => 200],
+        ]);
+        Functions\when('wp_remote_retrieve_header')->justReturn('application/json');
+
+        $request = $this->createMock(WP_REST_Request::class);
+        $request->method('get_param')->willReturn('https://idp.example.com');
+
+        $result = $this->controller->discover($request);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('oidc_discovery_issuer_mismatch', $result->get_error_code());
+        $this->assertSame(400, $result->get_error_data()['status'] ?? null);
+    }
+
+    /**
+     * Test discover rejects a document advertising a non-HTTPS endpoint.
+     */
+    public function testDiscoverRejectsInsecureEndpoint(): void
+    {
+        Functions\when('wp_http_validate_url')->alias(fn($url) => $url);
+
+        $config = $this->getSampleOIDCConfig();
+        $config['token_endpoint'] = 'http://idp.example.com/token';
+
+        Functions\when('wp_safe_remote_get')->justReturn([
+            'body' => json_encode($config),
+            'response' => ['code' => 200],
+        ]);
+        Functions\when('wp_remote_retrieve_header')->justReturn('application/json');
+
+        $request = $this->createMock(WP_REST_Request::class);
+        $request->method('get_param')->willReturn('https://idp.example.com');
+
+        $result = $this->controller->discover($request);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('oidc_discovery_insecure_endpoint', $result->get_error_code());
     }
 
     /**

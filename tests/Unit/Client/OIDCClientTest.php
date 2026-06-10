@@ -58,6 +58,7 @@ class OIDCClientTest extends OIDCTestCase
             'wp_remote_retrieve_body' => static fn($response) => $response['body'] ?? '',
             'wp_remote_retrieve_header' => static fn($response, $header) => 'application/json',
             'wp_strip_all_tags' => static fn($string) => strip_tags($string),
+            'wp_parse_url' => static fn($url, $component = -1) => parse_url($url, $component),
             'get_transient' => static fn($key) => false,
             'set_transient' => static fn($key, $value, $expiration) => true,
             'delete_transient' => static fn($key) => true,
@@ -2592,5 +2593,302 @@ class OIDCClientTest extends OIDCTestCase
         // Should proceed past algorithm checks (fail on signature/key, not algorithm)
         $this->assertInstanceOf(WP_Error::class, $result);
         $this->assertStringNotContainsString('algorithm', strtolower($result->get_error_message()));
+    }
+
+    // =========================================================================
+    // Discovery Document Validation Tests (OIDC Discovery 1.0 Section 4.3)
+    // =========================================================================
+
+    /**
+     * Test validate_discovery_document accepts a document whose issuer matches the URL.
+     */
+    public function testValidateDiscoveryDocumentAcceptsMatchingIssuer(): void
+    {
+        putenv('SECURE_OIDC_ALLOW_INSECURE_DISCOVERY');
+
+        $result = OIDC_Client::validate_discovery_document(
+            $this->getSampleOIDCConfig(),
+            'https://idp.example.com/.well-known/openid-configuration'
+        );
+
+        $this->assertTrue($result);
+    }
+
+    /**
+     * Test validate_discovery_document rejects a document with a mismatched issuer.
+     */
+    public function testValidateDiscoveryDocumentRejectsIssuerMismatch(): void
+    {
+        putenv('SECURE_OIDC_ALLOW_INSECURE_DISCOVERY');
+
+        $config = $this->getSampleOIDCConfig();
+        $config['issuer'] = 'https://evil.example.org';
+
+        $result = OIDC_Client::validate_discovery_document(
+            $config,
+            'https://idp.example.com/.well-known/openid-configuration'
+        );
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('oidc_discovery_issuer_mismatch', $result->get_error_code());
+    }
+
+    /**
+     * Test validate_discovery_document rejects a document without an issuer.
+     */
+    public function testValidateDiscoveryDocumentRejectsMissingIssuer(): void
+    {
+        $config = $this->getSampleOIDCConfig();
+        unset($config['issuer']);
+
+        $result = OIDC_Client::validate_discovery_document(
+            $config,
+            'https://idp.example.com/.well-known/openid-configuration'
+        );
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('oidc_discovery_missing_issuer', $result->get_error_code());
+    }
+
+    /**
+     * Test validate_discovery_document tolerates a trailing slash on the issuer.
+     */
+    public function testValidateDiscoveryDocumentToleratesTrailingSlashOnIssuer(): void
+    {
+        putenv('SECURE_OIDC_ALLOW_INSECURE_DISCOVERY');
+
+        $config = $this->getSampleOIDCConfig();
+        $config['issuer'] = 'https://idp.example.com/';
+
+        $result = OIDC_Client::validate_discovery_document(
+            $config,
+            'https://idp.example.com/.well-known/openid-configuration'
+        );
+
+        $this->assertTrue($result);
+    }
+
+    /**
+     * Test validate_discovery_document ignores query strings on the discovery URL.
+     *
+     * Some providers (e.g. Azure AD B2C) require query parameters on the
+     * discovery URL that are not part of the issuer identifier.
+     */
+    public function testValidateDiscoveryDocumentIgnoresQueryStringOnDiscoveryUrl(): void
+    {
+        putenv('SECURE_OIDC_ALLOW_INSECURE_DISCOVERY');
+
+        $result = OIDC_Client::validate_discovery_document(
+            $this->getSampleOIDCConfig(),
+            'https://idp.example.com/.well-known/openid-configuration?p=policy_name'
+        );
+
+        $this->assertTrue($result);
+    }
+
+    /**
+     * Test validate_discovery_document rejects non-HTTPS endpoints by default.
+     */
+    public function testValidateDiscoveryDocumentRejectsHttpEndpoint(): void
+    {
+        putenv('SECURE_OIDC_ALLOW_INSECURE_DISCOVERY');
+
+        $config = $this->getSampleOIDCConfig();
+        $config['token_endpoint'] = 'http://idp.example.com/token';
+
+        $result = OIDC_Client::validate_discovery_document(
+            $config,
+            'https://idp.example.com/.well-known/openid-configuration'
+        );
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('oidc_discovery_insecure_endpoint', $result->get_error_code());
+    }
+
+    /**
+     * Test validate_discovery_document allows HTTP endpoints with the testing escape hatch.
+     */
+    public function testValidateDiscoveryDocumentAllowsHttpEndpointWhenInsecureAllowed(): void
+    {
+        putenv('SECURE_OIDC_ALLOW_INSECURE_DISCOVERY=true');
+
+        try {
+            $config = $this->getSampleOIDCConfig();
+            $config['token_endpoint'] = 'http://idp.example.com/token';
+
+            $result = OIDC_Client::validate_discovery_document(
+                $config,
+                'https://idp.example.com/.well-known/openid-configuration'
+            );
+
+            $this->assertTrue($result);
+        } finally {
+            putenv('SECURE_OIDC_ALLOW_INSECURE_DISCOVERY');
+        }
+    }
+
+    /**
+     * Test validate_discovery_document rejects malformed endpoint URLs.
+     */
+    public function testValidateDiscoveryDocumentRejectsMalformedEndpoint(): void
+    {
+        $config = $this->getSampleOIDCConfig();
+        $config['jwks_uri'] = 'not a url';
+
+        $result = OIDC_Client::validate_discovery_document(
+            $config,
+            'https://idp.example.com/.well-known/openid-configuration'
+        );
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('oidc_discovery_invalid_endpoint', $result->get_error_code());
+    }
+
+    /**
+     * Test discover() rejects a discovery document whose issuer does not match.
+     */
+    public function testDiscoverRejectsMismatchedIssuer(): void
+    {
+        putenv('SECURE_OIDC_ALLOW_INSECURE_DISCOVERY');
+
+        $config = $this->getSampleOIDCConfig();
+        $config['issuer'] = 'https://other-idp.example.net';
+
+        Functions\when('wp_safe_remote_get')->justReturn([
+            'body' => json_encode($config),
+            'response' => ['code' => 200]
+        ]);
+
+        $result = $this->client->discover('https://idp.example.com');
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('oidc_discovery_issuer_mismatch', $result->get_error_code());
+    }
+
+    // =========================================================================
+    // Refresh Token Response Validation Tests (RFC 6749 Section 5.1)
+    // =========================================================================
+
+    /**
+     * Test refresh_token returns error when access_token is missing.
+     */
+    public function testRefreshTokenReturnsErrorWhenAccessTokenMissing(): void
+    {
+        Functions\when('wp_safe_remote_post')->justReturn([
+            'body' => '{"token_type": "Bearer", "expires_in": 3600}',
+            'response' => ['code' => 200]
+        ]);
+
+        $result = $this->client->refresh_token('refresh-token-value');
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertStringContainsString('Invalid token response', $result->get_error_message());
+    }
+
+    /**
+     * Test refresh_token returns error when token_type is missing.
+     */
+    public function testRefreshTokenReturnsErrorWhenTokenTypeMissing(): void
+    {
+        Functions\when('wp_safe_remote_post')->justReturn([
+            'body' => '{"access_token": "new-access-token", "expires_in": 3600}',
+            'response' => ['code' => 200]
+        ]);
+
+        $result = $this->client->refresh_token('refresh-token-value');
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertStringContainsString('Missing required token_type', $result->get_error_message());
+    }
+
+    /**
+     * Test refresh_token returns error for non-Bearer token type.
+     */
+    public function testRefreshTokenReturnsErrorForUnsupportedTokenType(): void
+    {
+        Functions\when('wp_safe_remote_post')->justReturn([
+            'body' => '{"access_token": "new-access-token", "token_type": "MAC"}',
+            'response' => ['code' => 200]
+        ]);
+
+        $result = $this->client->refresh_token('refresh-token-value');
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertStringContainsString('Unsupported token type', $result->get_error_message());
+    }
+
+    // =========================================================================
+    // Client Authentication Encoding Tests (RFC 6749 Section 2.3.1)
+    // =========================================================================
+
+    /**
+     * Test Basic auth credentials are form-urlencoded before base64 encoding.
+     *
+     * Per RFC 6749 section 2.3.1 the client_id and client_secret must each be
+     * urlencoded before being combined with a colon, so secrets containing
+     * reserved characters (':', '%', '+') round-trip correctly.
+     */
+    public function testBasicAuthCredentialsAreFormUrlencoded(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'client_id' => 'client:with:colons',
+            'client_secret' => 'secret%with+special:chars',
+            'token_endpoint' => 'https://idp.example.com/token',
+        ]);
+
+        $client = new OIDC_Client();
+        $headers = null;
+
+        Functions\when('wp_safe_remote_post')->alias(function($url, $args) use (&$headers) {
+            $headers = $args['headers'] ?? [];
+            return [
+                'body' => json_encode([
+                    'access_token' => 'test-access',
+                    'id_token' => 'test-id',
+                    'token_type' => 'Bearer'
+                ]),
+                'response' => ['code' => 200]
+            ];
+        });
+
+        $client->exchange_code('auth-code');
+
+        $this->assertArrayHasKey('Authorization', $headers);
+        $decoded = base64_decode(substr($headers['Authorization'], strlen('Basic ')));
+        $this->assertSame(
+            rawurlencode('client:with:colons') . ':' . rawurlencode('secret%with+special:chars'),
+            $decoded
+        );
+    }
+
+    /**
+     * Test JWKS keys with an unknown kty and no alg are skipped, not assigned the header alg.
+     */
+    public function testDecodeAndVerifyJwtSkipsKeysWithUnknownKty(): void
+    {
+        // Single key with unrecognized kty and no alg field - must be dropped
+        $jwks = ['keys' => [
+            ['kty' => 'UNKNOWN', 'kid' => 'test-key', 'n' => 'modulus', 'e' => 'AQAB'],
+        ]];
+
+        Functions\when('get_transient')->justReturn(false);
+        Functions\when('wp_safe_remote_get')->justReturn([
+            'body' => json_encode($jwks),
+            'response' => ['code' => 200],
+        ]);
+        Functions\when('set_transient')->justReturn(true);
+        Functions\when('wp_json_encode')->alias(fn($data) => json_encode($data));
+
+        $reflection = new \ReflectionMethod(OIDC_Client::class, 'decode_and_verify_jwt');
+        $reflection->setAccessible(true);
+
+        $header = rtrim(strtr(base64_encode(json_encode(['alg' => 'RS256', 'typ' => 'JWT'])), '+/', '-_'), '=');
+        $payload = rtrim(strtr(base64_encode('{"sub":"test"}'), '+/', '-_'), '=');
+        $signature = rtrim(strtr(base64_encode('fake-sig'), '+/', '-_'), '=');
+
+        $result = $reflection->invoke($this->client, "$header.$payload.$signature");
+
+        // With the only key dropped, the key set is empty and verification must fail
+        $this->assertInstanceOf(WP_Error::class, $result);
     }
 }

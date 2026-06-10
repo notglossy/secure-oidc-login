@@ -67,6 +67,12 @@
 						JSON.stringify(algValues)
 					);
 
+					// Record whether the IdP supports the RFC 9207 iss response parameter.
+					// When supported, the callback requires and validates it (mix-up defense).
+					$('input[name="secure_oidc_login_settings[authorization_response_iss_parameter_supported]"]').val(
+						config.authorization_response_iss_parameter_supported === true ? '1' : '0'
+					);
+
 					alert(oidcAdminSettings.i18n.discoverySuccess);
 				},
 				error: function(xhr) {

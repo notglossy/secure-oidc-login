@@ -49,6 +49,16 @@ class OIDC_Token_Refresh {
 	const MAX_REFRESH_BUFFER = 3600;
 
 	/**
+	 * Lifetime of the per-user refresh lock in seconds.
+	 *
+	 * Long enough to cover the token endpoint round trip (10s timeout), short
+	 * enough that a failed refresh can be retried promptly without hammering the IdP.
+	 *
+	 * @var int
+	 */
+	const REFRESH_LOCK_TTL = 30;
+
+	/**
 	 * OIDC Client instance for token operations.
 	 *
 	 * @var OIDC_Client
@@ -116,6 +126,21 @@ class OIDC_Token_Refresh {
 	 * @return true|WP_Error True on success, WP_Error on failure.
 	 */
 	public function refresh( int $user_id ): bool|WP_Error {
+		// CONCURRENCY: Serialize refreshes per user. Parallel requests (multiple tabs,
+		// asset requests) would otherwise race: one request replays the old refresh
+		// token after another has rotated it, which rotation-enforcing IdPs treat as
+		// token reuse and may revoke the whole token family, logging the user out.
+		// The transient check-and-set is not strictly atomic, but it shrinks the race
+		// window from a full IdP round trip to microseconds. The lock is kept on
+		// failure so its TTL throttles retry storms against a struggling IdP.
+		$lock_key = 'oidc_refresh_lock_' . $user_id;
+		if ( false !== get_transient( $lock_key ) ) {
+			// Another request is refreshing (or just failed); treat as success so the
+			// current request proceeds with the still-valid stored token.
+			return true;
+		}
+		set_transient( $lock_key, 1, self::REFRESH_LOCK_TTL );
+
 		// Get the refresh token
 		$refresh_token = $this->token_manager->get_refresh_token( $user_id );
 		if ( is_wp_error( $refresh_token ) ) {
@@ -160,6 +185,9 @@ class OIDC_Token_Refresh {
 			$this->log_refresh_failure( $user_id, 'Failed to store refreshed tokens: ' . $store_result->get_error_message() );
 			return $store_result;
 		}
+
+		// Release the lock on success; the updated expiry prevents redundant refreshes.
+		delete_transient( $lock_key );
 
 		// Log success
 		$this->log_refresh_success( $user_id );

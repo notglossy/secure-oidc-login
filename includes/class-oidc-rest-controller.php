@@ -239,6 +239,18 @@ class OIDC_REST_Controller extends WP_REST_Controller {
 			);
 		}
 
+		// SECURITY: Verify the document's issuer matches the discovery URL (OIDC Discovery
+		// 1.0 Section 4.3) and that all advertised endpoints use HTTPS, before the
+		// configuration is offered to the admin form.
+		$validation = OIDC_Client::validate_discovery_document( $config, $discovery_url );
+		if ( is_wp_error( $validation ) ) {
+			return new WP_Error(
+				$validation->get_error_code(),
+				$validation->get_error_message(),
+				array( 'status' => 400 )
+			);
+		}
+
 		return new WP_REST_Response( $config, 200 );
 	}
 

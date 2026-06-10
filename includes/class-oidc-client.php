@@ -158,6 +158,45 @@ class OIDC_Client {
 	}
 
 	/**
+	 * Apply client authentication to a token endpoint request.
+	 *
+	 * Confidential clients authenticate per RFC 6749 section 2.3. The method is
+	 * configurable: client_secret_basic (Authorization header) or client_secret_post
+	 * (request body). Public clients include client_id in the body for identification.
+	 *
+	 * @param array<string, string> $token_params Token request body parameters.
+	 * @param array<string, string> $headers      Token request HTTP headers.
+	 * @return array{0: array<string, string>, 1: array<string, string>} Updated [params, headers].
+	 */
+	private function apply_client_authentication( array $token_params, array $headers ): array {
+		$client_id     = $this->get_setting( 'client_id' );
+		$client_secret = $this->get_setting( 'client_secret' );
+
+		if ( ! empty( $client_secret ) ) {
+			$auth_method = $this->get_setting( 'token_endpoint_auth_method' );
+
+			if ( 'client_secret_post' === $auth_method ) {
+				// client_secret_post: credentials sent in the request body (RFC 6749 section 2.3.1)
+				$token_params['client_id']     = $client_id;
+				$token_params['client_secret'] = $client_secret;
+			} else {
+				// client_secret_basic (default): credentials in Authorization header only.
+				// Per RFC 6749 section 2.3.1, clients using Basic auth MUST NOT include
+				// credentials in the request body, and the client_id and client_secret
+				// MUST each be form-urlencoded before being combined with a colon and
+				// base64-encoded. This matters for secrets containing ':', '%', '+', etc.
+				$credentials              = rawurlencode( $client_id ) . ':' . rawurlencode( $client_secret );
+				$headers['Authorization'] = 'Basic ' . base64_encode( $credentials );
+			}
+		} else {
+			// Public clients: include client_id in body for identification
+			$token_params['client_id'] = $client_id;
+		}
+
+		return array( $token_params, $headers );
+	}
+
+	/**
 	 * Exchange an authorization code for access and ID tokens.
 	 *
 	 * Performs the token endpoint request as part of the authorization code flow.
@@ -174,10 +213,6 @@ class OIDC_Client {
 			return new WP_Error( 'oidc_error', __( 'Token endpoint not configured.', 'secure-oidc-login' ) );
 		}
 
-		// Get client credentials (check env vars first)
-		$client_id     = $this->get_setting( 'client_id' );
-		$client_secret = $this->get_setting( 'client_secret' );
-
 		// Token endpoint request parameters for OAuth 2.0 Authorization Code Flow
 		$token_params = array(
 			'grant_type'   => 'authorization_code',  // Specifies the grant type being used
@@ -191,26 +226,7 @@ class OIDC_Client {
 			'Content-Type' => 'application/x-www-form-urlencoded',
 		);
 
-		// Confidential clients authenticate per RFC 6749 section 2.3
-		// The method is configurable: client_secret_basic (header) or client_secret_post (body)
-		if ( ! empty( $client_secret ) ) {
-			$auth_method = $this->get_setting( 'token_endpoint_auth_method' );
-
-			if ( 'client_secret_post' === $auth_method ) {
-				// client_secret_post: credentials sent in the request body (RFC 6749 section 2.3.1)
-				$token_params['client_id']     = $client_id;
-				$token_params['client_secret'] = $client_secret;
-			} else {
-				// client_secret_basic (default): credentials in Authorization header only
-				// Per RFC 6749 section 2.3.1, clients using Basic auth MUST NOT include
-				// credentials in the request body
-				$credentials              = $client_id . ':' . $client_secret;
-				$headers['Authorization'] = 'Basic ' . base64_encode( $credentials );
-			}
-		} else {
-			// Public clients: include client_id in body for identification
-			$token_params['client_id'] = $client_id;
-		}
+		list( $token_params, $headers ) = $this->apply_client_authentication( $token_params, $headers );
 
 		// Public clients use PKCE for security (no client_secret available)
 		if ( ! empty( $code_verifier ) ) {
@@ -525,14 +541,20 @@ class OIDC_Client {
 		// The Firebase JWT library requires it, so we infer from the key type (kty) when missing.
 		// SECURITY: We derive the algorithm from the trusted JWKS key type rather than copying
 		// the attacker-controlled JWT header value, preventing algorithm confusion attacks.
+		// Keys with an unknown kty are dropped entirely instead of inheriting the header value.
 		if ( isset( $jwks['keys'] ) && is_array( $jwks['keys'] ) ) {
-			foreach ( $jwks['keys'] as &$key ) {
+			$usable_keys = array();
+			foreach ( $jwks['keys'] as $key ) {
 				if ( ! isset( $key['alg'] ) ) {
-					$kty        = isset( $key['kty'] ) ? $key['kty'] : '';
-					$key['alg'] = isset( self::KTY_DEFAULT_ALGORITHM[ $kty ] ) ? self::KTY_DEFAULT_ALGORITHM[ $kty ] : $alg;
+					$kty = isset( $key['kty'] ) ? $key['kty'] : '';
+					if ( ! isset( self::KTY_DEFAULT_ALGORITHM[ $kty ] ) ) {
+						continue;
+					}
+					$key['alg'] = self::KTY_DEFAULT_ALGORITHM[ $kty ];
 				}
+				$usable_keys[] = $key;
 			}
-			unset( $key ); // Break reference to avoid unexpected behavior
+			$jwks['keys'] = $usable_keys;
 		}
 
 		try {
@@ -878,10 +900,6 @@ class OIDC_Client {
 			return new WP_Error( 'oidc_error', __( 'Token endpoint not configured.', 'secure-oidc-login' ) );
 		}
 
-		// Get client credentials (check env vars first)
-		$client_id     = $this->get_setting( 'client_id' );
-		$client_secret = $this->get_setting( 'client_secret' );
-
 		$token_params = array(
 			'grant_type'    => 'refresh_token',
 			'refresh_token' => $refresh_token,
@@ -891,35 +909,18 @@ class OIDC_Client {
 			'Content-Type' => 'application/x-www-form-urlencoded',
 		);
 
-		// Confidential clients authenticate per RFC 6749 section 2.3
-		// The method is configurable: client_secret_basic (header) or client_secret_post (body)
-		if ( ! empty( $client_secret ) ) {
-			$auth_method = $this->get_setting( 'token_endpoint_auth_method' );
-
-			if ( 'client_secret_post' === $auth_method ) {
-				// client_secret_post: credentials sent in the request body (RFC 6749 section 2.3.1)
-				$token_params['client_id']     = $client_id;
-				$token_params['client_secret'] = $client_secret;
-			} else {
-				// client_secret_basic (default): credentials in Authorization header only
-				// Per RFC 6749 section 2.3.1, clients using Basic auth MUST NOT include
-				// credentials in the request body
-				$credentials              = $client_id . ':' . $client_secret;
-				$headers['Authorization'] = 'Basic ' . base64_encode( $credentials );
-			}
-		} else {
-			// Public clients: include client_id in body for identification
-			$token_params['client_id'] = $client_id;
-		}
+		list( $token_params, $headers ) = $this->apply_client_authentication( $token_params, $headers );
 
 		// SECURITY: Use wp_safe_remote_post() to prevent SSRF attacks
 		// This validates the token_endpoint URL and blocks private IPs, non-standard ports, etc.
+		// Timeout is shorter than the login-time token exchange because refresh runs
+		// synchronously on init and would otherwise block page loads on a slow IdP.
 		$response = wp_safe_remote_post(
 			$token_endpoint,
 			array(
 				'body'    => $token_params,
 				'headers' => $headers,
-				'timeout' => 30,
+				'timeout' => 10,
 			)
 		);
 
@@ -969,6 +970,28 @@ class OIDC_Client {
 				'token_refresh',
 				$detailed_error,
 				__( 'Session refresh failed. Please log in again.', 'secure-oidc-login' )
+			);
+		}
+
+		// Validate the refresh response shape like exchange_code() does, so every
+		// caller gets the same guarantees (RFC 6749 section 5.1: access_token and
+		// token_type are REQUIRED; only Bearer tokens are supported).
+		if ( ! is_array( $tokens ) || empty( $tokens['access_token'] ) ) {
+			return new WP_Error( 'oidc_error', __( 'Invalid token response.', 'secure-oidc-login' ) );
+		}
+
+		if ( empty( $tokens['token_type'] ) ) {
+			return new WP_Error( 'oidc_error', __( 'Missing required token_type in token response.', 'secure-oidc-login' ) );
+		}
+
+		if ( strcasecmp( $tokens['token_type'], 'Bearer' ) !== 0 ) {
+			return new WP_Error(
+				'oidc_error',
+				sprintf(
+					/* translators: %s: token type returned by IdP */
+					__( 'Unsupported token type: %s. Only Bearer tokens are supported.', 'secure-oidc-login' ),
+					$tokens['token_type']
+				)
 			);
 		}
 
@@ -1025,10 +1048,104 @@ class OIDC_Client {
 		$config = json_decode( $body, true );
 
 		// If the config is invalid, return an error.
-		if ( ! $config ) {
+		if ( ! $config || ! is_array( $config ) ) {
 			return new WP_Error( 'oidc_error', __( 'Invalid discovery response.', 'secure-oidc-login' ) );
 		}
 
+		$validation = self::validate_discovery_document( $config, $discovery_url );
+		if ( is_wp_error( $validation ) ) {
+			return $validation;
+		}
+
 		return $config;
+	}
+
+	/**
+	 * Validate an OpenID Provider Configuration document against the URL it was fetched from.
+	 *
+	 * SECURITY: Per OIDC Discovery 1.0 Section 4.3, the issuer in the document MUST be
+	 * the discovery URL with the /.well-known/openid-configuration suffix removed. A
+	 * mismatch means the document describes a different issuer than the one queried
+	 * (misconfiguration, or an attempt to point this client at another provider's
+	 * endpoints — the precondition for IdP mix-up attacks). Endpoint URLs must also be
+	 * HTTPS unless SECURE_OIDC_ALLOW_INSECURE_DISCOVERY=true is set for testing.
+	 *
+	 * @param array<string, mixed> $config        The decoded discovery document.
+	 * @param string               $discovery_url The URL the document was fetched from.
+	 * @return true|WP_Error True if the document is valid, WP_Error otherwise.
+	 */
+	public static function validate_discovery_document( array $config, string $discovery_url ): bool|WP_Error {
+		$issuer = $config['issuer'] ?? '';
+
+		if ( ! is_string( $issuer ) || '' === $issuer ) {
+			return new WP_Error(
+				'oidc_discovery_missing_issuer',
+				__( 'Discovery document is missing the required issuer field.', 'secure-oidc-login' )
+			);
+		}
+
+		// Strip query string and fragment before comparing — some providers (e.g. Azure AD B2C)
+		// require query parameters on the discovery URL that are not part of the issuer.
+		$normalized_url = strtok( $discovery_url, '?#' );
+		$expected_url   = rtrim( $issuer, '/' ) . '/.well-known/openid-configuration';
+
+		if ( rtrim( (string) $normalized_url, '/' ) !== $expected_url ) {
+			return new WP_Error(
+				'oidc_discovery_issuer_mismatch',
+				sprintf(
+					/* translators: 1: issuer value from the discovery document, 2: discovery URL */
+					__( 'Discovery document issuer "%1$s" does not match the discovery URL "%2$s". Refusing to use this configuration.', 'secure-oidc-login' ),
+					$issuer,
+					$discovery_url
+				)
+			);
+		}
+
+		// Require HTTPS on all advertised endpoints (matches the HTTPS requirement
+		// already enforced for the discovery URL itself).
+		$allow_insecure = getenv( 'SECURE_OIDC_ALLOW_INSECURE_DISCOVERY' );
+		$require_https  = false === $allow_insecure || 'true' !== strtolower( (string) $allow_insecure );
+
+		$endpoint_keys = array(
+			'authorization_endpoint',
+			'token_endpoint',
+			'jwks_uri',
+			'userinfo_endpoint',
+			'end_session_endpoint',
+		);
+
+		foreach ( $endpoint_keys as $key ) {
+			if ( empty( $config[ $key ] ) ) {
+				continue;
+			}
+
+			$endpoint = $config[ $key ];
+
+			if ( ! is_string( $endpoint ) || false === filter_var( $endpoint, FILTER_VALIDATE_URL ) ) {
+				return new WP_Error(
+					'oidc_discovery_invalid_endpoint',
+					sprintf(
+						/* translators: %s: discovery document field name */
+						__( 'Discovery document contains an invalid %s URL.', 'secure-oidc-login' ),
+						$key
+					)
+				);
+			}
+
+			$parsed = wp_parse_url( $endpoint );
+			$scheme = is_array( $parsed ) && isset( $parsed['scheme'] ) ? strtolower( (string) $parsed['scheme'] ) : '';
+			if ( $require_https && 'https' !== $scheme ) {
+				return new WP_Error(
+					'oidc_discovery_insecure_endpoint',
+					sprintf(
+						/* translators: %s: discovery document field name */
+						__( 'Discovery document %s must use HTTPS. Set SECURE_OIDC_ALLOW_INSECURE_DISCOVERY=true to allow HTTP for testing.', 'secure-oidc-login' ),
+						$key
+					)
+				);
+			}
+		}
+
+		return true;
 	}
 }
