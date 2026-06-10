@@ -2892,4 +2892,248 @@ class OIDCClientTest extends OIDCTestCase
         // With the only key dropped, the key set is empty and verification must fail
         $this->assertInstanceOf(WP_Error::class, $result);
     }
+
+    // =========================================================================
+    // auth_time / max_age Validation Tests (OIDC Core 3.1.3.7 step 13)
+    // =========================================================================
+
+    /**
+     * Test validate_auth_time passes when max_age is not configured.
+     */
+    public function testValidateAuthTimePassesWhenMaxAgeNotConfigured(): void
+    {
+        putenv('SECURE_OIDC_MAX_AGE');
+
+        $result = $this->client->validate_auth_time(
+            ['sub' => 'user-123'],
+            ['max_age' => 0]
+        );
+
+        $this->assertTrue($result);
+    }
+
+    /**
+     * Test validate_auth_time passes for a recent authentication.
+     */
+    public function testValidateAuthTimePassesForRecentAuth(): void
+    {
+        putenv('SECURE_OIDC_MAX_AGE');
+
+        $result = $this->client->validate_auth_time(
+            ['sub' => 'user-123', 'auth_time' => time() - 10],
+            ['max_age' => 300]
+        );
+
+        $this->assertTrue($result);
+    }
+
+    /**
+     * Test validate_auth_time rejects a missing auth_time when max_age is set.
+     */
+    public function testValidateAuthTimeRejectsMissingAuthTime(): void
+    {
+        putenv('SECURE_OIDC_MAX_AGE');
+
+        $result = $this->client->validate_auth_time(
+            ['sub' => 'user-123'],
+            ['max_age' => 300]
+        );
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('oidc_auth_time_missing', $result->get_error_code());
+    }
+
+    /**
+     * Test validate_auth_time rejects authentication older than max_age.
+     */
+    public function testValidateAuthTimeRejectsStaleAuth(): void
+    {
+        putenv('SECURE_OIDC_MAX_AGE');
+
+        $result = $this->client->validate_auth_time(
+            ['sub' => 'user-123', 'auth_time' => time() - 1000],
+            ['max_age' => 300]
+        );
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('oidc_auth_time_exceeded', $result->get_error_code());
+    }
+
+    // =========================================================================
+    // Logout Token Validation Tests (OIDC Back-Channel Logout 1.0 Section 2.6)
+    // =========================================================================
+
+    /**
+     * Build a complete, valid set of logout token claims.
+     *
+     * @param array<string, mixed> $overrides Claims to add or replace.
+     * @return array<string, mixed> Logout token claims.
+     */
+    private function getSampleLogoutTokenClaims(array $overrides = []): array
+    {
+        $claims = [
+            'iss' => 'https://idp.example.com',
+            'aud' => 'test-client-id',
+            'iat' => time(),
+            'exp' => time() + 120,
+            'jti' => 'logout-jti-123',
+            'events' => ['http://schemas.openid.net/event/backchannel-logout' => []],
+            'sub' => 'user-123-abc',
+        ];
+
+        return array_merge($claims, $overrides);
+    }
+
+    /**
+     * Test validate_logout_token accepts a fully valid logout token.
+     */
+    public function testValidateLogoutTokenAcceptsValidToken(): void
+    {
+        $set_jti_keys = [];
+        Functions\when('set_transient')->alias(function ($key, $value, $ttl) use (&$set_jti_keys) {
+            $set_jti_keys[] = $key;
+            return true;
+        });
+
+        $client = $this->createClientWithStubbedJwt($this->getSampleLogoutTokenClaims());
+
+        $result = $client->validate_logout_token('header.payload.signature');
+
+        $this->assertIsArray($result);
+        $this->assertSame('user-123-abc', $result['sub']);
+        // The jti must be recorded for replay protection
+        $this->assertNotEmpty(array_filter($set_jti_keys, fn($k) => str_starts_with($k, 'oidc_bcl_jti_')));
+    }
+
+    /**
+     * Test validate_logout_token rejects a replayed jti.
+     */
+    public function testValidateLogoutTokenRejectsReplayedJti(): void
+    {
+        // The jti replay-cache transient already exists
+        Functions\when('get_transient')->alias(
+            static fn($key) => str_starts_with((string) $key, 'oidc_bcl_jti_') ? 1 : false
+        );
+
+        $client = $this->createClientWithStubbedJwt($this->getSampleLogoutTokenClaims());
+
+        $result = $client->validate_logout_token('header.payload.signature');
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertStringContainsString('already been used', $result->get_error_message());
+    }
+
+    /**
+     * Test validate_logout_token rejects a token containing a nonce.
+     *
+     * Per Section 2.6 step 7 this blocks ID tokens being replayed as logout tokens.
+     */
+    public function testValidateLogoutTokenRejectsNonce(): void
+    {
+        $client = $this->createClientWithStubbedJwt(
+            $this->getSampleLogoutTokenClaims(['nonce' => 'some-nonce'])
+        );
+
+        $result = $client->validate_logout_token('header.payload.signature');
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertStringContainsString('nonce', $result->get_error_message());
+    }
+
+    /**
+     * Test validate_logout_token rejects a token without the logout event.
+     */
+    public function testValidateLogoutTokenRejectsMissingEvent(): void
+    {
+        $claims = $this->getSampleLogoutTokenClaims();
+        unset($claims['events']);
+
+        $client = $this->createClientWithStubbedJwt($claims);
+
+        $result = $client->validate_logout_token('header.payload.signature');
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertStringContainsString('event', $result->get_error_message());
+    }
+
+    /**
+     * Test validate_logout_token rejects a token with neither sub nor sid.
+     */
+    public function testValidateLogoutTokenRejectsMissingSubAndSid(): void
+    {
+        $claims = $this->getSampleLogoutTokenClaims();
+        unset($claims['sub']);
+
+        $client = $this->createClientWithStubbedJwt($claims);
+
+        $result = $client->validate_logout_token('header.payload.signature');
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertStringContainsString('sub or sid', $result->get_error_message());
+    }
+
+    /**
+     * Test validate_logout_token accepts a token identifying the session by sid only.
+     */
+    public function testValidateLogoutTokenAcceptsSidOnly(): void
+    {
+        $claims = $this->getSampleLogoutTokenClaims(['sid' => 'idp-session-1']);
+        unset($claims['sub']);
+
+        $client = $this->createClientWithStubbedJwt($claims);
+
+        $result = $client->validate_logout_token('header.payload.signature');
+
+        $this->assertIsArray($result);
+        $this->assertSame('idp-session-1', $result['sid']);
+    }
+
+    /**
+     * Test validate_logout_token rejects a wrong issuer.
+     */
+    public function testValidateLogoutTokenRejectsWrongIssuer(): void
+    {
+        $client = $this->createClientWithStubbedJwt(
+            $this->getSampleLogoutTokenClaims(['iss' => 'https://evil.example.org'])
+        );
+
+        $result = $client->validate_logout_token('header.payload.signature');
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertStringContainsString('issuer', $result->get_error_message());
+    }
+
+    /**
+     * Test validate_logout_token rejects a wrong audience.
+     */
+    public function testValidateLogoutTokenRejectsWrongAudience(): void
+    {
+        $client = $this->createClientWithStubbedJwt(
+            $this->getSampleLogoutTokenClaims(['aud' => 'other-client'])
+        );
+
+        $result = $client->validate_logout_token('header.payload.signature');
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertStringContainsString('audience', $result->get_error_message());
+    }
+
+    /**
+     * Test validate_logout_token rejects missing iat/exp and missing jti.
+     */
+    public function testValidateLogoutTokenRejectsMissingRequiredClaims(): void
+    {
+        // Missing exp
+        $claims = $this->getSampleLogoutTokenClaims();
+        unset($claims['exp']);
+        $result = $this->createClientWithStubbedJwt($claims)->validate_logout_token('h.p.s');
+        $this->assertInstanceOf(WP_Error::class, $result);
+
+        // Missing jti
+        $claims = $this->getSampleLogoutTokenClaims();
+        unset($claims['jti']);
+        $result = $this->createClientWithStubbedJwt($claims)->validate_logout_token('h.p.s');
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertStringContainsString('jti', $result->get_error_message());
+    }
 }

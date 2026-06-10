@@ -127,6 +127,8 @@ Navigate to **Settings > OIDC Auth** in your WordPress admin panel.
 | End Session Endpoint | URL for logout/end session | No |
 | Issuer | Expected issuer value for token validation | Yes |
 | Scope | OAuth scopes to request (default: `openid email profile`) | No |
+| Max Authentication Age | Maximum seconds since the user last authenticated at the IdP (`max_age` request parameter). When set, the ID token `auth_time` claim is required and verified. 0 disables. | No |
+| Prompt | OIDC `prompt` parameter: provider default, `login` (always re-prompt for credentials), `consent`, or `select_account` | No |
 
 #### Login Settings
 
@@ -134,7 +136,24 @@ Navigate to **Settings > OIDC Auth** in your WordPress admin panel.
 |---------|-------------|
 | Login Button Text | Text displayed on the SSO login button |
 | Enable Single Logout | When enabled, logging out of WordPress also logs out of the IdP |
+| Enable Back-Channel Logout | End WordPress sessions when the IdP reports a logout (OIDC Back-Channel Logout 1.0). Register `<site>/?rest_route=/secure-oidc-login/v1/backchannel-logout` (shown on the settings page) as the back-channel logout URI at your IdP. |
 | Remember Users | Keep users logged in with WordPress's persistent 14-day cookie (default). Disable to use a session cookie that expires when the browser closes, aligning the WordPress session more closely with the IdP session. Also filterable via `secure_oidc_login_remember_user`. |
+
+### Back-Channel Logout
+
+When enabled, the IdP can terminate WordPress sessions directly (server-to-server) the moment the user's IdP session ends — logout at the IdP, an admin-forced logout, or a session timeout. Without it, WordPress sessions survive until the auth cookie expires.
+
+The endpoint validates the signed logout token per OIDC Back-Channel Logout 1.0 §2.6 (signature against the JWKS, `iss`, `aud`, `events`, `sub`/`sid`, no `nonce`) with single-use `jti` replay protection, then destroys all WordPress sessions for the matched user and clears their stored tokens.
+
+### Login Hints
+
+A login link can pre-fill the IdP's identifier field by adding `login_hint` to the initiation URL:
+
+```
+https://example.com/wp-login.php?oidc_login=1&login_hint=user@example.com
+```
+
+Developers can add IdP-specific authorization request parameters with the `secure_oidc_login_auth_params` filter; security-critical parameters (state, nonce, PKCE, redirect URI) cannot be overridden.
 
 #### User Settings
 

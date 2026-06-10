@@ -63,4 +63,32 @@ class WP_REST_Response
     {
         return $this->status;
     }
+
+    /**
+     * Response headers.
+     *
+     * @var array<string, string>
+     */
+    protected array $headers = [];
+
+    /**
+     * Set a response header.
+     *
+     * @param string $key Header name.
+     * @param string $value Header value.
+     */
+    public function header(string $key, string $value): void
+    {
+        $this->headers[$key] = $value;
+    }
+
+    /**
+     * Get response headers.
+     *
+     * @return array<string, string> Headers.
+     */
+    public function get_headers(): array
+    {
+        return $this->headers;
+    }
 }

@@ -617,16 +617,17 @@ class OIDCRestControllerTest extends OIDCTestCase
     }
 
     /**
-     * Test register_routes registers the discover endpoint.
+     * Capture all routes registered by register_routes(), keyed by route path.
+     *
+     * @return array<string, array<string, mixed>> Route args keyed by route path.
      */
-    public function testRegisterRoutesRegistersDiscoverEndpoint(): void
+    private function captureRegisteredRoutes(): array
     {
         $registeredRoutes = [];
 
         Functions\when('register_rest_route')->alias(function ($namespace, $route, $args) use (&$registeredRoutes) {
-            $registeredRoutes[] = [
+            $registeredRoutes[$route] = [
                 'namespace' => $namespace,
-                'route' => $route,
                 'args' => $args,
             ];
             return true;
@@ -634,9 +635,21 @@ class OIDCRestControllerTest extends OIDCTestCase
 
         $this->controller->register_routes();
 
-        $this->assertCount(1, $registeredRoutes);
-        $this->assertSame('secure-oidc-login/v1', $registeredRoutes[0]['namespace']);
-        $this->assertSame('/discover', $registeredRoutes[0]['route']);
+        return $registeredRoutes;
+    }
+
+    /**
+     * Test register_routes registers the discover and backchannel-logout endpoints.
+     */
+    public function testRegisterRoutesRegistersDiscoverEndpoint(): void
+    {
+        $routes = $this->captureRegisteredRoutes();
+
+        $this->assertCount(2, $routes);
+        $this->assertArrayHasKey('/discover', $routes);
+        $this->assertArrayHasKey('/backchannel-logout', $routes);
+        $this->assertSame('secure-oidc-login/v1', $routes['/discover']['namespace']);
+        $this->assertSame('secure-oidc-login/v1', $routes['/backchannel-logout']['namespace']);
     }
 
     /**
@@ -644,18 +657,10 @@ class OIDCRestControllerTest extends OIDCTestCase
      */
     public function testRegisterRoutesConfiguresPostMethod(): void
     {
-        $registeredArgs = null;
+        $routes = $this->captureRegisteredRoutes();
 
-        Functions\when('register_rest_route')->alias(function ($namespace, $route, $args) use (&$registeredArgs) {
-            $registeredArgs = $args;
-            return true;
-        });
-
-        $this->controller->register_routes();
-
-        $this->assertNotNull($registeredArgs);
         // WP_REST_Server::CREATABLE is 'POST'
-        $this->assertArrayHasKey('methods', $registeredArgs);
+        $this->assertArrayHasKey('methods', $routes['/discover']['args']);
     }
 
     /**
@@ -663,17 +668,10 @@ class OIDCRestControllerTest extends OIDCTestCase
      */
     public function testRegisterRoutesConfiguresPermissionCallback(): void
     {
-        $registeredArgs = null;
+        $routes = $this->captureRegisteredRoutes();
 
-        Functions\when('register_rest_route')->alias(function ($namespace, $route, $args) use (&$registeredArgs) {
-            $registeredArgs = $args;
-            return true;
-        });
-
-        $this->controller->register_routes();
-
-        $this->assertArrayHasKey('permission_callback', $registeredArgs);
-        $this->assertIsCallable($registeredArgs['permission_callback']);
+        $this->assertArrayHasKey('permission_callback', $routes['/discover']['args']);
+        $this->assertIsCallable($routes['/discover']['args']['permission_callback']);
     }
 
     /**
@@ -681,18 +679,12 @@ class OIDCRestControllerTest extends OIDCTestCase
      */
     public function testRegisterRoutesConfiguresDiscoveryUrlAsRequired(): void
     {
-        $registeredArgs = null;
+        $routes = $this->captureRegisteredRoutes();
+        $args = $routes['/discover']['args'];
 
-        Functions\when('register_rest_route')->alias(function ($namespace, $route, $args) use (&$registeredArgs) {
-            $registeredArgs = $args;
-            return true;
-        });
-
-        $this->controller->register_routes();
-
-        $this->assertArrayHasKey('args', $registeredArgs);
-        $this->assertArrayHasKey('discovery_url', $registeredArgs['args']);
-        $this->assertTrue($registeredArgs['args']['discovery_url']['required']);
+        $this->assertArrayHasKey('args', $args);
+        $this->assertArrayHasKey('discovery_url', $args['args']);
+        $this->assertTrue($args['args']['discovery_url']['required']);
     }
 
     /**
@@ -700,17 +692,11 @@ class OIDCRestControllerTest extends OIDCTestCase
      */
     public function testRegisterRoutesConfiguresValidateCallback(): void
     {
-        $registeredArgs = null;
+        $routes = $this->captureRegisteredRoutes();
+        $args = $routes['/discover']['args'];
 
-        Functions\when('register_rest_route')->alias(function ($namespace, $route, $args) use (&$registeredArgs) {
-            $registeredArgs = $args;
-            return true;
-        });
-
-        $this->controller->register_routes();
-
-        $this->assertArrayHasKey('validate_callback', $registeredArgs['args']['discovery_url']);
-        $this->assertIsCallable($registeredArgs['args']['discovery_url']['validate_callback']);
+        $this->assertArrayHasKey('validate_callback', $args['args']['discovery_url']);
+        $this->assertIsCallable($args['args']['discovery_url']['validate_callback']);
     }
 
     /**
@@ -718,17 +704,24 @@ class OIDCRestControllerTest extends OIDCTestCase
      */
     public function testRegisterRoutesConfiguresSanitizeCallback(): void
     {
-        $registeredArgs = null;
+        $routes = $this->captureRegisteredRoutes();
+        $args = $routes['/discover']['args'];
 
-        Functions\when('register_rest_route')->alias(function ($namespace, $route, $args) use (&$registeredArgs) {
-            $registeredArgs = $args;
-            return true;
-        });
+        $this->assertArrayHasKey('sanitize_callback', $args['args']['discovery_url']);
+        $this->assertSame('esc_url_raw', $args['args']['discovery_url']['sanitize_callback']);
+    }
 
-        $this->controller->register_routes();
+    /**
+     * Test the backchannel-logout route is public (authenticated by the logout token).
+     */
+    public function testRegisterRoutesBackchannelLogoutIsPublicAndRequiresToken(): void
+    {
+        $routes = $this->captureRegisteredRoutes();
+        $args = $routes['/backchannel-logout']['args'];
 
-        $this->assertArrayHasKey('sanitize_callback', $registeredArgs['args']['discovery_url']);
-        $this->assertSame('esc_url_raw', $registeredArgs['args']['discovery_url']['sanitize_callback']);
+        // Authenticated by the signed logout token, not a WP session
+        $this->assertSame('__return_true', $args['permission_callback']);
+        $this->assertTrue($args['args']['logout_token']['required']);
     }
 
     /**
@@ -1040,5 +1033,118 @@ class OIDCRestControllerTest extends OIDCTestCase
         // Should not have double slashes
         $this->assertStringNotContainsString('//.well-known', $requestedUrl);
         $this->assertStringContainsString('/.well-known/openid-configuration', $requestedUrl);
+    }
+
+    // =========================================================================
+    // Back-Channel Logout Endpoint Tests
+    // =========================================================================
+
+    /**
+     * Build a controller with a mocked back-channel handler and a request carrying a token.
+     *
+     * @param mixed       $handler_result Result for handle_logout_token, or null to expect no call.
+     * @param string|null $logout_token   The logout_token request parameter value.
+     * @return array{0: OIDC_REST_Controller, 1: WP_REST_Request} Controller and request.
+     */
+    private function buildBackchannelScenario(mixed $handler_result, ?string $logout_token): array
+    {
+        $handler = \Mockery::mock(\OIDC_Backchannel_Logout::class);
+
+        if (null === $handler_result) {
+            $handler->shouldNotReceive('handle_logout_token');
+        } else {
+            $handler->shouldReceive('handle_logout_token')
+                ->with($logout_token)
+                ->once()
+                ->andReturn($handler_result);
+        }
+
+        $controller = new OIDC_REST_Controller($handler);
+
+        $request = $this->createMock(WP_REST_Request::class);
+        $request->method('get_param')->willReturn($logout_token);
+
+        return [$controller, $request];
+    }
+
+    /**
+     * Test backchannel_logout returns 200 with no-store on success.
+     */
+    public function testBackchannelLogoutReturns200OnSuccess(): void
+    {
+        Functions\when('get_option')->justReturn(['enable_backchannel_logout' => true]);
+
+        [$controller, $request] = $this->buildBackchannelScenario(true, 'valid.logout.token');
+
+        $result = $controller->backchannel_logout($request);
+
+        $this->assertInstanceOf(WP_REST_Response::class, $result);
+        $this->assertSame(200, $result->get_status());
+        $this->assertSame('no-store', $result->get_headers()['Cache-Control'] ?? null);
+    }
+
+    /**
+     * Test backchannel_logout returns 400 for an invalid logout token.
+     */
+    public function testBackchannelLogoutReturns400OnInvalidToken(): void
+    {
+        Functions\when('get_option')->justReturn(['enable_backchannel_logout' => true]);
+
+        [$controller, $request] = $this->buildBackchannelScenario(
+            new WP_Error('oidc_error', 'Invalid logout token issuer.'),
+            'forged.logout.token'
+        );
+
+        $result = $controller->backchannel_logout($request);
+
+        $this->assertSame(400, $result->get_status());
+        $this->assertSame(['error' => 'invalid_request'], $result->get_data());
+    }
+
+    /**
+     * Test backchannel_logout returns 400 when the feature is disabled.
+     */
+    public function testBackchannelLogoutReturns400WhenDisabled(): void
+    {
+        Functions\when('get_option')->justReturn(['enable_backchannel_logout' => false]);
+
+        [$controller, $request] = $this->buildBackchannelScenario(null, 'any.logout.token');
+
+        $result = $controller->backchannel_logout($request);
+
+        $this->assertSame(400, $result->get_status());
+    }
+
+    /**
+     * Test backchannel_logout returns 400 for an empty token.
+     */
+    public function testBackchannelLogoutReturns400OnEmptyToken(): void
+    {
+        Functions\when('get_option')->justReturn(['enable_backchannel_logout' => true]);
+
+        [$controller, $request] = $this->buildBackchannelScenario(null, '');
+
+        $result = $controller->backchannel_logout($request);
+
+        $this->assertSame(400, $result->get_status());
+    }
+
+    /**
+     * Test backchannel_logout returns 429 when rate limited.
+     */
+    public function testBackchannelLogoutReturns429WhenRateLimited(): void
+    {
+        Functions\when('get_option')->justReturn(['enable_backchannel_logout' => true]);
+
+        // Rate limiter reads its state from transients; simulate an active lockout
+        Functions\when('get_transient')->alias(static function ($key) {
+            return str_contains((string) $key, 'lockout') ? time() + 60 : false;
+        });
+
+        [$controller, $request] = $this->buildBackchannelScenario(null, 'any.logout.token');
+
+        $result = $controller->backchannel_logout($request);
+
+        $this->assertSame(429, $result->get_status());
     }
 }
