@@ -2825,14 +2825,15 @@ class OIDCClientTest extends OIDCTestCase
      * Test Basic auth credentials are form-urlencoded before base64 encoding.
      *
      * Per RFC 6749 section 2.3.1 the client_id and client_secret must each be
-     * urlencoded before being combined with a colon, so secrets containing
-     * reserved characters (':', '%', '+') round-trip correctly.
+     * application/x-www-form-urlencoded (spaces become '+') before being combined
+     * with a colon, so secrets containing reserved characters (':', '%', '+', ' ')
+     * round-trip correctly.
      */
     public function testBasicAuthCredentialsAreFormUrlencoded(): void
     {
         Functions\when('get_option')->justReturn([
             'client_id' => 'client:with:colons',
-            'client_secret' => 'secret%with+special:chars',
+            'client_secret' => 'secret%with+special:chars and spaces',
             'token_endpoint' => 'https://idp.example.com/token',
         ]);
 
@@ -2856,7 +2857,7 @@ class OIDCClientTest extends OIDCTestCase
         $this->assertArrayHasKey('Authorization', $headers);
         $decoded = base64_decode(substr($headers['Authorization'], strlen('Basic ')));
         $this->assertSame(
-            rawurlencode('client:with:colons') . ':' . rawurlencode('secret%with+special:chars'),
+            'client%3Awith%3Acolons:secret%25with%2Bspecial%3Achars+and+spaces',
             $decoded
         );
     }

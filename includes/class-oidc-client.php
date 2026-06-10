@@ -183,9 +183,10 @@ class OIDC_Client {
 				// client_secret_basic (default): credentials in Authorization header only.
 				// Per RFC 6749 section 2.3.1, clients using Basic auth MUST NOT include
 				// credentials in the request body, and the client_id and client_secret
-				// MUST each be form-urlencoded before being combined with a colon and
-				// base64-encoded. This matters for secrets containing ':', '%', '+', etc.
-				$credentials              = rawurlencode( $client_id ) . ':' . rawurlencode( $client_secret );
+				// MUST each be application/x-www-form-urlencoded (spaces become '+')
+				// before being combined with a colon and base64-encoded. This matters
+				// for secrets containing ':', '%', '+', or spaces.
+				$credentials              = urlencode( $client_id ) . ':' . urlencode( $client_secret );
 				$headers['Authorization'] = 'Basic ' . base64_encode( $credentials );
 			}
 		} else {
@@ -1086,7 +1087,9 @@ class OIDC_Client {
 
 		// Strip query string and fragment before comparing — some providers (e.g. Azure AD B2C)
 		// require query parameters on the discovery URL that are not part of the issuer.
-		$normalized_url = strtok( $discovery_url, '?#' );
+		// strcspn()+substr() is used instead of strtok() to avoid resetting PHP's
+		// shared tokeniser state for unrelated code in the same request.
+		$normalized_url = substr( $discovery_url, 0, strcspn( $discovery_url, '?#' ) );
 		$expected_url   = rtrim( $issuer, '/' ) . '/.well-known/openid-configuration';
 
 		if ( rtrim( (string) $normalized_url, '/' ) !== $expected_url ) {
