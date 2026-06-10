@@ -134,6 +134,7 @@ Navigate to **Settings > OIDC Auth** in your WordPress admin panel.
 |---------|-------------|
 | Login Button Text | Text displayed on the SSO login button |
 | Enable Single Logout | When enabled, logging out of WordPress also logs out of the IdP |
+| Remember Users | Keep users logged in with WordPress's persistent 14-day cookie (default). Disable to use a session cookie that expires when the browser closes, aligning the WordPress session more closely with the IdP session. Also filterable via `secure_oidc_login_remember_user`. |
 
 #### User Settings
 

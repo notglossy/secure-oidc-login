@@ -590,6 +590,35 @@ class Secure_OIDC_Login {
 		delete_transient( 'oidc_state_' . $state );
 		$this->clear_state_cookie();
 
+		$options = get_option( 'secure_oidc_login_settings' );
+		if ( ! is_array( $options ) ) {
+			$options = array();
+		}
+
+		// SECURITY: Validate the RFC 9207 `iss` authorization response parameter before
+		// processing the response. This defends against IdP mix-up attacks: a response
+		// carrying a different issuer is rejected before the authorization code is used.
+		// If the IdP advertised authorization_response_iss_parameter_supported during
+		// discovery, the parameter is required on every response.
+		// The raw (unslashed) value is compared: sanitize_text_field() strips %XX
+		// sequences, which would corrupt percent-encoded issuer URLs and make valid
+		// callbacks fail the strict equality check. The value is only compared,
+		// never stored or output.
+		$expected_issuer = self::get_setting( 'issuer', $options );
+		$response_iss    = isset( $_GET['iss'] ) && is_string( $_GET['iss'] )
+			? wp_unslash( $_GET['iss'] ) // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Strict comparison only; never persisted or output.
+			: '';
+
+		if ( '' !== $response_iss ) {
+			if ( empty( $expected_issuer ) || $response_iss !== $expected_issuer ) {
+				$this->handle_error( __( 'Authorization response issuer does not match the configured identity provider.', 'secure-oidc-login' ) );
+				return;
+			}
+		} elseif ( ! empty( $options['authorization_response_iss_parameter_supported'] ) ) {
+			$this->handle_error( __( 'Missing iss parameter in authorization response.', 'secure-oidc-login' ) );
+			return;
+		}
+
 		// Check for errors returned by the IdP
 		if ( ! empty( $_GET['error'] ) ) {
 			// Keep if-then for nested condition clarity
@@ -633,9 +662,6 @@ class Secure_OIDC_Login {
 
 		// Delete nonce to prevent replay attacks
 		delete_transient( 'oidc_nonce_' . $state );
-
-		// Get plugin options for ACR validation and token storage
-		$options = get_option( 'secure_oidc_login_settings' );
 
 		// Validate ACR claim if enforcement is enabled
 		$acr_result = $this->client->validate_acr_claim( $id_token_claims, $options );
@@ -697,9 +723,22 @@ class Secure_OIDC_Login {
 		$this->rate_limiter->clear_limit( 'callback' );
 		$this->rate_limiter->clear_limit( 'login' );
 
-		// Establish WordPress session
+		// Establish WordPress session. "Remember" controls the auth cookie lifetime:
+		// enabled (default) gives WordPress's 14-day persistent cookie, disabled gives
+		// a session cookie that aligns the WP session more closely with the IdP session.
+		$remember = ! isset( $options['remember_user'] ) || ! empty( $options['remember_user'] );
+
+		/**
+		 * Filter whether the OIDC login should set a persistent ("remember me") auth cookie.
+		 *
+		 * @param bool                 $remember        Whether to set a persistent cookie.
+		 * @param WP_User              $user            The user being logged in.
+		 * @param array<string, mixed> $id_token_claims Validated ID token claims.
+		 */
+		$remember = (bool) apply_filters( 'secure_oidc_login_remember_user', $remember, $user, $id_token_claims );
+
 		wp_set_current_user( $user->ID );
-		wp_set_auth_cookie( $user->ID, true );
+		wp_set_auth_cookie( $user->ID, $remember );
 		do_action( 'wp_login', $user->user_login, $user );
 
 		// Redirect to requested page or admin dashboard
@@ -768,6 +807,13 @@ class Secure_OIDC_Login {
 				'id_token_hint'            => $id_token,
 				'post_logout_redirect_uri' => home_url(),
 			);
+
+			// Per OIDC RP-Initiated Logout 1.0 section 2, client_id lets the IdP
+			// validate post_logout_redirect_uri even when it cannot use id_token_hint.
+			$client_id = self::get_setting( 'client_id', $options );
+			if ( ! empty( $client_id ) ) {
+				$logout_params['client_id'] = $client_id;
+			}
 
 			$logout_url = $end_session_endpoint . '?' . http_build_query( $logout_params );
 
@@ -977,6 +1023,8 @@ class Secure_OIDC_Login {
 			'login_button_text'                     => 'Login with SSO',
 			'enable_single_logout'                  => false,
 			'disable_native_login'                  => false,
+			'remember_user'                         => true,
+			'authorization_response_iss_parameter_supported' => false,
 			'enable_auto_token_refresh'             => false,
 			'token_refresh_buffer'                  => 300,
 			'enforce_refresh_token_rotation'        => false,
@@ -997,15 +1045,16 @@ class Secure_OIDC_Login {
 	}
 
 	/**
-	 * Plugin deactivation hook. Cleans up OIDC-related transients.
+	 * Plugin deactivation hook. Cleans up OIDC-related transients and refresh locks.
 	 */
 	public function deactivate(): void {
 		global $wpdb;
 		$wpdb->query(
 			$wpdb->prepare(
-				"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s OR option_name LIKE %s",
+				"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s OR option_name LIKE %s OR option_name LIKE %s",
 				$wpdb->esc_like( '_transient_oidc_' ) . '%',
-				$wpdb->esc_like( '_transient_timeout_oidc_' ) . '%'
+				$wpdb->esc_like( '_transient_timeout_oidc_' ) . '%',
+				$wpdb->esc_like( OIDC_Token_Refresh::REFRESH_LOCK_PREFIX ) . '%'
 			)
 		);
 	}

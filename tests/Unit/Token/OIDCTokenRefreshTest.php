@@ -55,6 +55,11 @@ class OIDCTokenRefreshTest extends OIDCTestCase
         // Stub wp_salt for encryption
         Functions\when('wp_salt')->justReturn('test-salt-value-for-unit-testing');
 
+        // Stub the option functions backing the per-user refresh lock
+        // (add_option succeeding means no lock is held by default)
+        Functions\when('add_option')->justReturn(true);
+        Functions\when('delete_option')->justReturn(true);
+
         $this->client = Mockery::mock(OIDC_Client::class);
         $this->token_manager = Mockery::mock(OIDC_Token_Manager::class);
 
@@ -773,6 +778,11 @@ class OIDCTokenRefreshTest extends OIDCTestCase
 
     /**
      * Test refresh after previous refresh failure recovers correctly.
+     *
+     * The default add_option() stub always grants the lock, modeling a retry
+     * after the failure lock's TTL has elapsed. Immediate-retry suppression
+     * while the lock is held is covered by testRefreshSkipsWhenLockHeld and
+     * testRefreshKeepsLockOnFailure.
      */
     public function testRefreshAfterPreviousFailureRecovers(): void
     {
@@ -1445,5 +1455,198 @@ class OIDCTokenRefreshTest extends OIDCTestCase
 
         $this->assertInstanceOf(WP_Error::class, $result);
         $this->assertSame('oidc_refresh_id_token_invalid', $result->get_error_code());
+    }
+
+    // =========================================================================
+    // Refresh Concurrency Lock Tests
+    // =========================================================================
+
+    /**
+     * Test refresh is skipped when another request holds the per-user lock.
+     *
+     * Prevents parallel requests from racing the refresh: with rotation-enforcing
+     * IdPs, replaying the old refresh token after rotation can revoke the whole
+     * token family and log the user out.
+     */
+    public function testRefreshSkipsWhenLockHeld(): void
+    {
+        $user_id = 123;
+
+        // add_option() fails atomically because a concurrent request holds the lock
+        Functions\when('add_option')->justReturn(false);
+
+        // The lock timestamp is recent (within REFRESH_LOCK_TTL)
+        Functions\when('get_option')->alias(
+            static fn($key, $default = false) => 'oidc_refresh_lock_123' === $key ? (string) time() : []
+        );
+
+        // No IdP call and no token reads should happen
+        $this->token_manager->shouldNotReceive('get_refresh_token');
+        $this->client->shouldNotReceive('refresh_token');
+
+        $result = $this->refresh->refresh($user_id);
+
+        // Treated as success: the concurrent request is handling the refresh
+        $this->assertTrue($result);
+    }
+
+    /**
+     * Test refresh takes over a lock whose TTL has expired (crashed request).
+     */
+    public function testRefreshTakesOverStaleLock(): void
+    {
+        $user_id = 123;
+        $add_calls = 0;
+        $deleted_keys = [];
+
+        // First add_option() fails (stale lock row exists); after the stale lock
+        // is deleted, the retried add_option() succeeds.
+        Functions\when('add_option')->alias(function ($key) use (&$add_calls) {
+            $add_calls++;
+            return 1 !== $add_calls;
+        });
+
+        // The lock timestamp is older than REFRESH_LOCK_TTL
+        Functions\when('get_option')->alias(
+            static function ($key, $default = false) {
+                if ('oidc_refresh_lock_123' === $key) {
+                    return (string) (time() - OIDC_Token_Refresh::REFRESH_LOCK_TTL - 10);
+                }
+                return ['enforce_refresh_token_rotation' => false];
+            }
+        );
+
+        Functions\when('delete_option')->alias(function ($key) use (&$deleted_keys) {
+            $deleted_keys[] = $key;
+            return true;
+        });
+
+        $new_tokens = [
+            'access_token' => 'new-access-token',
+            'refresh_token' => 'new-refresh-token',
+            'expires_in' => 3600,
+        ];
+
+        $this->token_manager
+            ->shouldReceive('get_refresh_token')
+            ->with($user_id)
+            ->once()
+            ->andReturn('old-refresh-token');
+
+        $this->client
+            ->shouldReceive('refresh_token')
+            ->with('old-refresh-token')
+            ->once()
+            ->andReturn($new_tokens);
+
+        $this->token_manager
+            ->shouldReceive('was_refresh_token_rotated')
+            ->with($user_id, 'new-refresh-token')
+            ->once()
+            ->andReturn(true);
+
+        $this->token_manager
+            ->shouldReceive('store_tokens')
+            ->with($user_id, $new_tokens)
+            ->once()
+            ->andReturn(true);
+
+        $result = $this->refresh->refresh($user_id);
+
+        $this->assertTrue($result);
+        // Stale lock deleted before re-acquire, then released after success
+        $this->assertSame(2, $add_calls);
+        $this->assertContains('oidc_refresh_lock_123', $deleted_keys);
+    }
+
+    /**
+     * Test refresh acquires the lock and releases it on success.
+     */
+    public function testRefreshAcquiresAndReleasesLockOnSuccess(): void
+    {
+        $user_id = 123;
+        $added_keys = [];
+        $deleted_keys = [];
+
+        Functions\when('get_option')->justReturn([
+            'enforce_refresh_token_rotation' => false,
+        ]);
+
+        Functions\when('add_option')->alias(function ($key) use (&$added_keys) {
+            $added_keys[] = $key;
+            return true;
+        });
+        Functions\when('delete_option')->alias(function ($key) use (&$deleted_keys) {
+            $deleted_keys[] = $key;
+            return true;
+        });
+
+        $new_tokens = [
+            'access_token' => 'new-access-token',
+            'refresh_token' => 'new-refresh-token',
+            'expires_in' => 3600,
+        ];
+
+        $this->token_manager
+            ->shouldReceive('get_refresh_token')
+            ->with($user_id)
+            ->once()
+            ->andReturn('old-refresh-token');
+
+        $this->client
+            ->shouldReceive('refresh_token')
+            ->with('old-refresh-token')
+            ->once()
+            ->andReturn($new_tokens);
+
+        $this->token_manager
+            ->shouldReceive('was_refresh_token_rotated')
+            ->with($user_id, 'new-refresh-token')
+            ->once()
+            ->andReturn(true);
+
+        $this->token_manager
+            ->shouldReceive('store_tokens')
+            ->with($user_id, $new_tokens)
+            ->once()
+            ->andReturn(true);
+
+        $result = $this->refresh->refresh($user_id);
+
+        $this->assertTrue($result);
+        $this->assertContains('oidc_refresh_lock_123', $added_keys);
+        $this->assertContains('oidc_refresh_lock_123', $deleted_keys);
+    }
+
+    /**
+     * Test the lock is kept on failure so its TTL throttles retry storms.
+     */
+    public function testRefreshKeepsLockOnFailure(): void
+    {
+        $user_id = 123;
+        $deleted_keys = [];
+
+        Functions\when('get_option')->justReturn([]);
+        Functions\when('delete_option')->alias(function ($key) use (&$deleted_keys) {
+            $deleted_keys[] = $key;
+            return true;
+        });
+
+        $this->token_manager
+            ->shouldReceive('get_refresh_token')
+            ->with($user_id)
+            ->once()
+            ->andReturn('old-refresh-token');
+
+        $this->client
+            ->shouldReceive('refresh_token')
+            ->with('old-refresh-token')
+            ->once()
+            ->andReturn(new WP_Error('oidc_error', 'IdP temporarily unavailable'));
+
+        $result = $this->refresh->refresh($user_id);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertNotContains('oidc_refresh_lock_123', $deleted_keys);
     }
 }

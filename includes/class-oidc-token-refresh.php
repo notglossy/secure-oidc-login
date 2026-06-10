@@ -49,6 +49,27 @@ class OIDC_Token_Refresh {
 	const MAX_REFRESH_BUFFER = 3600;
 
 	/**
+	 * Lifetime of the per-user refresh lock in seconds.
+	 *
+	 * Long enough to cover the token endpoint round trip (10s timeout), short
+	 * enough that a failed refresh can be retried promptly without hammering the IdP.
+	 *
+	 * @var int
+	 */
+	const REFRESH_LOCK_TTL = 30;
+
+	/**
+	 * Option-name prefix for the per-user refresh lock.
+	 *
+	 * Stored as a non-autoloaded option (not a transient) because add_option()
+	 * maps to INSERT IGNORE on the option_name unique key, giving an atomic
+	 * acquire across concurrent requests. Cleaned up on plugin deactivation.
+	 *
+	 * @var string
+	 */
+	const REFRESH_LOCK_PREFIX = 'oidc_refresh_lock_';
+
+	/**
 	 * OIDC Client instance for token operations.
 	 *
 	 * @var OIDC_Client
@@ -116,6 +137,16 @@ class OIDC_Token_Refresh {
 	 * @return true|WP_Error True on success, WP_Error on failure.
 	 */
 	public function refresh( int $user_id ): bool|WP_Error {
+		// CONCURRENCY: Serialize refreshes per user. Parallel requests (multiple tabs,
+		// asset requests) would otherwise race: one request replays the old refresh
+		// token after another has rotated it, which rotation-enforcing IdPs treat as
+		// token reuse and may revoke the whole token family, logging the user out.
+		if ( ! $this->acquire_refresh_lock( $user_id ) ) {
+			// Another request is refreshing (or recently failed); treat as success so
+			// the current request proceeds with the still-valid stored token.
+			return true;
+		}
+
 		// Get the refresh token
 		$refresh_token = $this->token_manager->get_refresh_token( $user_id );
 		if ( is_wp_error( $refresh_token ) ) {
@@ -161,10 +192,58 @@ class OIDC_Token_Refresh {
 			return $store_result;
 		}
 
+		// Release the lock on success; the updated expiry prevents redundant refreshes.
+		$this->release_refresh_lock( $user_id );
+
 		// Log success
 		$this->log_refresh_success( $user_id );
 
 		return true;
+	}
+
+	/**
+	 * Atomically acquire the per-user refresh lock.
+	 *
+	 * CONCURRENCY: get_transient()+set_transient() is a non-atomic check-then-set,
+	 * so two requests could both miss the lock and both refresh. add_option() maps
+	 * to INSERT IGNORE on the option_name unique key, making the acquire atomic
+	 * across concurrent requests with or without a persistent object cache.
+	 *
+	 * The stored timestamp gives the lock a TTL: locks from crashed requests expire
+	 * after REFRESH_LOCK_TTL, and because the lock is only released on success, a
+	 * failed refresh leaves it in place so the TTL throttles retry storms against
+	 * a struggling IdP.
+	 *
+	 * @param int $user_id The WordPress user ID.
+	 * @return bool True if the lock was acquired, false if another request holds it.
+	 */
+	private function acquire_refresh_lock( int $user_id ): bool {
+		$lock_key = self::REFRESH_LOCK_PREFIX . $user_id;
+
+		if ( add_option( $lock_key, (string) time(), '', false ) ) {
+			return true;
+		}
+
+		$acquired_at = (int) get_option( $lock_key, 0 );
+		if ( time() - $acquired_at < self::REFRESH_LOCK_TTL ) {
+			return false;
+		}
+
+		// The existing lock is past its TTL (crashed request or failed refresh):
+		// clear it and retry the atomic acquire. If a concurrent request wins the
+		// add_option() race here, this request correctly backs off.
+		delete_option( $lock_key );
+		return add_option( $lock_key, (string) time(), '', false );
+	}
+
+	/**
+	 * Release the per-user refresh lock.
+	 *
+	 * @param int $user_id The WordPress user ID.
+	 * @return void
+	 */
+	private function release_refresh_lock( int $user_id ): void {
+		delete_option( self::REFRESH_LOCK_PREFIX . $user_id );
 	}
 
 	/**

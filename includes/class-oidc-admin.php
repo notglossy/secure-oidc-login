@@ -242,6 +242,16 @@ class OIDC_Admin {
 			'oidc_provider_section'
 		);
 
+		// Hidden field recording whether the IdP supports the RFC 9207 iss response
+		// parameter (populated by discovery; enforced on the OIDC callback when true)
+		add_settings_field(
+			'authorization_response_iss_parameter_supported',
+			'',
+			array( $this, 'render_iss_parameter_hidden_field' ),
+			'secure-oidc-login',
+			'oidc_provider_section'
+		);
+
 		add_settings_field(
 			'client_id',
 			__( 'Client ID', 'secure-oidc-login' ),
@@ -434,6 +444,19 @@ class OIDC_Admin {
 			array(
 				'field'       => 'disable_native_login',
 				'description' => __( 'Hide username/password form and block native authentication. Emergency access: add ?native=1 to login URL.', 'secure-oidc-login' ),
+			)
+		);
+
+		add_settings_field(
+			'remember_user',
+			__( 'Remember Users', 'secure-oidc-login' ),
+			array( $this, 'render_checkbox_field' ),
+			'secure-oidc-login',
+			'oidc_login_section',
+			array(
+				'field'       => 'remember_user',
+				'default'     => true,
+				'description' => __( 'Keep users logged in with a persistent 14-day cookie. Disable to use a session cookie so the WordPress session ends when the browser closes, aligning more closely with the identity provider session.', 'secure-oidc-login' ),
 			)
 		);
 
@@ -653,7 +676,7 @@ class OIDC_Admin {
 		);
 
 		// Boolean checkbox fields
-		$checkbox_fields = array( 'enable_single_logout', 'create_users', 'require_verified_email', 'disable_native_login', 'enable_auto_token_refresh', 'enforce_refresh_token_rotation', 'enforce_acr' );
+		$checkbox_fields = array( 'enable_single_logout', 'create_users', 'require_verified_email', 'disable_native_login', 'enable_auto_token_refresh', 'enforce_refresh_token_rotation', 'enforce_acr', 'remember_user' );
 
 		// Integer number fields with validation
 		$number_fields = array(
@@ -810,6 +833,22 @@ class OIDC_Admin {
 			$sanitized['id_token_signing_alg_values_supported'] = $existing_settings['id_token_signing_alg_values_supported'] ?? array();
 		}
 
+		// Sanitize authorization_response_iss_parameter_supported (hidden field set by
+		// discovery to '1' or '0'; rendered empty otherwise). An empty value means
+		// discovery did not run on this form submission.
+		$iss_input = $input['authorization_response_iss_parameter_supported'] ?? '';
+		if ( '1' === $iss_input || '0' === $iss_input ) {
+			$sanitized['authorization_response_iss_parameter_supported'] = ( '1' === $iss_input );
+		} elseif ( ( $sanitized['issuer'] ?? '' ) !== ( $existing_settings['issuer'] ?? '' ) ) {
+			// SECURITY: The flag was discovered for a specific issuer. If the issuer
+			// changes without a fresh discovery, the old provider's value must not
+			// carry over — the new IdP may not send the RFC 9207 iss parameter, and a
+			// stale "required" flag would hard-break every login against it.
+			$sanitized['authorization_response_iss_parameter_supported'] = false;
+		} else {
+			$sanitized['authorization_response_iss_parameter_supported'] = ! empty( $existing_settings['authorization_response_iss_parameter_supported'] );
+		}
+
 		return $sanitized;
 	}
 
@@ -963,6 +1002,21 @@ class OIDC_Admin {
 		}
 		?>
 		<input type="hidden" name="secure_oidc_login_settings[id_token_signing_alg_values_supported]" value="<?php echo esc_attr( $value ); ?>">
+		<?php
+	}
+
+	/**
+	 * Render a hidden field recording RFC 9207 iss response parameter support.
+	 *
+	 * Auto-populated during OIDC discovery from the IdP's
+	 * authorization_response_iss_parameter_supported value ('1' or '0').
+	 * The field is always rendered empty: a non-empty value proves discovery ran
+	 * on this form submission, which lets sanitize_settings() distinguish a fresh
+	 * discovery result from a stale flag carried over from a previous provider.
+	 */
+	public function render_iss_parameter_hidden_field(): void {
+		?>
+		<input type="hidden" name="secure_oidc_login_settings[authorization_response_iss_parameter_supported]" value="">
 		<?php
 	}
 
@@ -1157,7 +1211,8 @@ class OIDC_Admin {
 	public function render_checkbox_field( array $args ): void {
 		$options = get_option( 'secure_oidc_login_settings', array() );
 		$field   = $args['field'];
-		$checked = isset( $options[ $field ] ) && $options[ $field ] ? 'checked' : '';
+		$default = ! empty( $args['default'] );
+		$checked = ( $options[ $field ] ?? $default ) ? 'checked' : '';
 
 		// Check if this setting is overridden by environment variable
 		$env_var           = 'SECURE_OIDC_' . strtoupper( $field );

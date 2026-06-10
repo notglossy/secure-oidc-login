@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 - Bind the OIDC `state` to the initiating browser via an `HttpOnly` cookie, preventing login-CSRF / forced-login (session fixation)
+- Validate the discovery document `issuer` against the discovery URL (OIDC Discovery 1.0 §4.3) and require HTTPS on all advertised endpoints
+- Validate the RFC 9207 `iss` authorization response parameter on the callback; required when the IdP advertises support during discovery (IdP mix-up defense)
+- Form-urlencode `client_id`/`client_secret` in HTTP Basic credentials per RFC 6749 §2.3.1
+- Drop JWKS keys with an unknown `kty` instead of assigning them the JWT header algorithm
+
+### Added
+- "Remember Users" login setting and `secure_oidc_login_remember_user` filter to control the persistent 14-day auth cookie (previously always enabled)
+- `client_id` parameter on RP-initiated logout requests per OIDC RP-Initiated Logout 1.0
+
+### Fixed
+- Serialize automatic token refresh with a per-user lock so parallel requests cannot replay a rotated refresh token (which rotation-enforcing IdPs treat as reuse and may revoke the session)
+- Validate refresh token responses (`access_token` presence, Bearer `token_type`) in the client like the login-time token exchange
+- Lower the token refresh HTTP timeout from 30s to 10s so a slow IdP cannot block page loads for half a minute
 
 ## [1.3.1] - 2026-04-19
 
