@@ -600,8 +600,14 @@ class Secure_OIDC_Login {
 		// carrying a different issuer is rejected before the authorization code is used.
 		// If the IdP advertised authorization_response_iss_parameter_supported during
 		// discovery, the parameter is required on every response.
+		// The raw (unslashed) value is compared: sanitize_text_field() strips %XX
+		// sequences, which would corrupt percent-encoded issuer URLs and make valid
+		// callbacks fail the strict equality check. The value is only compared,
+		// never stored or output.
 		$expected_issuer = self::get_setting( 'issuer', $options );
-		$response_iss    = isset( $_GET['iss'] ) ? sanitize_text_field( wp_unslash( $_GET['iss'] ) ) : '';
+		$response_iss    = isset( $_GET['iss'] ) && is_string( $_GET['iss'] )
+			? wp_unslash( $_GET['iss'] ) // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Strict comparison only; never persisted or output.
+			: '';
 
 		if ( '' !== $response_iss ) {
 			if ( empty( $expected_issuer ) || $response_iss !== $expected_issuer ) {
@@ -1039,15 +1045,16 @@ class Secure_OIDC_Login {
 	}
 
 	/**
-	 * Plugin deactivation hook. Cleans up OIDC-related transients.
+	 * Plugin deactivation hook. Cleans up OIDC-related transients and refresh locks.
 	 */
 	public function deactivate(): void {
 		global $wpdb;
 		$wpdb->query(
 			$wpdb->prepare(
-				"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s OR option_name LIKE %s",
+				"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s OR option_name LIKE %s OR option_name LIKE %s",
 				$wpdb->esc_like( '_transient_oidc_' ) . '%',
-				$wpdb->esc_like( '_transient_timeout_oidc_' ) . '%'
+				$wpdb->esc_like( '_transient_timeout_oidc_' ) . '%',
+				$wpdb->esc_like( OIDC_Token_Refresh::REFRESH_LOCK_PREFIX ) . '%'
 			)
 		);
 	}

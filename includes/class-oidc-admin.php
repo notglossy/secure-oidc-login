@@ -834,11 +834,17 @@ class OIDC_Admin {
 		}
 
 		// Sanitize authorization_response_iss_parameter_supported (hidden field set by
-		// discovery to '1' or '0'). An empty value means discovery did not run on this
-		// form submission, so the previously stored value is preserved.
+		// discovery to '1' or '0'; rendered empty otherwise). An empty value means
+		// discovery did not run on this form submission.
 		$iss_input = $input['authorization_response_iss_parameter_supported'] ?? '';
 		if ( '1' === $iss_input || '0' === $iss_input ) {
 			$sanitized['authorization_response_iss_parameter_supported'] = ( '1' === $iss_input );
+		} elseif ( ( $sanitized['issuer'] ?? '' ) !== ( $existing_settings['issuer'] ?? '' ) ) {
+			// SECURITY: The flag was discovered for a specific issuer. If the issuer
+			// changes without a fresh discovery, the old provider's value must not
+			// carry over — the new IdP may not send the RFC 9207 iss parameter, and a
+			// stale "required" flag would hard-break every login against it.
+			$sanitized['authorization_response_iss_parameter_supported'] = false;
 		} else {
 			$sanitized['authorization_response_iss_parameter_supported'] = ! empty( $existing_settings['authorization_response_iss_parameter_supported'] );
 		}
@@ -1004,16 +1010,13 @@ class OIDC_Admin {
 	 *
 	 * Auto-populated during OIDC discovery from the IdP's
 	 * authorization_response_iss_parameter_supported value ('1' or '0').
-	 * An empty value means discovery has not run; the stored value is preserved.
+	 * The field is always rendered empty: a non-empty value proves discovery ran
+	 * on this form submission, which lets sanitize_settings() distinguish a fresh
+	 * discovery result from a stale flag carried over from a previous provider.
 	 */
 	public function render_iss_parameter_hidden_field(): void {
-		$options = get_option( 'secure_oidc_login_settings', array() );
-		$value   = '';
-		if ( isset( $options['authorization_response_iss_parameter_supported'] ) ) {
-			$value = $options['authorization_response_iss_parameter_supported'] ? '1' : '0';
-		}
 		?>
-		<input type="hidden" name="secure_oidc_login_settings[authorization_response_iss_parameter_supported]" value="<?php echo esc_attr( $value ); ?>">
+		<input type="hidden" name="secure_oidc_login_settings[authorization_response_iss_parameter_supported]" value="">
 		<?php
 	}
 

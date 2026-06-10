@@ -1759,4 +1759,87 @@ class OIDCAdminTest extends OIDCTestCase
             $this->assertStringContainsString($needle, $output, "{$method} should render its description text");
         }
     }
+
+    // =========================================================================
+    // RFC 9207 iss Parameter Support Flag Tests
+    // =========================================================================
+
+    /**
+     * Test sanitize_settings stores the iss-support flag from a fresh discovery.
+     */
+    public function testSanitizeSettingsSetsIssFlagFromDiscovery(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'issuer' => 'https://old-idp.example.com',
+            'authorization_response_iss_parameter_supported' => false,
+        ]);
+        Functions\when('current_user_can')->justReturn(true);
+        Functions\when('wp_verify_nonce')->justReturn(true);
+
+        $_POST['_wpnonce'] = 'valid-nonce';
+
+        // Discovery ran on this submission: issuer and flag submitted together
+        $input = [
+            'issuer' => 'https://new-idp.example.com',
+            'authorization_response_iss_parameter_supported' => '1',
+        ];
+
+        $result = $this->admin->sanitize_settings($input);
+
+        $this->assertTrue($result['authorization_response_iss_parameter_supported']);
+    }
+
+    /**
+     * Test sanitize_settings clears the iss-support flag when the issuer changes
+     * without a fresh discovery.
+     *
+     * The flag was discovered for a specific provider; carrying it over to a new
+     * issuer could hard-break login against an IdP that never sends iss.
+     */
+    public function testSanitizeSettingsClearsIssFlagWhenIssuerChangesWithoutDiscovery(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'issuer' => 'https://old-idp.example.com',
+            'authorization_response_iss_parameter_supported' => true,
+        ]);
+        Functions\when('current_user_can')->justReturn(true);
+        Functions\when('wp_verify_nonce')->justReturn(true);
+
+        $_POST['_wpnonce'] = 'valid-nonce';
+
+        // Issuer manually changed; hidden iss field is empty (no discovery run)
+        $input = [
+            'issuer' => 'https://new-idp.example.com',
+            'authorization_response_iss_parameter_supported' => '',
+        ];
+
+        $result = $this->admin->sanitize_settings($input);
+
+        $this->assertFalse($result['authorization_response_iss_parameter_supported']);
+    }
+
+    /**
+     * Test sanitize_settings preserves the iss-support flag when the issuer is unchanged.
+     */
+    public function testSanitizeSettingsPreservesIssFlagWhenIssuerUnchanged(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'issuer' => 'https://idp.example.com',
+            'authorization_response_iss_parameter_supported' => true,
+        ]);
+        Functions\when('current_user_can')->justReturn(true);
+        Functions\when('wp_verify_nonce')->justReturn(true);
+
+        $_POST['_wpnonce'] = 'valid-nonce';
+
+        // Normal settings save: same issuer, hidden iss field empty
+        $input = [
+            'issuer' => 'https://idp.example.com',
+            'authorization_response_iss_parameter_supported' => '',
+        ];
+
+        $result = $this->admin->sanitize_settings($input);
+
+        $this->assertTrue($result['authorization_response_iss_parameter_supported']);
+    }
 }
