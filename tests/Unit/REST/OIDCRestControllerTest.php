@@ -660,7 +660,8 @@ class OIDCRestControllerTest extends OIDCTestCase
         $routes = $this->captureRegisteredRoutes();
 
         // WP_REST_Server::CREATABLE is 'POST'
-        $this->assertArrayHasKey('methods', $routes['/discover']['args']);
+        $this->assertSame(\WP_REST_Server::CREATABLE, $routes['/discover']['args']['methods']);
+        $this->assertSame(\WP_REST_Server::CREATABLE, $routes['/backchannel-logout']['args']['methods']);
     }
 
     /**
@@ -1061,8 +1062,12 @@ class OIDCRestControllerTest extends OIDCTestCase
 
         $controller = new OIDC_REST_Controller($handler);
 
+        // Only answer for the exact parameter name the controller must use
         $request = $this->createMock(WP_REST_Request::class);
-        $request->method('get_param')->willReturn($logout_token);
+        $request->method('get_param')
+            ->willReturnCallback(
+                static fn (string $key) => 'logout_token' === $key ? $logout_token : null
+            );
 
         return [$controller, $request];
     }

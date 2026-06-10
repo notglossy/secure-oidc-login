@@ -149,7 +149,7 @@ The endpoint validates the signed logout token per OIDC Back-Channel Logout 1.0 
 
 A login link can pre-fill the IdP's identifier field by adding `login_hint` to the initiation URL:
 
-```
+```text
 https://example.com/wp-login.php?oidc_login=1&login_hint=user@example.com
 ```
 

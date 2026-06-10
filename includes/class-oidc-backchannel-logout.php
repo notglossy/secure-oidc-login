@@ -23,14 +23,27 @@ if ( ! defined( 'ABSPATH' ) ) {
 class OIDC_Backchannel_Logout {
 
 	/**
-	 * User meta key holding the SHA-256 hash of the IdP session ID (sid claim).
+	 * User meta key holding SHA-256 hashes of the IdP session IDs (sid claims).
 	 *
-	 * Hashed so raw IdP session identifiers are never stored in the database;
-	 * lookups compare hashes, which is all the logout flow needs.
+	 * One meta row per IdP session (non-unique meta), so logout tokens for any
+	 * of a user's concurrent IdP sessions can be correlated. Hashed so raw IdP
+	 * session identifiers are never stored in the database; lookups compare
+	 * hashes, which is all the logout flow needs.
 	 *
 	 * @var string
 	 */
 	const SID_HASH_META_KEY = 'oidc_sid_hash';
+
+	/**
+	 * Maximum number of IdP session hashes tracked per user.
+	 *
+	 * Bounds user-meta growth for IdPs that issue a fresh sid on every login.
+	 * When exceeded, older associations are dropped; their sessions can still
+	 * be logged out via the logout token's sub claim.
+	 *
+	 * @var int
+	 */
+	const MAX_TRACKED_SIDS = 10;
 
 	/**
 	 * OIDC Client for logout token validation.
@@ -62,15 +75,34 @@ class OIDC_Backchannel_Logout {
 	 *
 	 * Called from the OIDC callback when the ID token carries a sid claim, so a
 	 * later logout token containing only sid can be mapped back to the user.
+	 * Each sid is stored as its own meta row (appended, not overwritten) so
+	 * concurrent IdP sessions - e.g. two browsers - all remain correlated.
 	 *
 	 * @param int                  $user_id The WordPress user ID.
 	 * @param array<string, mixed> $claims  Validated ID token claims.
 	 * @return void
 	 */
 	public static function store_session_id( int $user_id, array $claims ): void {
-		if ( ! empty( $claims['sid'] ) && is_string( $claims['sid'] ) ) {
-			update_user_meta( $user_id, self::SID_HASH_META_KEY, hash( 'sha256', $claims['sid'] ) );
+		if ( empty( $claims['sid'] ) || ! is_string( $claims['sid'] ) ) {
+			return;
 		}
+
+		$sid_hash = hash( 'sha256', $claims['sid'] );
+		$existing = get_user_meta( $user_id, self::SID_HASH_META_KEY, false );
+		$existing = is_array( $existing ) ? $existing : array();
+
+		// Same IdP session re-authenticating: already tracked.
+		if ( in_array( $sid_hash, $existing, true ) ) {
+			return;
+		}
+
+		// Bound growth: past the cap, drop all older associations rather than
+		// growing forever. Affected sessions remain reachable via the sub claim.
+		if ( count( $existing ) >= self::MAX_TRACKED_SIDS ) {
+			delete_user_meta( $user_id, self::SID_HASH_META_KEY );
+		}
+
+		add_user_meta( $user_id, self::SID_HASH_META_KEY, $sid_hash );
 	}
 
 	/**
@@ -126,9 +158,10 @@ class OIDC_Backchannel_Logout {
 	/**
 	 * Destroy all WordPress sessions and stored OIDC state for a user.
 	 *
-	 * The logout token's sid identifies one IdP session, but only the most
-	 * recent sid per user is tracked, so all WordPress sessions for the user
-	 * are destroyed - the conservative reading the spec permits.
+	 * The logout token's sid identifies one IdP session, but WordPress sessions
+	 * are not mapped one-to-one to IdP sessions, so all WordPress sessions for
+	 * the user are destroyed - the conservative reading the spec permits.
+	 * delete_user_meta() without a value removes every tracked sid row.
 	 *
 	 * @param int $user_id The WordPress user ID.
 	 * @return void
