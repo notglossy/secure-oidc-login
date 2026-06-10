@@ -1122,23 +1122,23 @@ class OIDCRestControllerTest extends OIDCTestCase
 
     /**
      * Test the SECURE_OIDC_ENABLE_BACKCHANNEL_LOGOUT env var overrides the stored setting.
+     *
+     * setUp() stubs getenv() to false for all vars, so the override is stubbed per-test.
      */
     public function testBackchannelLogoutHonorsEnvOverride(): void
     {
-        putenv('SECURE_OIDC_ENABLE_BACKCHANNEL_LOGOUT=true');
+        Functions\when('getenv')->alias(
+            static fn($name) => 'SECURE_OIDC_ENABLE_BACKCHANNEL_LOGOUT' === $name ? 'true' : false
+        );
 
-        try {
-            // Stored setting disabled, but the env var enables the endpoint
-            Functions\when('get_option')->justReturn(['enable_backchannel_logout' => false]);
+        // Stored setting disabled, but the env var enables the endpoint
+        Functions\when('get_option')->justReturn(['enable_backchannel_logout' => false]);
 
-            [$controller, $request] = $this->buildBackchannelScenario(true, 'valid.logout.token');
+        [$controller, $request] = $this->buildBackchannelScenario(true, 'valid.logout.token');
 
-            $result = $controller->backchannel_logout($request);
+        $result = $controller->backchannel_logout($request);
 
-            $this->assertSame(200, $result->get_status());
-        } finally {
-            putenv('SECURE_OIDC_ENABLE_BACKCHANNEL_LOGOUT');
-        }
+        $this->assertSame(200, $result->get_status());
     }
 
     /**
@@ -1146,19 +1146,17 @@ class OIDCRestControllerTest extends OIDCTestCase
      */
     public function testBackchannelLogoutEnvOverrideCanDisable(): void
     {
-        putenv('SECURE_OIDC_ENABLE_BACKCHANNEL_LOGOUT=false');
+        Functions\when('getenv')->alias(
+            static fn($name) => 'SECURE_OIDC_ENABLE_BACKCHANNEL_LOGOUT' === $name ? 'false' : false
+        );
 
-        try {
-            Functions\when('get_option')->justReturn(['enable_backchannel_logout' => true]);
+        Functions\when('get_option')->justReturn(['enable_backchannel_logout' => true]);
 
-            [$controller, $request] = $this->buildBackchannelScenario(null, 'any.logout.token');
+        [$controller, $request] = $this->buildBackchannelScenario(null, 'any.logout.token');
 
-            $result = $controller->backchannel_logout($request);
+        $result = $controller->backchannel_logout($request);
 
-            $this->assertSame(400, $result->get_status());
-        } finally {
-            putenv('SECURE_OIDC_ENABLE_BACKCHANNEL_LOGOUT');
-        }
+        $this->assertSame(400, $result->get_status());
     }
 
     /**
