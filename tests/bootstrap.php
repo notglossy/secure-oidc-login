@@ -64,6 +64,7 @@ require_once __DIR__ . '/stubs/class-wp-rest-controller.php';
 require_once __DIR__ . '/stubs/class-wp-rest-request.php';
 require_once __DIR__ . '/stubs/class-wp-rest-response.php';
 require_once __DIR__ . '/stubs/class-wp-rest-server.php';
+require_once __DIR__ . '/stubs/class-wp-session-tokens.php';
 require_once __DIR__ . '/stubs/class-secure-oidc-login.php';
 
 // Load plugin class files
@@ -76,3 +77,4 @@ require_once dirname(__DIR__) . '/includes/class-oidc-rest-controller.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-rate-limiter.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-token-manager.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-token-refresh.php';
+require_once dirname(__DIR__) . '/includes/class-oidc-backchannel-logout.php';

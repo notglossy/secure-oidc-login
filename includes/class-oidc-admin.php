@@ -403,6 +403,39 @@ class OIDC_Admin {
 			)
 		);
 
+		add_settings_field(
+			'max_age',
+			__( 'Max Authentication Age (seconds)', 'secure-oidc-login' ),
+			array( $this, 'render_number_field' ),
+			'secure-oidc-login',
+			'oidc_provider_section',
+			array(
+				'field'       => 'max_age',
+				'default'     => 0,
+				'min'         => 0,
+				'max'         => 31536000,
+				'description' => __( 'Maximum elapsed time since the user last authenticated at the IdP. If exceeded, the IdP must re-authenticate them, and the ID token auth_time claim is verified. 0 disables.', 'secure-oidc-login' ),
+			)
+		);
+
+		add_settings_field(
+			'prompt',
+			__( 'Prompt', 'secure-oidc-login' ),
+			array( $this, 'render_radio_field' ),
+			'secure-oidc-login',
+			'oidc_provider_section',
+			array(
+				'field'   => 'prompt',
+				'options' => array(
+					''               => __( 'Provider default (no prompt parameter)', 'secure-oidc-login' ),
+					'login'          => __( 'login — always re-prompt for credentials', 'secure-oidc-login' ),
+					'consent'        => __( 'consent — always re-prompt for consent', 'secure-oidc-login' ),
+					'select_account' => __( 'select_account — always show the account chooser', 'secure-oidc-login' ),
+				),
+				'default' => '',
+			)
+		);
+
 		// === Login Settings Section ===
 		add_settings_section(
 			'oidc_login_section',
@@ -432,6 +465,22 @@ class OIDC_Admin {
 			array(
 				'field'       => 'enable_single_logout',
 				'description' => __( 'Logout from identity provider when logging out of WordPress.', 'secure-oidc-login' ),
+			)
+		);
+
+		add_settings_field(
+			'enable_backchannel_logout',
+			__( 'Enable Back-Channel Logout', 'secure-oidc-login' ),
+			array( $this, 'render_checkbox_field' ),
+			'secure-oidc-login',
+			'oidc_login_section',
+			array(
+				'field'       => 'enable_backchannel_logout',
+				'description' => sprintf(
+					/* translators: %s: back-channel logout endpoint URL */
+					__( 'End WordPress sessions when the identity provider reports a logout (OIDC Back-Channel Logout 1.0). Register this URL as the back-channel logout URI at your IdP: %s', 'secure-oidc-login' ),
+					rest_url( 'secure-oidc-login/v1/backchannel-logout' )
+				),
 			)
 		);
 
@@ -676,7 +725,7 @@ class OIDC_Admin {
 		);
 
 		// Boolean checkbox fields
-		$checkbox_fields = array( 'enable_single_logout', 'create_users', 'require_verified_email', 'disable_native_login', 'enable_auto_token_refresh', 'enforce_refresh_token_rotation', 'enforce_acr', 'remember_user' );
+		$checkbox_fields = array( 'enable_single_logout', 'create_users', 'require_verified_email', 'disable_native_login', 'enable_auto_token_refresh', 'enforce_refresh_token_rotation', 'enforce_acr', 'remember_user', 'enable_backchannel_logout' );
 
 		// Integer number fields with validation
 		$number_fields = array(
@@ -684,6 +733,11 @@ class OIDC_Admin {
 				'min'     => 60,
 				'max'     => 3600,
 				'default' => 300,
+			),
+			'max_age'              => array(
+				'min'     => 0,
+				'max'     => 31536000,
+				'default' => 0,
 			),
 		);
 
@@ -786,6 +840,13 @@ class OIDC_Admin {
 			'token_endpoint_auth_method' => array(
 				'allowed' => array( 'client_secret_basic', 'client_secret_post' ),
 				'default' => 'client_secret_basic',
+			),
+			'prompt'                     => array(
+				// 'none' is intentionally excluded: it fails interactive logins with
+				// login_required whenever the IdP has no session. Developers who need
+				// it can use the secure_oidc_login_auth_params filter.
+				'allowed' => array( '', 'login', 'consent', 'select_account' ),
+				'default' => '',
 			),
 		);
 

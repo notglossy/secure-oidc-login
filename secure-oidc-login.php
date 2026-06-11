@@ -62,6 +62,7 @@ require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-rest-controller
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-rate-limiter.php';
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-token-manager.php';
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-token-refresh.php';
+require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-backchannel-logout.php';
 
 /**
  * Main plugin class implementing OpenID Connect authentication for WordPress.
@@ -515,6 +516,60 @@ class Secure_OIDC_Login {
 			$auth_params['acr_values'] = $acr_values;
 		}
 
+		// max_age: maximum elapsed time since the user last authenticated at the
+		// IdP (OIDC Core 3.1.2.1). The matching auth_time claim is enforced on the
+		// callback via OIDC_Client::validate_auth_time().
+		$max_age = (int) self::get_setting( 'max_age', $options );
+		if ( $max_age > 0 ) {
+			$auth_params['max_age'] = (string) $max_age;
+		}
+
+		// prompt: instructs the IdP whether to re-prompt the user (OIDC Core 3.1.2.1).
+		$prompt = self::get_setting( 'prompt', $options );
+		if ( ! empty( $prompt ) ) {
+			$auth_params['prompt'] = $prompt;
+		}
+
+		// login_hint passthrough: lets a login link pre-fill the IdP's identifier
+		// field, e.g. wp-login.php?oidc_login=1&login_hint=user@example.com.
+		// A hint only affects the IdP's login UX; identity still comes from the
+		// validated ID token.
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Optional UX hint on the login-initiation URL; initiate_login() issues a fresh state/PKCE challenge.
+		if ( ! empty( $_GET['login_hint'] ) && is_string( $_GET['login_hint'] ) ) {
+			// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- See above.
+			$login_hint = sanitize_text_field( wp_unslash( $_GET['login_hint'] ) );
+			if ( '' !== $login_hint && strlen( $login_hint ) <= 255 ) {
+				$auth_params['login_hint'] = $login_hint;
+			}
+		}
+
+		/**
+		 * Filter the authorization request parameters.
+		 *
+		 * Allows adding IdP-specific parameters (e.g. audience, resource, ui_locales).
+		 * Security-critical parameters (response_type, client_id, redirect_uri, state,
+		 * nonce, PKCE) are re-applied after the filter and cannot be overridden.
+		 *
+		 * @param array<string, string> $auth_params The authorization request parameters.
+		 */
+		$filtered_params = apply_filters( 'secure_oidc_login_auth_params', $auth_params );
+		if ( is_array( $filtered_params ) ) {
+			// SECURITY: Re-assert the parameters the protocol's security depends on so
+			// a filter cannot weaken CSRF/replay/code-interception protections.
+			$auth_params = array_merge(
+				$filtered_params,
+				array(
+					'response_type'         => 'code',
+					'client_id'             => $client_id,
+					'redirect_uri'          => $redirect_uri,
+					'state'                 => $state,
+					'nonce'                 => $nonce,
+					'code_challenge'        => $code_challenge,
+					'code_challenge_method' => 'S256',
+				)
+			);
+		}
+
 		$auth_url = $authorization_endpoint . '?' . http_build_query( $auth_params );
 
 		wp_redirect( $auth_url ); // phpcs:ignore WordPress.Security.SafeRedirect.wp_redirect_wp_redirect -- Redirect to the external IdP authorization endpoint; wp_safe_redirect() would reject the off-site host.
@@ -671,6 +726,14 @@ class Secure_OIDC_Login {
 			return;
 		}
 
+		// Validate auth_time against max_age if configured (OIDC Core 3.1.3.7 step 13)
+		$auth_time_result = $this->client->validate_auth_time( $id_token_claims, $options );
+
+		if ( is_wp_error( $auth_time_result ) ) {
+			$this->handle_error( $auth_time_result->get_error_message() );
+			return;
+		}
+
 		// Fetch additional user info from userinfo endpoint
 		$userinfo = $this->client->get_userinfo( $tokens['access_token'] );
 
@@ -718,6 +781,10 @@ class Secure_OIDC_Login {
 			);
 			return;
 		}
+
+		// Record the IdP session ID (sid claim) so a back-channel logout token
+		// carrying only sid can be mapped back to this user.
+		OIDC_Backchannel_Logout::store_session_id( $user->ID, $id_token_claims );
 
 		// Clear rate limits on successful authentication
 		$this->rate_limiter->clear_limit( 'callback' );
@@ -1020,6 +1087,9 @@ class Secure_OIDC_Login {
 			'scope'                                 => 'openid email profile',
 			'acr_values'                            => '',
 			'enforce_acr'                           => false,
+			'max_age'                               => 0,
+			'prompt'                                => '',
+			'enable_backchannel_logout'             => false,
 			'login_button_text'                     => 'Login with SSO',
 			'enable_single_logout'                  => false,
 			'disable_native_login'                  => false,

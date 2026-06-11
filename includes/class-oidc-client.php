@@ -486,6 +486,145 @@ class OIDC_Client {
 	}
 
 	/**
+	 * Get the JWT clock-skew leeway in seconds.
+	 *
+	 * Accommodates time differences between the IdP and this server.
+	 * Default: 15 seconds. Override with the SECURE_OIDC_JWT_LEEWAY environment
+	 * variable (1-600 seconds).
+	 *
+	 * @return int Leeway in seconds.
+	 */
+	private static function get_jwt_leeway(): int {
+		$leeway     = 15; // Default: 15 seconds
+		$env_leeway = getenv( 'SECURE_OIDC_JWT_LEEWAY' );
+		if ( false !== $env_leeway && '' !== $env_leeway ) {
+			$parsed_leeway = filter_var( $env_leeway, FILTER_VALIDATE_INT );
+			if ( false !== $parsed_leeway && $parsed_leeway > 0 && $parsed_leeway <= 600 ) {
+				$leeway = $parsed_leeway;
+			} else {
+				error_log( '[Secure OIDC Login] Invalid SECURE_OIDC_JWT_LEEWAY value: ' . $env_leeway . '. Using default 15 seconds.' );
+			}
+		}
+		return $leeway;
+	}
+
+	/**
+	 * Validate the auth_time claim against the configured max_age.
+	 *
+	 * Per OIDC Core 3.1.2.1, when the max_age request parameter is used the ID
+	 * token MUST include an auth_time claim, and per 3.1.3.7 step 13 the RP
+	 * SHOULD verify that the elapsed time since authentication is within the
+	 * requested maximum. This ensures the IdP actually re-authenticated the user
+	 * rather than silently reusing an old session.
+	 *
+	 * @param array<string, mixed> $claims  The decoded ID token claims.
+	 * @param array<string, mixed> $options Plugin settings from WordPress options.
+	 * @return true|WP_Error True if validation passes, WP_Error on failure.
+	 */
+	public function validate_auth_time( array $claims, array $options ): bool|WP_Error {
+		$max_age = (int) Secure_OIDC_Login::get_setting( 'max_age', $options );
+
+		// max_age not configured: nothing was requested, nothing to enforce.
+		if ( $max_age <= 0 ) {
+			return true;
+		}
+
+		if ( ! isset( $claims['auth_time'] ) || ! is_numeric( $claims['auth_time'] ) ) {
+			return new WP_Error(
+				'oidc_auth_time_missing',
+				__( 'ID token is missing the auth_time claim required when max_age is requested.', 'secure-oidc-login' )
+			);
+		}
+
+		$elapsed = time() - (int) $claims['auth_time'];
+
+		if ( $elapsed > $max_age + self::get_jwt_leeway() ) {
+			return new WP_Error(
+				'oidc_auth_time_exceeded',
+				__( 'Authentication is older than the requested maximum age. Please sign in again.', 'secure-oidc-login' )
+			);
+		}
+
+		return true;
+	}
+
+	/**
+	 * Validate a back-channel logout token per OIDC Back-Channel Logout 1.0 Section 2.6.
+	 *
+	 * The logout token is a JWT delivered by the IdP directly to this site (not
+	 * through the browser), so it is the sole authentication for the logout
+	 * request. Validation: signature via JWKS (same asymmetric allowlist as ID
+	 * tokens), iss, aud, exp/iat (enforced by the JWT library), the required
+	 * events claim, presence of sub and/or sid, absence of nonce, and single-use
+	 * jti (replay cache).
+	 *
+	 * @param string $logout_token The JWT logout token from the IdP.
+	 * @return array<string, mixed>|WP_Error Verified claims array or error.
+	 */
+	public function validate_logout_token( string $logout_token ): array|WP_Error {
+		// Signature, exp, nbf, and iat are verified here (Section 2.6 step 4).
+		$claims = $this->decode_and_verify_jwt( $logout_token );
+		if ( is_wp_error( $claims ) ) {
+			return $claims;
+		}
+		unset( $claims['__jwt_alg'] );
+
+		// Verify iss matches the configured issuer (step 4).
+		$issuer = $this->get_setting( 'issuer' );
+		if ( empty( $issuer ) || ! isset( $claims['iss'] ) || $claims['iss'] !== $issuer ) {
+			return new WP_Error( 'oidc_error', __( 'Invalid logout token issuer.', 'secure-oidc-login' ) );
+		}
+
+		// Verify aud contains this client_id (step 4).
+		$client_id = $this->get_setting( 'client_id' );
+		$aud       = isset( $claims['aud'] ) ? ( is_array( $claims['aud'] ) ? $claims['aud'] : array( $claims['aud'] ) ) : array();
+		if ( empty( $client_id ) || ! in_array( $client_id, $aud, true ) ) {
+			return new WP_Error( 'oidc_error', __( 'Invalid logout token audience.', 'secure-oidc-login' ) );
+		}
+
+		// iat and exp are REQUIRED claims in logout tokens (Section 2.4); the JWT
+		// library only enforces them when present, so require them explicitly.
+		if ( ! isset( $claims['iat'] ) || ! isset( $claims['exp'] ) ) {
+			return new WP_Error( 'oidc_error', __( 'Logout token is missing required iat or exp claim.', 'secure-oidc-login' ) );
+		}
+
+		// Verify the events claim identifies this as a logout token (step 6).
+		$logout_event = 'http://schemas.openid.net/event/backchannel-logout';
+		if ( ! isset( $claims['events'] ) || ! is_array( $claims['events'] )
+			|| ! array_key_exists( $logout_event, $claims['events'] ) ) {
+			return new WP_Error( 'oidc_error', __( 'Logout token is missing the backchannel-logout event.', 'secure-oidc-login' ) );
+		}
+
+		// A nonce MUST NOT be present (step 7) - rejects ID tokens replayed as logout tokens.
+		if ( isset( $claims['nonce'] ) ) {
+			return new WP_Error( 'oidc_error', __( 'Logout token must not contain a nonce claim.', 'secure-oidc-login' ) );
+		}
+
+		// A sub and/or sid claim is required to identify what to log out (step 5).
+		if ( empty( $claims['sub'] ) && empty( $claims['sid'] ) ) {
+			return new WP_Error( 'oidc_error', __( 'Logout token must contain a sub or sid claim.', 'secure-oidc-login' ) );
+		}
+
+		// REPLAY PROTECTION: each jti may only be used once (step 8). The cache
+		// must outlive the token's JWT validity, so the TTL is derived from exp
+		// (plus clock-skew leeway), with a floor of 10 minutes and a cap of one
+		// day to keep a misconfigured IdP from creating long-lived transients.
+		if ( empty( $claims['jti'] ) || ! is_string( $claims['jti'] ) ) {
+			return new WP_Error( 'oidc_error', __( 'Logout token is missing the required jti claim.', 'secure-oidc-login' ) );
+		}
+
+		$jti_key = 'oidc_bcl_jti_' . hash( 'sha256', $claims['jti'] );
+		if ( false !== get_transient( $jti_key ) ) {
+			return new WP_Error( 'oidc_error', __( 'Logout token has already been used.', 'secure-oidc-login' ) );
+		}
+
+		$jti_ttl = min( max( (int) $claims['exp'] - time() + self::get_jwt_leeway(), 600 ), DAY_IN_SECONDS );
+		set_transient( $jti_key, 1, $jti_ttl );
+
+		return $claims;
+	}
+
+	/**
 	 * Decode and verify a JWT using Firebase JWT library.
 	 *
 	 * Performs signature verification, expiration validation, and decoding.
@@ -566,17 +705,7 @@ class OIDC_Client {
 			// This accommodates time differences between IdP and WordPress server
 			// Default: 15 seconds (reduced from 5 minutes for better security)
 			// Override with SECURE_OIDC_JWT_LEEWAY environment variable (in seconds)
-			$leeway     = 15; // Default: 15 seconds
-			$env_leeway = getenv( 'SECURE_OIDC_JWT_LEEWAY' );
-			if ( false !== $env_leeway && '' !== $env_leeway ) {
-				$parsed_leeway = filter_var( $env_leeway, FILTER_VALIDATE_INT );
-				if ( false !== $parsed_leeway && $parsed_leeway > 0 && $parsed_leeway <= 600 ) {
-					$leeway = $parsed_leeway;
-				} else {
-					error_log( '[Secure OIDC Login] Invalid SECURE_OIDC_JWT_LEEWAY value: ' . $env_leeway . '. Using default 15 seconds.' );
-				}
-			}
-			JWT::$leeway = $leeway;
+			JWT::$leeway = self::get_jwt_leeway();
 
 			// Decode and verify JWT (automatically validates signature, exp, nbf, iat)
 			$decoded = JWT::decode( $jwt, $keys );

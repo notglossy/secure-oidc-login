@@ -7,16 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Back-channel logout support (OIDC Back-Channel Logout 1.0): the IdP can terminate WordPress sessions server-to-server via `/secure-oidc-login/v1/backchannel-logout`, with full logout token validation and single-use `jti` replay protection
+- `max_age` request parameter with `auth_time` claim verification (OIDC Core 3.1.3.7 step 13) via the new "Max Authentication Age" setting
+- `prompt` setting (`login`/`consent`/`select_account`) and `login_hint` passthrough on the login initiation URL
+- `secure_oidc_login_auth_params` filter for IdP-specific authorization request parameters (security-critical parameters cannot be overridden)
+- "Remember Users" login setting and `secure_oidc_login_remember_user` filter to control the persistent 14-day auth cookie (previously always enabled)
+- `client_id` parameter on RP-initiated logout requests per OIDC RP-Initiated Logout 1.0
+
 ### Security
 - Bind the OIDC `state` to the initiating browser via an `HttpOnly` cookie, preventing login-CSRF / forced-login (session fixation)
 - Validate the discovery document `issuer` against the discovery URL (OIDC Discovery 1.0 §4.3) and require HTTPS on all advertised endpoints
 - Validate the RFC 9207 `iss` authorization response parameter on the callback; required when the IdP advertises support during discovery (IdP mix-up defense)
 - Form-urlencode `client_id`/`client_secret` in HTTP Basic credentials per RFC 6749 §2.3.1
 - Drop JWKS keys with an unknown `kty` instead of assigning them the JWT header algorithm
-
-### Added
-- "Remember Users" login setting and `secure_oidc_login_remember_user` filter to control the persistent 14-day auth cookie (previously always enabled)
-- `client_id` parameter on RP-initiated logout requests per OIDC RP-Initiated Logout 1.0
 
 ### Fixed
 - Serialize automatic token refresh with a per-user lock so parallel requests cannot replay a rotated refresh token (which rotation-enforcing IdPs treat as reuse and may revoke the session)

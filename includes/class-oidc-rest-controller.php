@@ -39,10 +39,20 @@ class OIDC_REST_Controller extends WP_REST_Controller {
 	private $rate_limiter;
 
 	/**
-	 * Constructor - Initialize rate limiter.
+	 * Back-channel logout handler, created lazily for the logout route.
+	 *
+	 * @var OIDC_Backchannel_Logout|null
 	 */
-	public function __construct() {
-		$this->rate_limiter = new OIDC_Rate_Limiter();
+	private ?OIDC_Backchannel_Logout $backchannel_handler;
+
+	/**
+	 * Constructor - Initialize rate limiter.
+	 *
+	 * @param OIDC_Backchannel_Logout|null $backchannel_handler Optional handler override for testing.
+	 */
+	public function __construct( ?OIDC_Backchannel_Logout $backchannel_handler = null ) {
+		$this->rate_limiter        = new OIDC_Rate_Limiter();
+		$this->backchannel_handler = $backchannel_handler;
 	}
 
 	/**
@@ -67,6 +77,103 @@ class OIDC_REST_Controller extends WP_REST_Controller {
 				),
 			)
 		);
+
+		register_rest_route(
+			$this->namespace,
+			'/backchannel-logout',
+			array(
+				'methods'             => WP_REST_Server::CREATABLE,
+				'callback'            => array( $this, 'backchannel_logout' ),
+				// SECURITY: This endpoint is called server-to-server by the IdP, not by a
+				// logged-in browser, so there is no WordPress authentication context. The
+				// request is authenticated by the signed logout token itself (signature,
+				// iss, aud, events, jti) in OIDC_Client::validate_logout_token().
+				'permission_callback' => '__return_true',
+				'args'                => array(
+					'logout_token' => array(
+						'required'    => true,
+						'type'        => 'string',
+						'description' => __( 'The signed OIDC logout token (JWT).', 'secure-oidc-login' ),
+					),
+				),
+			)
+		);
+	}
+
+	/**
+	 * Handle a back-channel logout request from the IdP.
+	 *
+	 * Per OIDC Back-Channel Logout 1.0 Section 2.8: 200 on success, 400 for an
+	 * invalid request, both with Cache-Control: no-store.
+	 *
+	 * @param WP_REST_Request<array<string, mixed>> $request The REST request.
+	 * @return WP_REST_Response The logout response.
+	 */
+	public function backchannel_logout( WP_REST_Request $request ): WP_REST_Response {
+		// SECURITY: Rate limit to blunt brute-force attempts against token validation.
+		// 400 (not 429) keeps the response within the status codes defined by OIDC
+		// Back-Channel Logout 1.0 Section 2.8, which strictly conforming IdPs expect.
+		if ( $this->rate_limiter->is_rate_limited( 'backchannel_logout' ) ) {
+			return $this->backchannel_response( array( 'error' => 'invalid_request' ), 400 );
+		}
+		$this->rate_limiter->record_attempt( 'backchannel_logout' );
+
+		// The SECURE_OIDC_ENABLE_BACKCHANNEL_LOGOUT environment variable overrides the
+		// stored setting, matching how the admin UI presents env-managed checkboxes
+		// (same true/false convention as SECURE_OIDC_ENFORCE_ACR).
+		$options = get_option( 'secure_oidc_login_settings', array() );
+		$enabled = ! empty( $options['enable_backchannel_logout'] );
+
+		$env_enabled = getenv( 'SECURE_OIDC_ENABLE_BACKCHANNEL_LOGOUT' );
+		if ( false !== $env_enabled && '' !== $env_enabled ) {
+			$enabled = 'true' === strtolower( (string) $env_enabled );
+		}
+
+		if ( ! $enabled ) {
+			// Feature disabled: respond 400 rather than 404 to avoid signaling
+			// whether the plugin is installed vs. merely unconfigured.
+			return $this->backchannel_response( array( 'error' => 'invalid_request' ), 400 );
+		}
+
+		$logout_token = $request->get_param( 'logout_token' );
+		if ( ! is_string( $logout_token ) || '' === $logout_token ) {
+			return $this->backchannel_response( array( 'error' => 'invalid_request' ), 400 );
+		}
+
+		$result = $this->get_backchannel_handler()->handle_logout_token( $logout_token );
+
+		if ( is_wp_error( $result ) ) {
+			return $this->backchannel_response( array( 'error' => 'invalid_request' ), 400 );
+		}
+
+		// Successful logout (or validly-signed token with nothing to log out).
+		return $this->backchannel_response( null, 200 );
+	}
+
+	/**
+	 * Build a back-channel logout response with the spec-required cache headers.
+	 *
+	 * @param array<string, string>|null $body   Response body, or null for an empty body.
+	 * @param int                        $status HTTP status code.
+	 * @return WP_REST_Response The response object.
+	 */
+	private function backchannel_response( ?array $body, int $status ): WP_REST_Response {
+		$response = new WP_REST_Response( $body, $status );
+		// Section 2.8: the RP's response MUST include Cache-Control: no-store.
+		$response->header( 'Cache-Control', 'no-store' );
+		return $response;
+	}
+
+	/**
+	 * Get the back-channel logout handler, creating it on first use.
+	 *
+	 * @return OIDC_Backchannel_Logout The handler instance.
+	 */
+	private function get_backchannel_handler(): OIDC_Backchannel_Logout {
+		if ( null === $this->backchannel_handler ) {
+			$this->backchannel_handler = new OIDC_Backchannel_Logout( new OIDC_Client(), new OIDC_Token_Manager() );
+		}
+		return $this->backchannel_handler;
 	}
 
 	/**
