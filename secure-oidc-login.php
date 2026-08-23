@@ -441,21 +441,21 @@ class Secure_OIDC_Login {
 	 */
 	public static function get_error_message( string $code ): string {
 		return match ( $code ) {
-			self::ERROR_RATE_LIMITED => __( 'Too many login attempts. Please try again later.', 'secure-oidc-login' ),
-			self::ERROR_MISSING_STATE,
-			self::ERROR_INVALID_STATE => __( 'Invalid or expired login session. Please try signing in again.', 'secure-oidc-login' ),
-			self::ERROR_STATE_BINDING_FAILED => __( 'Login could not be verified for this browser. Please try again.', 'secure-oidc-login' ),
-			self::ERROR_ISSUER_MISMATCH => __( 'Sign-in could not be completed because the identity provider response did not match the configured provider.', 'secure-oidc-login' ),
-			self::ERROR_IDP_ERROR => __( 'The identity provider reported an error during sign-in. Please try again.', 'secure-oidc-login' ),
-			self::ERROR_MISSING_CODE => __( 'Invalid authorization response. Please try signing in again.', 'secure-oidc-login' ),
-			self::ERROR_SESSION_EXPIRED => __( 'Login session expired. Please try again.', 'secure-oidc-login' ),
-			self::ERROR_TOKEN_EXCHANGE_FAILED => __( 'Sign-in failed while verifying your session with the identity provider. Please try again.', 'secure-oidc-login' ),
-			self::ERROR_TOKEN_VALIDATION_FAILED => __( 'Sign-in could not be verified. Please try again.', 'secure-oidc-login' ),
-			self::ERROR_ACR_FAILED => __( 'Your sign-in does not meet the required authentication assurance level. Please contact your administrator.', 'secure-oidc-login' ),
-			self::ERROR_AUTH_TIME_FAILED => __( 'Your authentication is too old. Please sign in again to continue.', 'secure-oidc-login' ),
-			self::ERROR_USERINFO_FAILED => __( 'Sign-in failed while retrieving your profile. Please try again.', 'secure-oidc-login' ),
-			self::ERROR_USER_PROVISIONING_FAILED => __( 'Sign-in failed while creating or updating your account. Please contact your administrator.', 'secure-oidc-login' ),
-			self::ERROR_TOKEN_STORAGE_FAILED => __( 'Authentication failed: Unable to securely store session tokens. Please contact your administrator.', 'secure-oidc-login' ),
+			'rate_limited' => __( 'Too many login attempts. Please try again later.', 'secure-oidc-login' ),
+			'missing_state',
+			'invalid_state' => __( 'Invalid or expired login session. Please try signing in again.', 'secure-oidc-login' ),
+			'state_binding_failed' => __( 'Login could not be verified for this browser. Please try again.', 'secure-oidc-login' ),
+			'issuer_mismatch' => __( 'Sign-in could not be completed because the identity provider response did not match the configured provider.', 'secure-oidc-login' ),
+			'idp_error' => __( 'The identity provider reported an error during sign-in. Please try again.', 'secure-oidc-login' ),
+			'missing_code' => __( 'Invalid authorization response. Please try signing in again.', 'secure-oidc-login' ),
+			'session_expired' => __( 'Login session expired. Please try again.', 'secure-oidc-login' ),
+			'token_exchange_failed' => __( 'Sign-in failed while verifying your session with the identity provider. Please try again.', 'secure-oidc-login' ),
+			'token_validation_failed' => __( 'Sign-in could not be verified. Please try again.', 'secure-oidc-login' ),
+			'acr_failed' => __( 'Your sign-in does not meet the required authentication assurance level. Please contact your administrator.', 'secure-oidc-login' ),
+			'auth_time_failed' => __( 'Your authentication is too old. Please sign in again to continue.', 'secure-oidc-login' ),
+			'userinfo_failed' => __( 'Sign-in failed while retrieving your profile. Please try again.', 'secure-oidc-login' ),
+			'user_provisioning_failed' => __( 'Sign-in failed while creating or updating your account. Please contact your administrator.', 'secure-oidc-login' ),
+			'token_storage_failed' => __( 'Authentication failed: Unable to securely store session tokens. Please contact your administrator.', 'secure-oidc-login' ),
 			default => __( 'Sign-in failed. Please try again.', 'secure-oidc-login' ),
 		};
 	}
@@ -492,17 +492,9 @@ class Secure_OIDC_Login {
 		if ( $this->rate_limiter->is_rate_limited( 'login' ) ) {
 			$expiry = $this->rate_limiter->get_lockout_expiry( 'login' );
 			if ( false !== $expiry ) {
-				$wait_time = $expiry - time();
-				$this->handle_error(
-					'rate_limited',
-					sprintf(
-						/* translators: %d: number of seconds */
-						__( 'Login rate limited for %d more seconds.', 'secure-oidc-login' ),
-						$wait_time
-					)
-				);
+				$this->redirect_rate_limited( $expiry - time() );
 			} else {
-				$this->handle_error( self::ERROR_RATE_LIMITED );
+				$this->handle_error( 'rate_limited' );
 			}
 			return;
 		}
@@ -645,17 +637,9 @@ class Secure_OIDC_Login {
 		if ( $this->rate_limiter->is_rate_limited( 'callback' ) ) {
 			$expiry = $this->rate_limiter->get_lockout_expiry( 'callback' );
 			if ( false !== $expiry ) {
-				$wait_time = $expiry - time();
-				$this->handle_error(
-					'rate_limited',
-					sprintf(
-						/* translators: %d: number of seconds */
-						__( 'Callback rate limited for %d more seconds.', 'secure-oidc-login' ),
-						$wait_time
-					)
-				);
+				$this->redirect_rate_limited( $expiry - time() );
 			} else {
-				$this->handle_error( self::ERROR_RATE_LIMITED );
+				$this->handle_error( 'rate_limited' );
 			}
 			return;
 		}
@@ -670,7 +654,7 @@ class Secure_OIDC_Login {
 		// phpcs:disable WordPress.Security.NonceVerification.Recommended
 		// Verify state to prevent CSRF
 		if ( empty( $_GET['state'] ) ) {
-			$this->handle_error( self::ERROR_MISSING_STATE );
+			$this->handle_error( 'missing_state' );
 			return;
 		}
 
@@ -680,7 +664,7 @@ class Secure_OIDC_Login {
 		if ( ! $stored_state ) {
 			// Clear any stale binding cookie from this expired/unknown flow.
 			$this->clear_state_cookie();
-			$this->handle_error( self::ERROR_INVALID_STATE );
+			$this->handle_error( 'invalid_state' );
 			return;
 		}
 
@@ -697,7 +681,7 @@ class Secure_OIDC_Login {
 			delete_transient( 'oidc_nonce_' . $state );
 			delete_transient( 'oidc_code_verifier_' . $state );
 			$this->clear_state_cookie();
-			$this->handle_error( self::ERROR_STATE_BINDING_FAILED );
+			$this->handle_error( 'state_binding_failed' );
 			return;
 		}
 
@@ -725,11 +709,11 @@ class Secure_OIDC_Login {
 
 		if ( '' !== $response_iss ) {
 			if ( empty( $expected_issuer ) || $response_iss !== $expected_issuer ) {
-				$this->handle_error( self::ERROR_ISSUER_MISMATCH, sprintf( 'Response iss %s does not match configured issuer.', $response_iss ) );
+				$this->handle_error( 'issuer_mismatch', sprintf( 'Response iss %s does not match configured issuer.', $response_iss ) );
 				return;
 			}
 		} elseif ( ! empty( $options['authorization_response_iss_parameter_supported'] ) ) {
-			$this->handle_error( self::ERROR_ISSUER_MISMATCH, 'Missing iss parameter in authorization response.' );
+			$this->handle_error( 'issuer_mismatch', 'Missing iss parameter in authorization response.' );
 			return;
 		}
 
@@ -743,12 +727,12 @@ class Secure_OIDC_Login {
 			}
 			// SECURITY: The IdP-provided description is logged, never reflected on the
 			// login page — it is attacker-influenceable via crafted redirect URIs.
-			$this->handle_error( self::ERROR_IDP_ERROR, $error_description );
+			$this->handle_error( 'idp_error', $error_description );
 			return;
 		}
 
 		if ( empty( $_GET['code'] ) ) {
-			$this->handle_error( self::ERROR_MISSING_CODE );
+			$this->handle_error( 'missing_code' );
 			return;
 		}
 
@@ -761,7 +745,7 @@ class Secure_OIDC_Login {
 		// (e.g. memcached LRU). Under strict types, passing false to exchange_code()'s
 		// ?string parameter would throw an uncaught TypeError; fail gracefully instead.
 		if ( ! is_string( $code_verifier ) || '' === $code_verifier ) {
-			$this->handle_error( self::ERROR_SESSION_EXPIRED );
+			$this->handle_error( 'session_expired' );
 			return;
 		}
 
@@ -769,7 +753,7 @@ class Secure_OIDC_Login {
 		$tokens = $this->client->exchange_code( $code, $code_verifier );
 
 		if ( is_wp_error( $tokens ) ) {
-			$this->handle_error( self::ERROR_TOKEN_EXCHANGE_FAILED, $tokens->get_error_message() );
+			$this->handle_error( 'token_exchange_failed', $tokens->get_error_message() );
 			return;
 		}
 
@@ -778,7 +762,7 @@ class Secure_OIDC_Login {
 		// so this check keeps replay protection fail-closed.
 		$nonce = get_transient( 'oidc_nonce_' . $state );
 		if ( ! is_string( $nonce ) || '' === $nonce ) {
-			$this->handle_error( self::ERROR_SESSION_EXPIRED );
+			$this->handle_error( 'session_expired' );
 			return;
 		}
 
@@ -786,7 +770,7 @@ class Secure_OIDC_Login {
 		$id_token_claims = $this->client->validate_id_token( $tokens['id_token'], $nonce, $code, $tokens['access_token'] );
 
 		if ( is_wp_error( $id_token_claims ) ) {
-			$this->handle_error( self::ERROR_TOKEN_VALIDATION_FAILED, $id_token_claims->get_error_message() );
+			$this->handle_error( 'token_validation_failed', $id_token_claims->get_error_message() );
 			return;
 		}
 
@@ -797,7 +781,7 @@ class Secure_OIDC_Login {
 		$acr_result = $this->client->validate_acr_claim( $id_token_claims, $options );
 
 		if ( is_wp_error( $acr_result ) ) {
-			$this->handle_error( self::ERROR_ACR_FAILED, $acr_result->get_error_message() );
+			$this->handle_error( 'acr_failed', $acr_result->get_error_message() );
 			return;
 		}
 
@@ -805,7 +789,7 @@ class Secure_OIDC_Login {
 		$auth_time_result = $this->client->validate_auth_time( $id_token_claims, $options );
 
 		if ( is_wp_error( $auth_time_result ) ) {
-			$this->handle_error( self::ERROR_AUTH_TIME_FAILED, $auth_time_result->get_error_message() );
+			$this->handle_error( 'auth_time_failed', $auth_time_result->get_error_message() );
 			return;
 		}
 
@@ -813,7 +797,7 @@ class Secure_OIDC_Login {
 		$userinfo = $this->client->get_userinfo( $tokens['access_token'] );
 
 		if ( is_wp_error( $userinfo ) ) {
-			$this->handle_error( self::ERROR_USERINFO_FAILED, $userinfo->get_error_message() );
+			$this->handle_error( 'userinfo_failed', $userinfo->get_error_message() );
 			return;
 		}
 
@@ -821,7 +805,7 @@ class Secure_OIDC_Login {
 		$user = $this->user_handler->get_or_create_user( $id_token_claims, $userinfo );
 
 		if ( is_wp_error( $user ) ) {
-			$this->handle_error( self::ERROR_USER_PROVISIONING_FAILED, $user->get_error_message() );
+			$this->handle_error( 'user_provisioning_failed', $user->get_error_message() );
 			return;
 		}
 
@@ -851,7 +835,7 @@ class Secure_OIDC_Login {
 		if ( is_wp_error( $store_result ) ) {
 			// SECURITY: Fail authentication if encryption fails - never store plaintext tokens
 			OIDC_Token_Crypto::log_error( 'Token storage failed: ' . $store_result->get_error_message() );
-			$this->handle_error( self::ERROR_TOKEN_STORAGE_FAILED );
+			$this->handle_error( 'token_storage_failed' );
 			return;
 		}
 
@@ -1134,6 +1118,16 @@ class Secure_OIDC_Login {
 	}
 
 	/**
+	 * Redirect to login page with the rate-limited error code.
+	 *
+	 * @param int $wait_time Seconds remaining in the lockout window.
+	 */
+	private function redirect_rate_limited( int $wait_time ): void {
+		// Log-only context; no i18n needed for operator logs.
+		$this->handle_error( 'rate_limited', sprintf( 'Rate limited for %d more seconds.', $wait_time ) );
+	}
+
+	/**
 	 * Redirect to login page with an OIDC error code.
 	 *
 	 * SECURITY: Only short error codes travel through the redirect URL; they are
@@ -1146,6 +1140,13 @@ class Secure_OIDC_Login {
 	 */
 	private function handle_error( string $code, string $log_context = '' ): void {
 		if ( '' !== $log_context ) {
+			// SECURITY: Neutralize CR/LF so attacker-controlled context (e.g. the iss
+			// query parameter) cannot forge additional log lines.
+			$log_context = str_replace(
+				array( "\r", "\n" ),
+				array( '\r', '\n' ),
+				$log_context
+			);
 			error_log( sprintf( '[Secure OIDC Login] Sign-in error [%s]: %s', $code, $log_context ) );
 		}
 
