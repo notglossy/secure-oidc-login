@@ -121,14 +121,15 @@ class OIDC_REST_Controller extends WP_REST_Controller {
 		}
 
 		// The SECURE_OIDC_ENABLE_BACKCHANNEL_LOGOUT environment variable overrides the
-		// stored setting, matching how the admin UI presents env-managed checkboxes
-		// (same true/false convention as SECURE_OIDC_ENFORCE_ACR).
+		// stored setting when set to a recognized boolean value; unrecognized values
+		// fall back to the stored setting (with a logged warning) instead of silently
+		// disabling the endpoint.
 		$options = get_option( 'secure_oidc_login_settings', array() );
 		$enabled = ! empty( $options['enable_backchannel_logout'] );
 
-		$env_enabled = getenv( 'SECURE_OIDC_ENABLE_BACKCHANNEL_LOGOUT' );
-		if ( false !== $env_enabled && '' !== $env_enabled ) {
-			$enabled = 'true' === strtolower( (string) $env_enabled );
+		$env_enabled = OIDC_Env::get_bool( 'SECURE_OIDC_ENABLE_BACKCHANNEL_LOGOUT' );
+		if ( null !== $env_enabled ) {
+			$enabled = $env_enabled;
 		}
 
 		if ( ! $enabled ) {

@@ -41,8 +41,8 @@ class OIDC_Admin {
 	 * @return bool True if unsafe mode is enabled.
 	 */
 	private function is_unsafe_mode_enabled(): bool {
-		$allow_unsafe = getenv( 'SECURE_OIDC_ALLOW_UNSAFE' );
-		return false !== $allow_unsafe && 'true' === strtolower( $allow_unsafe );
+		// Unrecognized values are treated as disabled (fail-closed) with a logged warning.
+		return true === OIDC_Env::get_bool( 'SECURE_OIDC_ALLOW_UNSAFE' );
 	}
 
 	/**
