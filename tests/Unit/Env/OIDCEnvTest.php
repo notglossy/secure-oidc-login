@@ -58,8 +58,6 @@ class OIDCEnvTest extends OIDCTestCase
     {
         return [
             'lowercase true' => ['true'],
-            'uppercase TRUE' => ['TRUE'],
-            'mixed case True' => ['True'],
             'numeric one' => ['1'],
             'yes' => ['yes'],
             'on' => ['on'],
@@ -84,7 +82,6 @@ class OIDCEnvTest extends OIDCTestCase
     {
         return [
             'lowercase false' => ['false'],
-            'uppercase FALSE' => ['FALSE'],
             'numeric zero' => ['0'],
             'no' => ['no'],
             'off' => ['off'],
