@@ -697,6 +697,14 @@ class Secure_OIDC_Login {
 		delete_transient( 'oidc_code_verifier_' . $state );
 		// phpcs:enable WordPress.Security.NonceVerification.Recommended
 
+		// get_transient() returns false when the transient expired or was evicted
+		// (e.g. memcached LRU). Under strict types, passing false to exchange_code()'s
+		// ?string parameter would throw an uncaught TypeError; fail gracefully instead.
+		if ( ! is_string( $code_verifier ) || '' === $code_verifier ) {
+			$this->handle_error( __( 'Login session expired. Please try again.', 'secure-oidc-login' ) );
+			return;
+		}
+
 		// Exchange authorization code for access/ID tokens
 		$tokens = $this->client->exchange_code( $code, $code_verifier );
 
@@ -705,8 +713,14 @@ class Secure_OIDC_Login {
 			return;
 		}
 
-		// Retrieve nonce before validation
+		// Retrieve nonce before validation. A missing transient must fail explicitly:
+		// passing null would skip nonce validation entirely in validate_id_token(),
+		// so this check keeps replay protection fail-closed.
 		$nonce = get_transient( 'oidc_nonce_' . $state );
+		if ( ! is_string( $nonce ) || '' === $nonce ) {
+			$this->handle_error( __( 'Login session expired. Please try again.', 'secure-oidc-login' ) );
+			return;
+		}
 
 		// Validate ID token claims (issuer, audience, expiration) and nonce
 		$id_token_claims = $this->client->validate_id_token( $tokens['id_token'], $nonce, $code, $tokens['access_token'] );
