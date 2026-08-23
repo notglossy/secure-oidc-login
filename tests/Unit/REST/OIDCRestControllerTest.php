@@ -1194,4 +1194,57 @@ class OIDCRestControllerTest extends OIDCTestCase
 
         $this->assertSame(400, $result->get_status());
     }
+
+    /**
+     * Test a successfully validated logout token does not count toward the rate limit.
+     *
+     * Regression test for issue #72: an IdP performing bulk revocation sends many
+     * valid tokens from one IP; counting them would lock out legitimate traffic and
+     * leave sessions alive past IdP revocation. Only invalid tokens may accumulate.
+     */
+    public function testBackchannelLogoutSuccessDoesNotRecordAttempt(): void
+    {
+        Functions\when('get_option')->justReturn(['enable_backchannel_logout' => true]);
+
+        $recorded = [];
+        Functions\when('set_transient')->alias(static function ($key, $value) use (&$recorded) {
+            if (str_contains((string) $key, 'backchannel')) {
+                $recorded[] = $key;
+            }
+            return true;
+        });
+
+        [$controller, $request] = $this->buildBackchannelScenario(true, 'valid.logout.token');
+
+        $result = $controller->backchannel_logout($request);
+
+        $this->assertSame(200, $result->get_status());
+        $this->assertSame([], $recorded, 'A valid logout token must not record a rate-limit attempt.');
+    }
+
+    /**
+     * Test an invalid logout token still counts toward the rate limit.
+     */
+    public function testBackchannelLogoutInvalidTokenRecordsAttempt(): void
+    {
+        Functions\when('get_option')->justReturn(['enable_backchannel_logout' => true]);
+
+        $recorded = [];
+        Functions\when('set_transient')->alias(static function ($key, $value) use (&$recorded) {
+            if (str_contains((string) $key, 'backchannel')) {
+                $recorded[] = $key;
+            }
+            return true;
+        });
+
+        [$controller, $request] = $this->buildBackchannelScenario(
+            new WP_Error('oidc_error', 'Invalid logout token issuer.'),
+            'forged.logout.token'
+        );
+
+        $result = $controller->backchannel_logout($request);
+
+        $this->assertSame(400, $result->get_status());
+        $this->assertCount(1, $recorded, 'An invalid logout token must record a rate-limit attempt.');
+    }
 }

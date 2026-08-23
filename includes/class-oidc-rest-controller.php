@@ -116,7 +116,6 @@ class OIDC_REST_Controller extends WP_REST_Controller {
 		if ( $this->rate_limiter->is_rate_limited( 'backchannel_logout' ) ) {
 			return $this->backchannel_response( array( 'error' => 'invalid_request' ), 400 );
 		}
-		$this->rate_limiter->record_attempt( 'backchannel_logout' );
 
 		// The SECURE_OIDC_ENABLE_BACKCHANNEL_LOGOUT environment variable overrides the
 		// stored setting, matching how the admin UI presents env-managed checkboxes
@@ -137,12 +136,18 @@ class OIDC_REST_Controller extends WP_REST_Controller {
 
 		$logout_token = $request->get_param( 'logout_token' );
 		if ( ! is_string( $logout_token ) || '' === $logout_token ) {
+			$this->rate_limiter->record_attempt( 'backchannel_logout' );
 			return $this->backchannel_response( array( 'error' => 'invalid_request' ), 400 );
 		}
 
 		$result = $this->get_backchannel_handler()->handle_logout_token( $logout_token );
 
 		if ( is_wp_error( $result ) ) {
+			// SECURITY: Only invalid tokens accumulate toward the rate limit. Valid
+			// tokens are not counted, so an IdP performing bulk revocation (admin
+			// force-logout, incident response) cannot self-throttle and leave
+			// sessions alive past IdP revocation.
+			$this->rate_limiter->record_attempt( 'backchannel_logout' );
 			return $this->backchannel_response( array( 'error' => 'invalid_request' ), 400 );
 		}
 
