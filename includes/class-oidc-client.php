@@ -351,6 +351,13 @@ class OIDC_Client {
 			return new WP_Error( 'oidc_error', __( 'Missing required sub claim in ID token.', 'secure-oidc-login' ) );
 		}
 
+		// iat and exp are REQUIRED claims in ID tokens (OIDC Core Section 2); the JWT
+		// library only enforces them when present, so require them explicitly. Without
+		// this check a token without exp would never expire.
+		if ( ! isset( $claims['iat'] ) || ! isset( $claims['exp'] ) ) {
+			return new WP_Error( 'oidc_error', __( 'ID token is missing required iat or exp claim.', 'secure-oidc-login' ) );
+		}
+
 		// Verify the token was issued by the expected IdP (OIDC Core spec 3.1.3.7)
 		// If we are missing the issuer in settings, fail since there is nothing to compare against.
 		$issuer = $this->get_setting( 'issuer' );
