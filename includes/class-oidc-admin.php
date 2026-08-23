@@ -41,8 +41,8 @@ class OIDC_Admin {
 	 * @return bool True if unsafe mode is enabled.
 	 */
 	private function is_unsafe_mode_enabled(): bool {
-		$allow_unsafe = getenv( 'SECURE_OIDC_ALLOW_UNSAFE' );
-		return false !== $allow_unsafe && 'true' === strtolower( $allow_unsafe );
+		// Unrecognized values are treated as disabled (fail-closed) with a logged warning.
+		return true === OIDC_Env::get_bool( 'SECURE_OIDC_ALLOW_UNSAFE' );
 	}
 
 	/**
@@ -1275,14 +1275,16 @@ class OIDC_Admin {
 		$default = ! empty( $args['default'] );
 		$checked = ( $options[ $field ] ?? $default ) ? 'checked' : '';
 
-		// Check if this setting is overridden by environment variable
+		// Check if this setting is overridden by environment variable. Only
+		// recognized boolean values count as an override; unrecognized values fall
+		// back to the stored setting at runtime, so the UI must reflect that too.
 		$env_var           = 'SECURE_OIDC_' . strtoupper( $field );
-		$env_value         = getenv( $env_var );
-		$is_env_overridden = false !== $env_value && '' !== $env_value;
+		$env_value         = OIDC_Env::get_bool( $env_var );
+		$is_env_overridden = null !== $env_value;
 
 		if ( $is_env_overridden ) {
 			// Use env var value instead of database value
-			$checked = 'true' === strtolower( (string) $env_value ) ? 'checked' : '';
+			$checked = $env_value ? 'checked' : '';
 		}
 
 		// SECURITY WARNING: Show inline warning when email verification is disabled

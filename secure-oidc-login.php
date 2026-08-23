@@ -54,6 +54,7 @@ if ( ! class_exists( 'Firebase\JWT\JWT' ) ) {
 }
 
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-url.php';
+require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-env.php';
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-client.php';
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-state-binding.php';
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-admin.php';
@@ -290,9 +291,10 @@ class Secure_OIDC_Login {
 	 * @return bool True if emergency bypass is enabled and parameter is present.
 	 */
 	private function is_emergency_bypass_active(): bool {
-		// SECURITY: Emergency bypass must be explicitly enabled via environment variable
-		$bypass_enabled = getenv( 'SECURE_OIDC_ENABLE_EMERGENCY_BYPASS' );
-		if ( false === $bypass_enabled || 'true' !== strtolower( (string) $bypass_enabled ) ) {
+		// SECURITY: Emergency bypass must be explicitly enabled via environment variable.
+		// Unrecognized values are treated as disabled (fail-closed) with a logged warning.
+		$bypass_enabled = OIDC_Env::get_bool( 'SECURE_OIDC_ENABLE_EMERGENCY_BYPASS' );
+		if ( true !== $bypass_enabled ) {
 			return false;
 		}
 

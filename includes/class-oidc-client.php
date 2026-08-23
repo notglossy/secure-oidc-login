@@ -448,16 +448,12 @@ class OIDC_Client {
 
 		// Determine whether ACR enforcement is enabled. The plugin setting is
 		// used as default, but can be overridden by the SECURE_OIDC_ENFORCE_ACR
-		// environment variable when set (accepts "true"/"false").
+		// environment variable when set to a recognized boolean value.
 		$enforce_acr = ! empty( $options['enforce_acr'] );
-		$env_enforce = getenv( 'SECURE_OIDC_ENFORCE_ACR' );
+		$env_enforce = OIDC_Env::get_bool( 'SECURE_OIDC_ENFORCE_ACR' );
 
-		if ( false !== $env_enforce && '' !== $env_enforce ) {
-			if ( 'true' === strtolower( (string) $env_enforce ) ) {
-				$enforce_acr = true;
-			} else {
-				$enforce_acr = false;
-			}
+		if ( null !== $env_enforce ) {
+			$enforce_acr = $env_enforce;
 		}
 
 		// If enforcement is off or no ACR values configured, skip validation
@@ -1243,9 +1239,10 @@ class OIDC_Client {
 		}
 
 		// Require HTTPS on all advertised endpoints (matches the HTTPS requirement
-		// already enforced for the discovery URL itself).
-		$allow_insecure = getenv( 'SECURE_OIDC_ALLOW_INSECURE_DISCOVERY' );
-		$require_https  = false === $allow_insecure || 'true' !== strtolower( (string) $allow_insecure );
+		// already enforced for the discovery URL itself). Unrecognized values for the
+		// override variable are treated as disabled (fail-closed) with a logged warning.
+		$allow_insecure = OIDC_Env::get_bool( 'SECURE_OIDC_ALLOW_INSECURE_DISCOVERY' );
+		$require_https  = true !== $allow_insecure;
 
 		$endpoint_keys = array(
 			'authorization_endpoint',
