@@ -404,6 +404,35 @@ class OIDCClientTest extends OIDCTestCase
     }
 
     /**
+     * Test validate_id_token rejects tokens missing the required iat/exp claims.
+     *
+     * The JWT library only enforces exp when present (OIDC Core Section 2 makes both
+     * claims REQUIRED); without this check a token without exp would never expire.
+     */
+    public function testValidateIdTokenRejectsMissingRequiredClaims(): void
+    {
+        $base = static fn (): array => [
+            'sub' => 'user-123',
+            'iss' => 'https://idp.example.com',
+            'aud' => 'test-client-id',
+        ];
+
+        // Missing exp
+        $claims = $base();
+        $claims['exp'] = null; // override stub default: claim absent
+        $result = $this->createClientWithStubbedJwt($claims)->validate_id_token('h.p.s');
+        $this->assertInstanceOf(\WP_Error::class, $result);
+        $this->assertStringContainsString('iat or exp', $result->get_error_message());
+
+        // Missing iat
+        $claims = $base();
+        $claims['iat'] = null; // override stub default: claim absent
+        $result = $this->createClientWithStubbedJwt($claims)->validate_id_token('h.p.s');
+        $this->assertInstanceOf(\WP_Error::class, $result);
+        $this->assertStringContainsString('iat or exp', $result->get_error_message());
+    }
+
+    /**
      * Test exchange_code includes PKCE code_verifier parameter when provided.
      */
     public function testExchangeCodeIncludesPkceCodeVerifier(): void
@@ -2532,7 +2561,12 @@ class OIDCClientTest extends OIDCTestCase
 
             protected function decode_and_verify_jwt(string $jwt, bool $retry = true): array|\WP_Error
             {
-                return array_merge(['__jwt_alg' => 'RS256'], $this->stubbedClaims);
+                // Default iat/exp mirror a well-formed token; tests targeting the
+                // required-claim check override them with null.
+                return array_merge(
+                    ['__jwt_alg' => 'RS256', 'iat' => time(), 'exp' => time() + 300],
+                    $this->stubbedClaims
+                );
             }
         };
     }
@@ -3226,15 +3260,15 @@ class OIDCClientTest extends OIDCTestCase
      */
     public function testValidateLogoutTokenRejectsMissingRequiredClaims(): void
     {
-        // Missing exp
+        // Missing exp (explicit null: isset(null) is false, so the claim counts as absent)
         $claims = $this->getSampleLogoutTokenClaims();
-        unset($claims['exp']);
+        $claims['exp'] = null;
         $result = $this->createClientWithStubbedJwt($claims)->validate_logout_token('h.p.s');
         $this->assertInstanceOf(WP_Error::class, $result);
 
         // Missing jti
         $claims = $this->getSampleLogoutTokenClaims();
-        unset($claims['jti']);
+        $claims['jti'] = null;
         $result = $this->createClientWithStubbedJwt($claims)->validate_logout_token('h.p.s');
         $this->assertInstanceOf(WP_Error::class, $result);
         $this->assertStringContainsString('jti', $result->get_error_message());
