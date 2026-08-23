@@ -68,6 +68,7 @@ require_once __DIR__ . '/stubs/class-wp-session-tokens.php';
 require_once __DIR__ . '/stubs/class-secure-oidc-login.php';
 
 // Load plugin class files
+require_once dirname(__DIR__) . '/includes/class-oidc-url.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-token-crypto.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-admin.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-client.php';
