@@ -781,7 +781,7 @@ class OIDCClientTest extends OIDCTestCase
         $result = $method->invoke($this->client);
 
         $this->assertInstanceOf(WP_Error::class, $result);
-        $this->assertStringContainsString('Invalid JWKS response', $result->get_error_message());
+        $this->assertSame('jwks_fetch', $result->get_error_code());
     }
 
     /**
@@ -1961,6 +1961,68 @@ class OIDCClientTest extends OIDCTestCase
         $result = $reflection->invoke($this->client, 'header.payload.signature');
 
         $this->assertInstanceOf(WP_Error::class, $result);
+    }
+
+    /**
+     * Test decode_and_verify_jwt propagates the jwks_fetch error from a failed
+     * forced refresh after a signature failure.
+     *
+     * Key-rotation retry path: the first signature verification fails, the client
+     * force-refreshes the JWKS, and if that fetch fails the infrastructure error
+     * must propagate (not be masked as a generic signature failure) so callers can
+     * distinguish IdP outages from invalid tokens.
+     */
+    public function testDecodeAndVerifyJwtPropagatesJwksErrorOnForcedRefreshFailure(): void
+    {
+        // Generate two real RSA keys: sign with A, publish B in the JWKS, so
+        // verification genuinely fails as SignatureInvalidException.
+        $resA = openssl_pkey_new(['private_key_bits' => 2048, 'private_key_type' => OPENSSL_KEYTYPE_RSA]);
+        openssl_pkey_export($resA, $privateKeyA);
+        $resB = openssl_pkey_new(['private_key_bits' => 2048, 'private_key_type' => OPENSSL_KEYTYPE_RSA]);
+        $detailsB = openssl_pkey_get_details($resB);
+
+        $b64url = static fn (string $bytes) => rtrim(strtr(base64_encode($bytes), '+/', '-_'), '=');
+
+        $jwks = ['keys' => [
+            [
+                'kty' => 'RSA',
+                'kid' => 'test-key',
+                'alg' => 'RS256',
+                'use' => 'sig',
+                'n'   => $b64url($detailsB['rsa']['n']),
+                'e'   => $b64url($detailsB['rsa']['e']),
+            ],
+        ]];
+
+        // First fetch (initial JWKS load) succeeds; the forced refresh fails.
+        $calls = 0;
+        Functions\when('get_transient')->justReturn(false);
+        Functions\when('wp_safe_remote_get')->alias(function () use (&$calls, $jwks) {
+            $calls++;
+            if (1 === $calls) {
+                return ['body' => json_encode($jwks), 'response' => ['code' => 200]];
+            }
+            return new WP_Error('http_error', 'Connection failed');
+        });
+        Functions\when('is_wp_error')->alias(fn($thing) => $thing instanceof WP_Error);
+        Functions\when('set_transient')->justReturn(true);
+        Functions\when('wp_json_encode')->alias(fn($data) => json_encode($data));
+
+        // Build a genuine RS256 JWT signed with key A while the JWKS publishes key B.
+        // The header carries the kid so JWT::decode can select the verification key.
+        $header = $b64url(json_encode(['alg' => 'RS256', 'typ' => 'JWT', 'kid' => 'test-key']));
+        $payload = $b64url(json_encode(['sub' => 'test']));
+        $signingInput = "$header.$payload";
+        openssl_sign($signingInput, $signatureBytes, $privateKeyA, OPENSSL_ALGO_SHA256);
+        $jwt = "$signingInput." . $b64url($signatureBytes);
+
+        $reflection = new \ReflectionMethod(OIDC_Client::class, 'decode_and_verify_jwt');
+        $reflection->setAccessible(true);
+
+        $result = $reflection->invoke($this->client, $jwt);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('jwks_fetch', $result->get_error_code());
     }
 
     /**
