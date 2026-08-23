@@ -407,6 +407,60 @@ class Secure_OIDC_Login {
 	}
 
 	/**
+	 * Fixed, translatable messages for OIDC error codes shown on the login page.
+	 *
+	 * SECURITY: Free-text error detail (IdP error_description, WP_Error messages)
+	 * is never passed through the redirect URL — only these short codes are. This
+	 * prevents attacker-crafted links from reflecting arbitrary phishing text on
+	 * wp-login.php under the "SSO Error" label.
+	 */
+	private const ERROR_RATE_LIMITED             = 'rate_limited';
+	private const ERROR_MISSING_STATE            = 'missing_state';
+	private const ERROR_INVALID_STATE            = 'invalid_state';
+	private const ERROR_STATE_BINDING_FAILED     = 'state_binding_failed';
+	private const ERROR_ISSUER_MISMATCH          = 'issuer_mismatch';
+	private const ERROR_IDP_ERROR                = 'idp_error';
+	private const ERROR_MISSING_CODE             = 'missing_code';
+	private const ERROR_SESSION_EXPIRED          = 'session_expired';
+	private const ERROR_TOKEN_EXCHANGE_FAILED    = 'token_exchange_failed';
+	private const ERROR_TOKEN_VALIDATION_FAILED  = 'token_validation_failed';
+	private const ERROR_ACR_FAILED               = 'acr_failed';
+	private const ERROR_AUTH_TIME_FAILED         = 'auth_time_failed';
+	private const ERROR_USERINFO_FAILED          = 'userinfo_failed';
+	private const ERROR_USER_PROVISIONING_FAILED = 'user_provisioning_failed';
+	private const ERROR_TOKEN_STORAGE_FAILED     = 'token_storage_failed';
+
+	/**
+	 * Get the fixed message for an OIDC error code.
+	 *
+	 * Unknown codes fall back to a generic message so arbitrary values in the
+	 * oidc_error URL parameter never reach the login screen.
+	 *
+	 * @param string $code Error code.
+	 * @return string Translated, fixed error message.
+	 */
+	public static function get_error_message( string $code ): string {
+		return match ( $code ) {
+			self::ERROR_RATE_LIMITED => __( 'Too many login attempts. Please try again later.', 'secure-oidc-login' ),
+			self::ERROR_MISSING_STATE,
+			self::ERROR_INVALID_STATE => __( 'Invalid or expired login session. Please try signing in again.', 'secure-oidc-login' ),
+			self::ERROR_STATE_BINDING_FAILED => __( 'Login could not be verified for this browser. Please try again.', 'secure-oidc-login' ),
+			self::ERROR_ISSUER_MISMATCH => __( 'Sign-in could not be completed because the identity provider response did not match the configured provider.', 'secure-oidc-login' ),
+			self::ERROR_IDP_ERROR => __( 'The identity provider reported an error during sign-in. Please try again.', 'secure-oidc-login' ),
+			self::ERROR_MISSING_CODE => __( 'Invalid authorization response. Please try signing in again.', 'secure-oidc-login' ),
+			self::ERROR_SESSION_EXPIRED => __( 'Login session expired. Please try again.', 'secure-oidc-login' ),
+			self::ERROR_TOKEN_EXCHANGE_FAILED => __( 'Sign-in failed while verifying your session with the identity provider. Please try again.', 'secure-oidc-login' ),
+			self::ERROR_TOKEN_VALIDATION_FAILED => __( 'Sign-in could not be verified. Please try again.', 'secure-oidc-login' ),
+			self::ERROR_ACR_FAILED => __( 'Your sign-in does not meet the required authentication assurance level. Please contact your administrator.', 'secure-oidc-login' ),
+			self::ERROR_AUTH_TIME_FAILED => __( 'Your authentication is too old. Please sign in again to continue.', 'secure-oidc-login' ),
+			self::ERROR_USERINFO_FAILED => __( 'Sign-in failed while retrieving your profile. Please try again.', 'secure-oidc-login' ),
+			self::ERROR_USER_PROVISIONING_FAILED => __( 'Sign-in failed while creating or updating your account. Please contact your administrator.', 'secure-oidc-login' ),
+			self::ERROR_TOKEN_STORAGE_FAILED => __( 'Authentication failed: Unable to securely store session tokens. Please contact your administrator.', 'secure-oidc-login' ),
+			default => __( 'Sign-in failed. Please try again.', 'secure-oidc-login' ),
+		};
+	}
+
+	/**
 	 * Display OIDC-related error messages on the login page.
 	 *
 	 * Filters the login_errors to add OIDC authentication errors passed via
@@ -417,11 +471,11 @@ class Secure_OIDC_Login {
 	 * @return string Updated error messages including OIDC errors.
 	 */
 	public function display_login_errors( $errors ): string {
-		// phpcs:disable WordPress.Security.NonceVerification.Recommended -- Read-only display of an error message returned in the redirect URL; no state change, so a WP nonce does not apply.
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended -- Read-only display of an error code returned in the redirect URL; no state change, so a WP nonce does not apply.
 		if ( ! empty( $_GET['oidc_error'] ) ) {
-			$oidc_error = sanitize_text_field( wp_unslash( $_GET['oidc_error'] ) );
-			$errors    .= '<strong>' . esc_html__( 'SSO Error', 'secure-oidc-login' ) . ':</strong> ';
-			$errors    .= esc_html( $oidc_error ) . '<br />';
+			$oidc_error_code = sanitize_text_field( wp_unslash( $_GET['oidc_error'] ) );
+			$errors         .= '<strong>' . esc_html__( 'SSO Error', 'secure-oidc-login' ) . ':</strong> ';
+			$errors         .= esc_html( self::get_error_message( $oidc_error_code ) ) . '<br />';
 		}
 		// phpcs:enable WordPress.Security.NonceVerification.Recommended
 		return $errors;
@@ -440,14 +494,15 @@ class Secure_OIDC_Login {
 			if ( false !== $expiry ) {
 				$wait_time = $expiry - time();
 				$this->handle_error(
+					'rate_limited',
 					sprintf(
 						/* translators: %d: number of seconds */
-						__( 'Too many login attempts. Please wait %d seconds before trying again.', 'secure-oidc-login' ),
+						__( 'Login rate limited for %d more seconds.', 'secure-oidc-login' ),
 						$wait_time
 					)
 				);
 			} else {
-				$this->handle_error( __( 'Too many login attempts. Please try again later.', 'secure-oidc-login' ) );
+				$this->handle_error( self::ERROR_RATE_LIMITED );
 			}
 			return;
 		}
@@ -592,14 +647,15 @@ class Secure_OIDC_Login {
 			if ( false !== $expiry ) {
 				$wait_time = $expiry - time();
 				$this->handle_error(
+					'rate_limited',
 					sprintf(
 						/* translators: %d: number of seconds */
-						__( 'Too many authentication attempts. Please wait %d seconds before trying again.', 'secure-oidc-login' ),
+						__( 'Callback rate limited for %d more seconds.', 'secure-oidc-login' ),
 						$wait_time
 					)
 				);
 			} else {
-				$this->handle_error( __( 'Too many authentication attempts. Please try again later.', 'secure-oidc-login' ) );
+				$this->handle_error( self::ERROR_RATE_LIMITED );
 			}
 			return;
 		}
@@ -614,7 +670,7 @@ class Secure_OIDC_Login {
 		// phpcs:disable WordPress.Security.NonceVerification.Recommended
 		// Verify state to prevent CSRF
 		if ( empty( $_GET['state'] ) ) {
-			$this->handle_error( __( 'Missing state parameter.', 'secure-oidc-login' ) );
+			$this->handle_error( self::ERROR_MISSING_STATE );
 			return;
 		}
 
@@ -624,7 +680,7 @@ class Secure_OIDC_Login {
 		if ( ! $stored_state ) {
 			// Clear any stale binding cookie from this expired/unknown flow.
 			$this->clear_state_cookie();
-			$this->handle_error( __( 'Invalid or expired state parameter.', 'secure-oidc-login' ) );
+			$this->handle_error( self::ERROR_INVALID_STATE );
 			return;
 		}
 
@@ -641,7 +697,7 @@ class Secure_OIDC_Login {
 			delete_transient( 'oidc_nonce_' . $state );
 			delete_transient( 'oidc_code_verifier_' . $state );
 			$this->clear_state_cookie();
-			$this->handle_error( __( 'Login could not be verified for this browser. Please try again.', 'secure-oidc-login' ) );
+			$this->handle_error( self::ERROR_STATE_BINDING_FAILED );
 			return;
 		}
 
@@ -669,11 +725,11 @@ class Secure_OIDC_Login {
 
 		if ( '' !== $response_iss ) {
 			if ( empty( $expected_issuer ) || $response_iss !== $expected_issuer ) {
-				$this->handle_error( __( 'Authorization response issuer does not match the configured identity provider.', 'secure-oidc-login' ) );
+				$this->handle_error( self::ERROR_ISSUER_MISMATCH, sprintf( 'Response iss %s does not match configured issuer.', $response_iss ) );
 				return;
 			}
 		} elseif ( ! empty( $options['authorization_response_iss_parameter_supported'] ) ) {
-			$this->handle_error( __( 'Missing iss parameter in authorization response.', 'secure-oidc-login' ) );
+			$this->handle_error( self::ERROR_ISSUER_MISMATCH, 'Missing iss parameter in authorization response.' );
 			return;
 		}
 
@@ -685,12 +741,14 @@ class Secure_OIDC_Login {
 			} else {
 				$error_description = sanitize_text_field( wp_unslash( $_GET['error'] ) );
 			}
-			$this->handle_error( $error_description );
+			// SECURITY: The IdP-provided description is logged, never reflected on the
+			// login page — it is attacker-influenceable via crafted redirect URIs.
+			$this->handle_error( self::ERROR_IDP_ERROR, $error_description );
 			return;
 		}
 
 		if ( empty( $_GET['code'] ) ) {
-			$this->handle_error( __( 'Missing authorization code.', 'secure-oidc-login' ) );
+			$this->handle_error( self::ERROR_MISSING_CODE );
 			return;
 		}
 
@@ -703,7 +761,7 @@ class Secure_OIDC_Login {
 		// (e.g. memcached LRU). Under strict types, passing false to exchange_code()'s
 		// ?string parameter would throw an uncaught TypeError; fail gracefully instead.
 		if ( ! is_string( $code_verifier ) || '' === $code_verifier ) {
-			$this->handle_error( __( 'Login session expired. Please try again.', 'secure-oidc-login' ) );
+			$this->handle_error( self::ERROR_SESSION_EXPIRED );
 			return;
 		}
 
@@ -711,7 +769,7 @@ class Secure_OIDC_Login {
 		$tokens = $this->client->exchange_code( $code, $code_verifier );
 
 		if ( is_wp_error( $tokens ) ) {
-			$this->handle_error( $tokens->get_error_message() );
+			$this->handle_error( self::ERROR_TOKEN_EXCHANGE_FAILED, $tokens->get_error_message() );
 			return;
 		}
 
@@ -720,7 +778,7 @@ class Secure_OIDC_Login {
 		// so this check keeps replay protection fail-closed.
 		$nonce = get_transient( 'oidc_nonce_' . $state );
 		if ( ! is_string( $nonce ) || '' === $nonce ) {
-			$this->handle_error( __( 'Login session expired. Please try again.', 'secure-oidc-login' ) );
+			$this->handle_error( self::ERROR_SESSION_EXPIRED );
 			return;
 		}
 
@@ -728,7 +786,7 @@ class Secure_OIDC_Login {
 		$id_token_claims = $this->client->validate_id_token( $tokens['id_token'], $nonce, $code, $tokens['access_token'] );
 
 		if ( is_wp_error( $id_token_claims ) ) {
-			$this->handle_error( $id_token_claims->get_error_message() );
+			$this->handle_error( self::ERROR_TOKEN_VALIDATION_FAILED, $id_token_claims->get_error_message() );
 			return;
 		}
 
@@ -739,7 +797,7 @@ class Secure_OIDC_Login {
 		$acr_result = $this->client->validate_acr_claim( $id_token_claims, $options );
 
 		if ( is_wp_error( $acr_result ) ) {
-			$this->handle_error( $acr_result->get_error_message() );
+			$this->handle_error( self::ERROR_ACR_FAILED, $acr_result->get_error_message() );
 			return;
 		}
 
@@ -747,7 +805,7 @@ class Secure_OIDC_Login {
 		$auth_time_result = $this->client->validate_auth_time( $id_token_claims, $options );
 
 		if ( is_wp_error( $auth_time_result ) ) {
-			$this->handle_error( $auth_time_result->get_error_message() );
+			$this->handle_error( self::ERROR_AUTH_TIME_FAILED, $auth_time_result->get_error_message() );
 			return;
 		}
 
@@ -755,7 +813,7 @@ class Secure_OIDC_Login {
 		$userinfo = $this->client->get_userinfo( $tokens['access_token'] );
 
 		if ( is_wp_error( $userinfo ) ) {
-			$this->handle_error( $userinfo->get_error_message() );
+			$this->handle_error( self::ERROR_USERINFO_FAILED, $userinfo->get_error_message() );
 			return;
 		}
 
@@ -763,7 +821,7 @@ class Secure_OIDC_Login {
 		$user = $this->user_handler->get_or_create_user( $id_token_claims, $userinfo );
 
 		if ( is_wp_error( $user ) ) {
-			$this->handle_error( $user->get_error_message() );
+			$this->handle_error( self::ERROR_USER_PROVISIONING_FAILED, $user->get_error_message() );
 			return;
 		}
 
@@ -793,9 +851,7 @@ class Secure_OIDC_Login {
 		if ( is_wp_error( $store_result ) ) {
 			// SECURITY: Fail authentication if encryption fails - never store plaintext tokens
 			OIDC_Token_Crypto::log_error( 'Token storage failed: ' . $store_result->get_error_message() );
-			$this->handle_error(
-				__( 'Authentication failed: Unable to securely store session tokens. Please contact your administrator.', 'secure-oidc-login' )
-			);
+			$this->handle_error( self::ERROR_TOKEN_STORAGE_FAILED );
 			return;
 		}
 
@@ -1078,13 +1134,23 @@ class Secure_OIDC_Login {
 	}
 
 	/**
-	 * Redirect to login page with an error message.
+	 * Redirect to login page with an OIDC error code.
 	 *
-	 * @param string $message The error message to display.
+	 * SECURITY: Only short error codes travel through the redirect URL; they are
+	 * mapped to fixed messages by display_login_errors(). Dynamic detail (IdP
+	 * error_description, WP_Error messages) is logged server-side instead, so an
+	 * attacker cannot reflect arbitrary text on the login page via crafted links.
+	 *
+	 * @param string $code        Error code keying into ERROR_MESSAGES.
+	 * @param string $log_context Optional dynamic detail for the server error log.
 	 */
-	private function handle_error( string $message ): void {
+	private function handle_error( string $code, string $log_context = '' ): void {
+		if ( '' !== $log_context ) {
+			error_log( sprintf( '[Secure OIDC Login] Sign-in error [%s]: %s', $code, $log_context ) );
+		}
+
 		$login_url = wp_login_url();
-		$login_url = add_query_arg( 'oidc_error', urlencode( $message ), $login_url );
+		$login_url = add_query_arg( 'oidc_error', rawurlencode( $code ), $login_url );
 
 		// Use wp_redirect() instead of wp_safe_redirect() since wp_login_url() is always safe
 		if ( ! wp_redirect( $login_url ) ) { // phpcs:ignore WordPress.Security.SafeRedirect.wp_redirect_wp_redirect -- Target is wp_login_url() (always same-site); see note above on wp_safe_redirect() edge cases.
@@ -1093,7 +1159,7 @@ class Secure_OIDC_Login {
 				sprintf(
 					/* translators: 1: Error message, 2: Login URL */
 					__( '<strong>Authentication Error:</strong> %1$s<br><br><a href="%2$s">Return to login page</a>', 'secure-oidc-login' ), // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Hardcoded translatable string with intentional safe markup; the dynamic args are escaped via esc_html()/esc_url() below.
-					esc_html( $message ),
+					esc_html( self::get_error_message( $code ) ),
 					esc_url( $login_url )
 				)
 			);
