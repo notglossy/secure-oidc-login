@@ -1115,7 +1115,7 @@ class Secure_OIDC_Login {
 	 * error_description, WP_Error messages) is logged server-side instead, so an
 	 * attacker cannot reflect arbitrary text on the login page via crafted links.
 	 *
-	 * @param string $code        Error code keying into ERROR_MESSAGES.
+	 * @param string $code        Error code mapped by get_error_message().
 	 * @param string $log_context Optional dynamic detail for the server error log.
 	 */
 	private function handle_error( string $code, string $log_context = '' ): void {
