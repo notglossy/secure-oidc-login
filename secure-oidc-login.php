@@ -53,6 +53,7 @@ if ( ! class_exists( 'Firebase\JWT\JWT' ) ) {
 	}
 }
 
+require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-url.php';
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-client.php';
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-state-binding.php';
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-admin.php';
@@ -1019,11 +1020,6 @@ class Secure_OIDC_Login {
 	/**
 	 * Append query parameters to a URL that may already contain a query string.
 	 *
-	 * Some providers (e.g. Azure AD B2C) require a policy parameter on their
-	 * authorization and end-session endpoints, so the configured endpoint can
-	 * already carry a query string. Appending with a literal '?' would corrupt
-	 * the resulting URL.
-	 *
 	 * @since 1.3.2
 	 *
 	 * @param string              $url    The endpoint URL.
@@ -1031,15 +1027,7 @@ class Secure_OIDC_Login {
 	 * @return string The URL with parameters appended.
 	 */
 	private function build_query_url( string $url, array $params ): string {
-		$query = http_build_query( $params );
-
-		if ( '' === $query ) {
-			return $url;
-		}
-
-		$separator = str_contains( $url, '?' ) ? '&' : '?';
-
-		return $url . $separator . $query;
+		return OIDC_Url::build_query_url( $url, $params );
 	}
 
 	/**
