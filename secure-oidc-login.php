@@ -407,34 +407,14 @@ class Secure_OIDC_Login {
 	}
 
 	/**
-	 * Fixed, translatable messages for OIDC error codes shown on the login page.
+	 * Get the fixed message for an OIDC error code.
 	 *
 	 * SECURITY: Free-text error detail (IdP error_description, WP_Error messages)
 	 * is never passed through the redirect URL — only these short codes are. This
 	 * prevents attacker-crafted links from reflecting arbitrary phishing text on
-	 * wp-login.php under the "SSO Error" label.
-	 */
-	private const ERROR_RATE_LIMITED             = 'rate_limited';
-	private const ERROR_MISSING_STATE            = 'missing_state';
-	private const ERROR_INVALID_STATE            = 'invalid_state';
-	private const ERROR_STATE_BINDING_FAILED     = 'state_binding_failed';
-	private const ERROR_ISSUER_MISMATCH          = 'issuer_mismatch';
-	private const ERROR_IDP_ERROR                = 'idp_error';
-	private const ERROR_MISSING_CODE             = 'missing_code';
-	private const ERROR_SESSION_EXPIRED          = 'session_expired';
-	private const ERROR_TOKEN_EXCHANGE_FAILED    = 'token_exchange_failed';
-	private const ERROR_TOKEN_VALIDATION_FAILED  = 'token_validation_failed';
-	private const ERROR_ACR_FAILED               = 'acr_failed';
-	private const ERROR_AUTH_TIME_FAILED         = 'auth_time_failed';
-	private const ERROR_USERINFO_FAILED          = 'userinfo_failed';
-	private const ERROR_USER_PROVISIONING_FAILED = 'user_provisioning_failed';
-	private const ERROR_TOKEN_STORAGE_FAILED     = 'token_storage_failed';
-
-	/**
-	 * Get the fixed message for an OIDC error code.
-	 *
-	 * Unknown codes fall back to a generic message so arbitrary values in the
-	 * oidc_error URL parameter never reach the login screen.
+	 * wp-login.php under the "SSO Error" label. Unknown codes fall back to a
+	 * generic message so arbitrary values in the oidc_error URL parameter never
+	 * reach the login screen.
 	 *
 	 * @param string $code Error code.
 	 * @return string Translated, fixed error message.
