@@ -721,10 +721,13 @@ class OIDC_Client {
 			// but our cached JWKS still contains only the old key. Retry once with fresh JWKS to handle this.
 			if ( $retry ) {
 				$fresh_jwks = $this->get_jwks( true );
-				if ( ! is_wp_error( $fresh_jwks ) ) {
-					// Retry decode with fresh JWKS (retry=false prevents infinite loop)
-					return $this->decode_and_verify_jwt( $jwt, false );
+				if ( is_wp_error( $fresh_jwks ) ) {
+					// Propagate infrastructure failures (e.g. 'jwks_fetch') so callers can
+					// distinguish IdP outages from invalid tokens.
+					return $fresh_jwks;
 				}
+				// Retry decode with fresh JWKS (retry=false prevents infinite loop)
+				return $this->decode_and_verify_jwt( $jwt, false );
 			}
 			return new WP_Error( 'oidc_error', __( 'ID token signature verification failed.', 'secure-oidc-login' ) );
 
@@ -819,7 +822,8 @@ class OIDC_Client {
 
 		// Ensure the JWKS response is valid and contains a "keys" array per RFC 7517 Section 5.
 		if ( ! $jwks || ! isset( $jwks['keys'] ) || ! is_array( $jwks['keys'] ) ) {
-			return new WP_Error( 'oidc_error', __( 'Invalid JWKS response.', 'secure-oidc-login' ) );
+			error_log( 'OIDC Error [jwks_fetch]: Invalid JWKS response.' );
+			return new WP_Error( 'jwks_fetch', __( 'Authentication configuration error. Please contact the site administrator.', 'secure-oidc-login' ) );
 		}
 
 		// Cache the JWKS with integrity protection

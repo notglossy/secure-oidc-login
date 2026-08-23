@@ -781,7 +781,7 @@ class OIDCClientTest extends OIDCTestCase
         $result = $method->invoke($this->client);
 
         $this->assertInstanceOf(WP_Error::class, $result);
-        $this->assertStringContainsString('Invalid JWKS response', $result->get_error_message());
+        $this->assertSame('jwks_fetch', $result->get_error_code());
     }
 
     /**
