@@ -570,7 +570,7 @@ class Secure_OIDC_Login {
 			);
 		}
 
-		$auth_url = $authorization_endpoint . '?' . http_build_query( $auth_params );
+		$auth_url = $this->build_query_url( $authorization_endpoint, $auth_params );
 
 		wp_redirect( $auth_url ); // phpcs:ignore WordPress.Security.SafeRedirect.wp_redirect_wp_redirect -- Redirect to the external IdP authorization endpoint; wp_safe_redirect() would reject the off-site host.
 		exit;
@@ -882,7 +882,7 @@ class Secure_OIDC_Login {
 				$logout_params['client_id'] = $client_id;
 			}
 
-			$logout_url = $end_session_endpoint . '?' . http_build_query( $logout_params );
+			$logout_url = $this->build_query_url( $end_session_endpoint, $logout_params );
 
 			wp_redirect( $logout_url ); // phpcs:ignore WordPress.Security.SafeRedirect.wp_redirect_wp_redirect -- Redirect to the external IdP end-session endpoint; wp_safe_redirect() would reject the off-site host.
 			exit;
@@ -1014,6 +1014,32 @@ class Secure_OIDC_Login {
 		}
 
 		return $parsed;
+	}
+
+	/**
+	 * Append query parameters to a URL that may already contain a query string.
+	 *
+	 * Some providers (e.g. Azure AD B2C) require a policy parameter on their
+	 * authorization and end-session endpoints, so the configured endpoint can
+	 * already carry a query string. Appending with a literal '?' would corrupt
+	 * the resulting URL.
+	 *
+	 * @since 1.3.2
+	 *
+	 * @param string              $url    The endpoint URL.
+	 * @param array<string,mixed> $params Query parameters to append.
+	 * @return string The URL with parameters appended.
+	 */
+	private function build_query_url( string $url, array $params ): string {
+		$query = http_build_query( $params );
+
+		if ( '' === $query ) {
+			return $url;
+		}
+
+		$separator = str_contains( $url, '?' ) ? '&' : '?';
+
+		return $url . $separator . $query;
 	}
 
 	/**
