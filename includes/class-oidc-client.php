@@ -798,22 +798,20 @@ class OIDC_Client {
 		);
 
 		if ( is_wp_error( $response ) ) {
-			return $this->handle_error(
-				'jwks_fetch',
-				'Failed to fetch JWKS: ' . $response->get_error_message(),
-				__( 'Authentication configuration error. Please contact the site administrator.', 'secure-oidc-login' )
-			);
+			error_log( sprintf( 'OIDC Error [jwks_fetch]: Failed to fetch JWKS: %s', $response->get_error_message() ) );
+			// Distinct error code so callers can distinguish infrastructure failures
+			// from invalid tokens (e.g. back-channel logout rate limiting).
+			return new WP_Error( 'jwks_fetch', __( 'Authentication configuration error. Please contact the site administrator.', 'secure-oidc-login' ) );
 		}
 
 		$status_code = (int) wp_remote_retrieve_response_code( $response );
 
 		// If the sever returns anthing other than OK, retun an error.
 		if ( 200 !== $status_code ) {
-			return $this->handle_error(
-				'jwks_fetch',
-				'Failed to fetch JWKS. HTTP status: ' . $status_code,
-				__( 'Authentication configuration error. Please contact the site administrator.', 'secure-oidc-login' )
-			);
+			error_log( sprintf( 'OIDC Error [jwks_fetch]: Failed to fetch JWKS. HTTP status: %d', $status_code ) );
+			// Distinct error code so callers can distinguish infrastructure failures
+			// from invalid tokens (e.g. back-channel logout rate limiting).
+			return new WP_Error( 'jwks_fetch', __( 'Authentication configuration error. Please contact the site administrator.', 'secure-oidc-login' ) );
 		}
 
 		$body = wp_remote_retrieve_body( $response );

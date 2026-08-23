@@ -722,7 +722,9 @@ class OIDCRestControllerTest extends OIDCTestCase
 
         // Authenticated by the signed logout token, not a WP session
         $this->assertSame('__return_true', $args['permission_callback']);
-        $this->assertTrue($args['args']['logout_token']['required']);
+        // Not required: absent params must reach the callback so they are counted
+        // by the rate limiter and answered with the spec's invalid_request body.
+        $this->assertFalse($args['args']['logout_token']['required']);
     }
 
     /**
@@ -1246,5 +1248,61 @@ class OIDCRestControllerTest extends OIDCTestCase
 
         $this->assertSame(400, $result->get_status());
         $this->assertCount(1, $recorded, 'An invalid logout token must record a rate-limit attempt.');
+    }
+
+    /**
+     * Test an absent logout_token reaches the callback and is counted.
+     *
+     * The route argument is deliberately not required: WordPress would otherwise
+     * reject the request pre-dispatch with rest_missing_callback_param, bypassing
+     * rate-limit accounting entirely.
+     */
+    public function testBackchannelLogoutAbsentTokenRecordsAttempt(): void
+    {
+        Functions\when('get_option')->justReturn(['enable_backchannel_logout' => true]);
+
+        $recorded = [];
+        Functions\when('set_transient')->alias(static function ($key, $value) use (&$recorded) {
+            if (str_contains((string) $key, 'backchannel')) {
+                $recorded[] = $key;
+            }
+            return true;
+        });
+
+        [$controller, $request] = $this->buildBackchannelScenario(null, null);
+
+        $result = $controller->backchannel_logout($request);
+
+        $this->assertSame(400, $result->get_status());
+        $this->assertCount(1, $recorded, 'A request without logout_token must record a rate-limit attempt.');
+    }
+
+    /**
+     * Test a JWKS infrastructure failure does not count toward the rate limit.
+     *
+     * A JWKS fetch failure is not attacker-controlled; counting it would lock out
+     * valid revocations during a provider outage and leave sessions alive.
+     */
+    public function testBackchannelLogoutJwksFailureDoesNotRecordAttempt(): void
+    {
+        Functions\when('get_option')->justReturn(['enable_backchannel_logout' => true]);
+
+        $recorded = [];
+        Functions\when('set_transient')->alias(static function ($key, $value) use (&$recorded) {
+            if (str_contains((string) $key, 'backchannel')) {
+                $recorded[] = $key;
+            }
+            return true;
+        });
+
+        [$controller, $request] = $this->buildBackchannelScenario(
+            new WP_Error('jwks_fetch', 'Authentication configuration error.'),
+            'valid.logout.token'
+        );
+
+        $result = $controller->backchannel_logout($request);
+
+        $this->assertSame(400, $result->get_status());
+        $this->assertSame([], $recorded, 'A JWKS infrastructure failure must not record a rate-limit attempt.');
     }
 }

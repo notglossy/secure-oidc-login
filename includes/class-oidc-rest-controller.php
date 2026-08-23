@@ -91,7 +91,10 @@ class OIDC_REST_Controller extends WP_REST_Controller {
 				'permission_callback' => '__return_true',
 				'args'                => array(
 					'logout_token' => array(
-						'required'    => true,
+						// Not marked required: an absent parameter must reach the callback so
+						// it is answered with the spec's invalid_request body and counted by
+						// the rate limiter, instead of WordPress' generic missing-param error.
+						'required'    => false,
 						'type'        => 'string',
 						'description' => __( 'The signed OIDC logout token (JWT).', 'secure-oidc-login' ),
 					),
@@ -146,8 +149,12 @@ class OIDC_REST_Controller extends WP_REST_Controller {
 			// SECURITY: Only invalid tokens accumulate toward the rate limit. Valid
 			// tokens are not counted, so an IdP performing bulk revocation (admin
 			// force-logout, incident response) cannot self-throttle and leave
-			// sessions alive past IdP revocation.
-			$this->rate_limiter->record_attempt( 'backchannel_logout' );
+			// sessions alive past IdP revocation. Infrastructure failures fetching the
+			// JWKS are also not counted: they are not attacker-controlled and would
+			// lock out valid revocations during a provider outage.
+			if ( 'jwks_fetch' !== $result->get_error_code() ) {
+				$this->rate_limiter->record_attempt( 'backchannel_logout' );
+			}
 			return $this->backchannel_response( array( 'error' => 'invalid_request' ), 400 );
 		}
 
