@@ -404,40 +404,30 @@ class OIDCClientTest extends OIDCTestCase
     }
 
     /**
-     * Test validate_id_token rejects a token missing the required exp claim.
+     * Test validate_id_token rejects tokens missing the required iat/exp claims.
      *
-     * The JWT library only enforces exp when present (OIDC Core Section 2 makes it
-     * REQUIRED); without this check a token without exp would never expire.
+     * The JWT library only enforces exp when present (OIDC Core Section 2 makes both
+     * claims REQUIRED); without this check a token without exp would never expire.
      */
-    public function testValidateIdTokenRejectsMissingExpClaim(): void
+    public function testValidateIdTokenRejectsMissingRequiredClaims(): void
     {
-        $client = $this->createClientWithStubbedJwt([
+        $base = static fn (): array => [
             'sub' => 'user-123',
             'iss' => 'https://idp.example.com',
             'aud' => 'test-client-id',
-            'exp' => null, // override stub default: claim absent
-        ]);
+        ];
 
-        $result = $client->validate_id_token('fake.jwt.token');
-
+        // Missing exp
+        $claims = $base();
+        $claims['exp'] = null; // override stub default: claim absent
+        $result = $this->createClientWithStubbedJwt($claims)->validate_id_token('h.p.s');
         $this->assertInstanceOf(\WP_Error::class, $result);
         $this->assertStringContainsString('iat or exp', $result->get_error_message());
-    }
 
-    /**
-     * Test validate_id_token rejects a token missing the required iat claim.
-     */
-    public function testValidateIdTokenRejectsMissingIatClaim(): void
-    {
-        $client = $this->createClientWithStubbedJwt([
-            'sub' => 'user-123',
-            'iss' => 'https://idp.example.com',
-            'aud' => 'test-client-id',
-            'iat' => null, // override stub default: claim absent
-        ]);
-
-        $result = $client->validate_id_token('fake.jwt.token');
-
+        // Missing iat
+        $claims = $base();
+        $claims['iat'] = null; // override stub default: claim absent
+        $result = $this->createClientWithStubbedJwt($claims)->validate_id_token('h.p.s');
         $this->assertInstanceOf(\WP_Error::class, $result);
         $this->assertStringContainsString('iat or exp', $result->get_error_message());
     }
