@@ -4,11 +4,6 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
 
-# Prevent overlapping reviews on rapid pushes to the same PR
-concurrency:
-  group: ai-review-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
   pull-requests: write
@@ -19,51 +14,71 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Pass 1: correctness / security review from the diff.
+          - pass: review
+            ponytail: "off"
+            backend: ${{ vars.AI_BACKEND || 'api' }}
+            model: ${{ vars.AI_MODEL }}
+            base_url: ${{ vars.AI_BASE_URL }}
+          # Pass 2: Ponytail over-engineering review. Defaults to the same
+          # endpoint/model but can be pointed at a cheaper or faster one, and
+          # to the opencode backend so it can read the codebase.
+          - pass: ponytail
+            ponytail: "only"
+            backend: ${{ vars.AI_PONYTAIL_BACKEND || vars.AI_BACKEND || 'api' }}
+            model: ${{ vars.AI_PONYTAIL_MODEL || vars.AI_MODEL }}
+            base_url: ${{ vars.AI_PONYTAIL_BASE_URL || vars.AI_BASE_URL }}
+
+    # One in-flight run per PR per pass; a new push cancels the stale one.
+    concurrency:
+      group: ai-review-${{ matrix.pass }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+
+    # Set AI_PASSES to "review" or "ponytail" to run only one of them.
     env:
-      # "api" (default): post the diff to /chat/completions directly.
-      # "opencode": run a read-only OpenCode agent inside the checkout.
-      AI_BACKEND: ${{ vars.AI_BACKEND || 'api' }}
+      AI_BACKEND: ${{ matrix.backend }}
+      RUN_THIS_PASS: ${{ !vars.AI_PASSES || contains(vars.AI_PASSES, matrix.pass) }}
 
     steps:
       # --- Checkout -------------------------------------------------------
-      # The API backend only needs the script. The OpenCode backend needs the
-      # whole repo so the agent can read around the diff.
       - uses: actions/checkout@v7
-        if: env.AI_BACKEND != 'opencode'
+        if: env.RUN_THIS_PASS == 'true' && env.AI_BACKEND != 'opencode'
         with:
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
 
       - uses: actions/checkout@v7
-        if: env.AI_BACKEND == 'opencode'
+        if: env.RUN_THIS_PASS == 'true' && env.AI_BACKEND == 'opencode'
         with:
           fetch-depth: 0
 
       - name: Fetch base branch for diffing
-        if: env.AI_BACKEND == 'opencode'
+        if: env.RUN_THIS_PASS == 'true' && env.AI_BACKEND == 'opencode'
         run: git fetch --no-tags origin "${{ github.event.pull_request.base.ref }}"
 
       # --- OpenCode install (opencode backend only) ------------------------
       - name: Install OpenCode
-        if: env.AI_BACKEND == 'opencode'
+        if: env.RUN_THIS_PASS == 'true' && env.AI_BACKEND == 'opencode'
         run: |
           curl -fsSL https://opencode.ai/install | bash
           echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
-      - name: Verify OpenCode
-        if: env.AI_BACKEND == 'opencode'
-        run: opencode --version
 
       # --- Review ----------------------------------------------------------
-      - name: Run AI review
+      - name: Run ${{ matrix.pass }} pass
+        if: env.RUN_THIS_PASS == 'true'
         env:
-          # --- Provider configuration ---------------------------------------
-          # Secrets  -> Settings > Secrets and variables > Actions > Secrets
-          # Variables-> Settings > Secrets and variables > Actions > Variables
-          AI_API_KEY: ${{ secrets.AI_API_KEY }}
-          AI_BASE_URL: ${{ vars.AI_BASE_URL }}       # e.g. https://api.openai.com/v1
-          AI_MODEL: ${{ vars.AI_MODEL }}             # e.g. gpt-4o-mini
+          # --- Provider (per pass; see matrix above) -------------------------
+          AI_API_KEY: ${{ matrix.pass == 'ponytail' && secrets.AI_PONYTAIL_API_KEY || secrets.AI_API_KEY }}
+          AI_BASE_URL: ${{ matrix.base_url }}
+          AI_MODEL: ${{ matrix.model }}
+          AI_PONYTAIL: ${{ matrix.ponytail }}
+          AI_PONYTAIL_REF: ${{ vars.AI_PONYTAIL_REF }}
 
-          # --- Optional tuning (all have sensible defaults) -----------------
+          # --- Optional tuning (shared by both passes) -----------------------
           AI_MAX_DIFF_CHARS: ${{ vars.AI_MAX_DIFF_CHARS }}     # default 120000
           AI_TEMPERATURE: ${{ vars.AI_TEMPERATURE }}           # default 0.2
           AI_MAX_TOKENS: ${{ vars.AI_MAX_TOKENS }}             # default 8000; raise for reasoning models
@@ -77,15 +92,6 @@ jobs:
           AI_EXTRA_BODY: ${{ vars.AI_EXTRA_BODY }}
           AI_EXCLUDE_PATTERNS: ${{ vars.AI_EXCLUDE_PATTERNS }} # comma-separated globs
           AI_EXTRA_INSTRUCTIONS: ${{ vars.AI_EXTRA_INSTRUCTIONS }}
-
-          # --- Ponytail (over-engineering review) --------------------------
-          # off  = standard correctness/security review (default)
-          # on   = standard review + Ponytail delete-list in the same pass
-          # only = Ponytail pass alone; no correctness/security findings
-          # api backend inlines the ruleset from AI_PONYTAIL_REF; opencode
-          # backend loads the native @dietrichgebert/ponytail plugin instead.
-          AI_PONYTAIL: ${{ vars.AI_PONYTAIL }}
-          AI_PONYTAIL_REF: ${{ vars.AI_PONYTAIL_REF }}          # default: pinned release tag
 
           # --- GitHub context (automatic) ----------------------------------
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

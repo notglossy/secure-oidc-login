@@ -33,6 +33,13 @@ Optional:
                         checkout (fetch-depth: 0). Ponytail loads as the native
                         OpenCode plugin instead of an inlined ruleset.
   AI_AGENT_TIMEOUT      Seconds allowed for the whole opencode run (default 1500).
+  AI_DRY_RUN            "true" runs everything but prints the review instead of
+                        posting it. Useful for reproducing a CI run locally:
+                          GITHUB_TOKEN=$(gh auth token) GITHUB_REPOSITORY=owner/repo \\
+                          PR_NUMBER=91 PR_HEAD_SHA=$(git rev-parse HEAD) \\
+                          AI_BACKEND=opencode AI_DRY_RUN=true AI_API_KEY=... \\
+                          AI_BASE_URL=... AI_MODEL=... AI_PONYTAIL=on \\
+                          python3 .github/scripts/ai_review.py
   AI_JSON_MODE          "true" (default) sends response_format=json_object. Set
                         "false" for reasoning models that stop dead under JSON
                         mode (Poolside Laguna does); the script auto-detects and
@@ -722,23 +729,126 @@ def call_opencode(
 
     cmd = [exe, "run", "--agent", "reviewer", "--model", f"review/{model}", task]
     log(f"Running: opencode run --agent reviewer --model review/{model} <task>")
-    try:
-        proc = subprocess.run(
-            cmd, cwd=repo_dir, env=env, capture_output=True, text=True, timeout=timeout,
-        )
-    except subprocess.TimeoutExpired as e:
-        raise RuntimeError(f"opencode timed out after {timeout}s") from e
 
-    if proc.stderr.strip():
-        tail = proc.stderr.strip().splitlines()[-30:]
-        log("opencode stderr (tail):\n  " + "\n  ".join(tail))
+    # Stream output as it arrives so the Actions log shows what the agent is doing,
+    # and we can tell "thinking" from "hung". stdout is kept for parsing; stderr is
+    # relayed live.
+    import selectors
+    proc = subprocess.Popen(
+        cmd, cwd=repo_dir, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
+    )
+    sel = selectors.DefaultSelector()
+    sel.register(proc.stdout, selectors.EVENT_READ, "out")
+    sel.register(proc.stderr, selectors.EVENT_READ, "err")
+    out_lines: list[str] = []
+    started = time.monotonic()
+    last_activity = started
+    last_heartbeat = started
+    open_streams = 2
+    warned_silent = False
+    while open_streams:
+        if time.monotonic() - started > timeout:
+            proc.kill()
+            tail = "".join(out_lines)[-2000:]
+            raise RuntimeError(
+                f"opencode timed out after {timeout}s. "
+                + (f"Last stdout:\n{tail}" if tail.strip() else "It produced no stdout at all; "
+                   "see the streamed stderr lines above for the last tool activity.")
+            )
+        if not warned_silent and not out_lines and time.monotonic() - started > 180:
+            log("::warning::No stdout from opencode after 3 minutes. Stderr lines above show tool activity; "
+                "if there are none, the agent may be blocked on plugin install or a permission prompt.")
+            warned_silent = True
+        remaining = timeout - (time.monotonic() - started)
+        for key, _ in sel.select(timeout=max(0.1, min(15, remaining))):
+            line = key.fileobj.readline()
+            if not line:
+                sel.unregister(key.fileobj)
+                open_streams -= 1
+                continue
+            last_activity = time.monotonic()
+            if key.data == "out":
+                out_lines.append(line)
+                log("  │ " + line.rstrip()[:300])
+            else:
+                log("  ┆ " + line.rstrip()[:300])
+        now = time.monotonic()
+        if now - last_heartbeat > 60:
+            idle = int(now - last_activity)
+            log(f"  ...agent running {int(now - started)}s, last output {idle}s ago")
+            last_heartbeat = now
+    proc.wait()
+
+    stdout = "".join(out_lines)
     if proc.returncode != 0:
-        raise RuntimeError(
-            f"opencode exited {proc.returncode}. stdout tail:\n{proc.stdout[-1500:]}"
-        )
-    if not proc.stdout.strip():
+        raise RuntimeError(f"opencode exited {proc.returncode}. stdout tail:\n{stdout[-1500:]}")
+    if not stdout.strip():
         raise RuntimeError("opencode produced no output")
-    return proc.stdout
+    return stdout
+
+
+
+PONYTAIL_LINE_RE = re.compile(r"^\s*(?:[-*]\s*)?L(\d+)\s*[:：]\s*(?:\*\*)?(\w+)(?:\*\*)?\s*[:：]?\s*(.+?)\s*$")
+NET_LINES_RE = re.compile(r"net\s*[:：]?\s*([-+]?\d+)\s*lines?", re.I)
+GENERIC_LINE_RE = re.compile(r"^\s*(?:[-*]\s*)?(?:`)?([\w./\-]+\.\w+)(?:`)?\s*[:：]\s*(?:L(?:ine)?\s*)?(\d+)\s*[:：\-–]\s*(.+?)\s*$")
+
+
+def parse_text_review(text: str, known_paths: list[str]) -> dict | None:
+    """Best-effort parse of a prose/Ponytail-format review into the JSON shape.
+    Recognises `L12: stdlib ...` lines under a file heading, `path:12: ...` lines,
+    and a `net: -N lines` footer. Returns None if nothing structured is found."""
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
+    comments: list[dict] = []
+    current: str | None = None
+    net = 0
+    summary_lines: list[str] = []
+    by_basename = {os.path.basename(p): p for p in known_paths}
+
+    for raw in text.splitlines():
+        line = raw.strip().strip("`").strip()
+        # File heading: a known path (or its basename) on its own line, possibly with ## or **
+        bare = line.lstrip("#").strip().strip("*").strip().strip(":")
+        if bare in known_paths:
+            current = bare
+            continue
+        if bare in by_basename:
+            current = by_basename[bare]
+            continue
+        m = PONYTAIL_LINE_RE.match(raw)
+        if m and current:
+            tag = m.group(2).lower()
+            body = m.group(3)
+            c = {"path": current, "line": int(m.group(1)), "body": body}
+            if tag in PONYTAIL_TAGS:
+                c["tag"] = tag
+            else:
+                c["body"] = f"{m.group(2)} {body}".strip()
+                c["severity"] = "medium"
+            comments.append(c)
+            continue
+        m = GENERIC_LINE_RE.match(raw)
+        if m and (m.group(1) in known_paths or m.group(1) in by_basename):
+            path = m.group(1) if m.group(1) in known_paths else by_basename[m.group(1)]
+            comments.append({"path": path, "line": int(m.group(2)), "body": m.group(3), "severity": "medium"})
+            continue
+        nm = NET_LINES_RE.search(raw)
+        if nm:
+            net = int(nm.group(1))
+            continue
+        if line:
+            summary_lines.append(raw.rstrip())
+
+    if not comments and net == 0:
+        return None
+    summary = "\n".join(summary_lines).strip()
+    if len(summary) > 1500:
+        summary = summary[:1500] + "\n\n_…truncated_"
+    return {
+        "summary": summary or "_Review returned as a findings list; see comments._",
+        "verdict": "COMMENT",
+        "comments": comments,
+        "ponytail_net_lines": net,
+    }
 
 
 def extract_json(text: str) -> dict:
@@ -793,6 +903,7 @@ def main() -> int:
         log(f"::warning::Unknown AI_BACKEND {backend!r}; using 'api'")
         backend = "api"
     repo_dir = env("GITHUB_WORKSPACE", os.getcwd())
+    dry_run = env("AI_DRY_RUN", "false").strip().lower() in ("true", "1", "yes")
     agent_timeout = int(env("AI_AGENT_TIMEOUT", "1500"))
     extra_body: dict = {}
     if env("AI_EXTRA_BODY"):
@@ -864,7 +975,11 @@ def main() -> int:
         task = (
             pr_header
             + f"Changed files ({len(kept)}): " + ", ".join(f.path for f in kept) + "\n\n"
-            + f"Review this pull request. Start with `git diff origin/{base_ref}...HEAD`."
+            + f"Review this pull request. Start with `git diff origin/{base_ref}...HEAD`.\n\n"
+            + "FORMAT: your final message must be exactly one JSON object with keys summary, verdict, comments"
+            + (", ponytail_net_lines" if ponytail_mode != "off" else "")
+            + ". Put Ponytail findings inside comments with a tag field; do not use the L<line>: text format. "
+              "No prose before or after the JSON."
         )
         cfg_dir = os.path.join(env("RUNNER_TEMP", "/tmp"), "ai-review-opencode")
         cfg_path = write_opencode_config(
@@ -887,6 +1002,14 @@ def main() -> int:
     except json.JSONDecodeError:
         log("::warning::Model did not return valid JSON. First 1500 chars of output:")
         log(raw[:1500])
+        result = parse_text_review(raw, [f.path for f in kept])
+        if result:
+            log(f"Parsed the text as a findings list: {len(result['comments'])} comment(s)")
+    if not result and raw.strip() and len(raw.strip()) > 80 and "{" not in raw:
+        # Plain prose review with no structure: post it as the summary rather than an error
+        log("Model replied in prose; posting it as the summary")
+        result = {"summary": raw.strip()[:4000], "verdict": "COMMENT", "comments": []}
+    if not result:
         result = {
             "summary": (
                 "_The model returned output that could not be parsed as a review. "
@@ -936,16 +1059,30 @@ def main() -> int:
     except (TypeError, ValueError):
         net_lines = 0
 
+    total = len(result.get("comments", []) or [])
+    log(
+        f"Model returned {total} comment(s): {len(inline)} anchored to diff lines, "
+        f"{len(orphaned)} unanchored (moved to notes), {ponytail_count} Ponytail-tagged; "
+        f"verdict={verdict}, ponytail_net_lines={net_lines}"
+    )
+    for o in orphaned[:10]:
+        log("  unanchored: " + o[:200])
+
     # Build the review body
+    if ponytail_mode == "only":
+        heading = "## ✂️ Ponytail Review — " + ("Lean already. Ship." if ponytail_count == 0 and net_lines == 0
+                                                 else f"`net: {net_lines:+d} lines possible`")
+    else:
+        heading = f"## {VERDICT_ICON[verdict]} AI Review — {verdict.replace('_', ' ').title()}"
     parts = [
-        REVIEW_MARKER,
-        f"## {VERDICT_ICON[verdict]} AI Review — {verdict.replace('_', ' ').title()}",
+        REVIEW_MARKER.replace("-->", f" {ponytail_mode} -->"),
+        heading,
         "",
         summary,
     ]
     if orphaned:
         parts += ["", "### Additional notes", *orphaned]
-    if ponytail_mode != "off":
+    if ponytail_mode == "on":
         if ponytail_count == 0 and net_lines == 0:
             parts += ["", "**Ponytail:** Lean already. Ship."]
         else:
@@ -962,6 +1099,13 @@ def main() -> int:
         footer += f" · Ponytail `{ponytail_ref}` ({ponytail_mode})"
     parts += ["", f"<sub>{footer}</sub>"]
     body = "\n".join(parts)
+
+    if dry_run:
+        log("\n===== DRY RUN: review body =====\n" + body)
+        log(f"\n===== {len(inline)} inline comment(s) =====")
+        for c in inline:
+            log(f"{c['path']}:{c['line']}  {c['body'][:200]}")
+        return 0
 
     # Post: try full review with inline comments, then without, then as a plain comment
     if gh.create_review(pr_number, head_sha, body, inline):
