@@ -71,12 +71,15 @@ import fnmatch
 import http.client as httpclient
 import json
 import os
+import random
 import re
 import sys
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 REVIEW_MARKER = "<!-- ai-pr-review -->"
 
@@ -245,6 +248,30 @@ def log(msg: str) -> None:
     print(msg, flush=True)
 
 
+def parse_retry_after(headers) -> float | None:
+    """Seconds to wait per a Retry-After header (delta or HTTP-date form), or None."""
+    value = headers.get("Retry-After") if headers else None
+    if not value:
+        return None
+    try:
+        seconds = float(value)
+    except ValueError:
+        try:
+            seconds = (parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds()
+        except (TypeError, ValueError):
+            return None
+    return min(max(seconds, 0.0), 120.0)
+
+
+def retry_delay(err: urllib.error.HTTPError | None, attempt: int) -> float:
+    """Honor a provider-specified Retry-After; otherwise exponential backoff with jitter."""
+    if err is not None:
+        specified = parse_retry_after(err.headers)
+        if specified is not None:
+            return specified
+    return 2 ** attempt + random.uniform(0, 1)
+
+
 def http(
     method: str,
     url: str,
@@ -257,6 +284,7 @@ def http(
     last_err: Exception | None = None
     for attempt in range(retries):
         req = urllib.request.Request(url, data=data, method=method, headers=headers)
+        http_err: urllib.error.HTTPError | None = None
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return resp.status, resp.read().decode()
@@ -265,12 +293,15 @@ def http(
             # Don't retry client errors other than rate limits
             if e.code < 500 and e.code != 429:
                 return e.code, text
-            last_err = e
+            last_err = http_err = e
             log(f"HTTP {e.code} from {url} (attempt {attempt + 1}/{retries}): {text[:300]}")
         except (urllib.error.URLError, TimeoutError) as e:
             last_err = e
             log(f"Network error calling {url} (attempt {attempt + 1}/{retries}): {e}")
-        time.sleep(2 ** attempt)
+        if attempt + 1 < retries:
+            delay = retry_delay(http_err, attempt)
+            log(f"  waiting {delay:.1f}s before retrying")
+            time.sleep(delay)
     raise RuntimeError(f"Request to {url} failed after {retries} attempts: {last_err}")
 
 
@@ -302,16 +333,48 @@ class GitHub:
             raise RuntimeError(f"Failed to fetch diff: {status} {text[:300]}")
         return text
 
-    def create_review(self, number: int, commit_id: str, body: str, comments: list[dict]) -> bool:
+    def _already_published(self, number: int, marker: str) -> bool:
+        """True if a review or issue comment carrying this run's marker exists."""
+        for url in (
+            f"{self.base}/pulls/{number}/reviews?per_page=100",
+            f"{self.base}/issues/{number}/comments?per_page=100",
+        ):
+            try:
+                status, text = http("GET", url, self.headers, retries=2, timeout=30)
+            except RuntimeError:
+                continue
+            if status == 200 and any(marker in (item.get("body") or "") for item in json.loads(text)):
+                return True
+        return False
+
+    def _post_write(self, url: str, number: int, payload: dict, marker: str) -> tuple[int, str]:
+        """POST without blind retries: GitHub can accept a write while the client
+        sees a timeout or 5xx, so a naive retry can publish a duplicate. On an
+        ambiguous failure, look for this run's marker before trying again."""
+        last_err: Exception | None = None
+        for attempt in range(3):
+            try:
+                return http("POST", url, self.headers, payload, retries=1)
+            except RuntimeError as e:
+                last_err = e
+                if marker and self._already_published(number, marker):
+                    log("The write landed despite the transport error; not retrying")
+                    return 201, ""
+                if attempt < 2:
+                    log(f"Write failed and nothing was published; retrying: {e}")
+                    time.sleep(2 * (attempt + 1) + random.uniform(0, 1))
+        raise RuntimeError(f"GitHub write to {url} failed: {last_err}")
+
+    def create_review(self, number: int, commit_id: str, body: str, comments: list[dict], marker: str = "") -> bool:
         payload = {"commit_id": commit_id, "body": body, "event": "COMMENT", "comments": comments}
-        status, text = http("POST", f"{self.base}/pulls/{number}/reviews", self.headers, payload)
+        status, text = self._post_write(f"{self.base}/pulls/{number}/reviews", number, payload, marker)
         if status in (200, 201):
             return True
         log(f"::warning::Review creation failed ({status}): {text[:500]}")
         return False
 
-    def create_issue_comment(self, number: int, body: str) -> None:
-        status, text = http("POST", f"{self.base}/issues/{number}/comments", self.headers, {"body": body})
+    def create_issue_comment(self, number: int, body: str, marker: str = "") -> None:
+        status, text = self._post_write(f"{self.base}/issues/{number}/comments", number, {"body": body}, marker)
         if status not in (200, 201):
             raise RuntimeError(f"Failed to post comment: {status} {text[:300]}")
 
@@ -329,6 +392,52 @@ class FileDiff:
 
 HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
+# A git C-quoted string: `"..."` with backslash escapes inside
+_QUOTED = r'"(?:[^"\\]|\\.)*"'
+_C_ESCAPES = {"n": 10, "t": 9, "r": 13, "a": 7, "b": 8, "f": 12, "v": 11, '"': 34, "\\": 92}
+
+
+def _unquote_c(s: str) -> str:
+    """Decode the inside of a git C-quoted path: octal byte escapes plus \\n, \\t, \\", \\\\ etc."""
+    out = bytearray()
+    i = 0
+    while i < len(s):
+        ch = s[i]
+        if ch == "\\" and i + 1 < len(s):
+            nxt = s[i + 1]
+            if nxt in "01234567":
+                j = i + 1
+                while j < len(s) and j < i + 4 and s[j] in "01234567":
+                    j += 1
+                out.append(int(s[i + 1:j], 8))
+                i = j
+                continue
+            if nxt in _C_ESCAPES:
+                out.append(_C_ESCAPES[nxt])
+                i += 2
+                continue
+        out.extend(ch.encode("utf-8"))
+        i += 1
+    return out.decode("utf-8", errors="replace")
+
+
+def _diff_header_path(raw: str) -> str:
+    """Post-image repository path from a `diff --git` header. Git C-quotes paths
+    containing quotes, backslashes, control bytes, or (by default) non-ASCII, so
+    the quoted form must be decoded back to the real path or exclude patterns
+    and inline-comment anchoring miss the file."""
+    rest = raw[len("diff --git "):]
+    m = re.match(r'^(?:%s|a/.*?) "b/((?:[^"\\]|\\.)*)"$' % _QUOTED, rest)
+    if m:
+        return _unquote_c(m.group(1))
+    m = re.match(r'^%s b/(.+)$' % _QUOTED, rest)
+    if m:
+        return m.group(1)
+    m = re.match(r"^a/(.+?) b/(.+)$", rest)
+    if m:
+        return m.group(2)
+    return rest.split(" b/")[-1]
+
 
 def parse_diff(diff: str) -> list[FileDiff]:
     """Split a unified diff into per-file chunks and record which new-file
@@ -342,10 +451,7 @@ def parse_diff(diff: str) -> list[FileDiff]:
         if raw.startswith("diff --git "):
             if current:
                 files.append(current)
-            # "diff --git a/path b/path" -> take the b/ path
-            m = re.match(r'^diff --git a/(.+?) b/(.+)$', raw)
-            path = m.group(2) if m else raw.split(" b/")[-1]
-            current = FileDiff(path=path, text=raw + "\n")
+            current = FileDiff(path=_diff_header_path(raw), text=raw + "\n")
             in_hunk = False
             continue
 
@@ -388,9 +494,9 @@ def excluded(path: str, patterns: list[str]) -> bool:
 # --------------------------------------------------------------------------- #
 
 class ProviderError(Exception):
-    def __init__(self, status: int, body: str):
+    def __init__(self, status: int, body: str, retry_after: float | None = None):
         super().__init__(f"HTTP {status}: {body[:800]}")
-        self.status, self.body = status, body
+        self.status, self.body, self.retry_after = status, body, retry_after
 
 
 @dataclass
@@ -416,7 +522,7 @@ def _post_chat(url: str, headers: dict, payload: dict, timeout: int) -> ModelRep
     try:
         resp = urllib.request.urlopen(req, timeout=timeout)
     except urllib.error.HTTPError as e:
-        raise ProviderError(e.code, e.read().decode(errors="replace")) from None
+        raise ProviderError(e.code, e.read().decode(errors="replace"), parse_retry_after(e.headers)) from None
 
     with resp:
         if "text/event-stream" not in (resp.headers.get("Content-Type") or ""):
@@ -523,7 +629,7 @@ def call_model(
 
     def request(payload: dict) -> ModelReply:
         transport_failures = 0
-        for _ in range(8):  # bounded: a few param adaptations + 2 transport retries
+        for _ in range(9):  # bounded: a few param adaptations + 3 transport retries
             try:
                 return _post_chat(url, headers, payload, timeout)
             except ProviderError as e:
@@ -544,18 +650,22 @@ def call_model(
                 elif e.status == 400 and "temperature" in err and "temperature" in payload:
                     log("Provider rejected temperature; retrying without it")
                     payload.pop("temperature")
-                elif e.status in (429, 500, 502, 503, 504) and transport_failures < 2:
+                elif e.status in (429, 500, 502, 503, 504) and transport_failures < 3:
                     transport_failures += 1
-                    log(f"HTTP {e.status} from provider (retry {transport_failures}/2): {e.body[:200]}")
-                    time.sleep(5 * transport_failures)
+                    # Honor the provider's Retry-After (OpenRouter sends one on 429);
+                    # fall back to backoff with jitter so retries don't align with the window.
+                    delay = e.retry_after if e.retry_after is not None \
+                        else 5 * transport_failures + random.uniform(0, 2)
+                    log(f"HTTP {e.status} from provider (retry {transport_failures}/3, waiting {delay:.1f}s): {e.body[:200]}")
+                    time.sleep(delay)
                 else:
                     raise RuntimeError(f"Model request failed ({e.status}): {e.body[:800]}") from None
             except RETRYABLE as e:
                 transport_failures += 1
-                if transport_failures > 2:
+                if transport_failures > 3:
                     raise RuntimeError(f"Model request failed after retries: {e!r}") from None
-                log(f"Transport error (retry {transport_failures}/2): {e!r}")
-                time.sleep(5 * transport_failures)
+                log(f"Transport error (retry {transport_failures}/3): {e!r}")
+                time.sleep(5 * transport_failures + random.uniform(0, 2))
         raise RuntimeError("Model request failed: too many parameter adaptations")
 
     def report(reply: ModelReply) -> None:
@@ -627,6 +737,14 @@ READ_ONLY_BASH = {
     "wc *": "allow",
     "tree*": "allow",
     "pwd*": "allow",
+    # Last-match-wins: these override the allowances above and keep every
+    # allowed reader inside the checkout. Absolute paths and parent-dir
+    # escapes are denied, which also blocks /proc/self/environ (where
+    # AI_API_KEY would be readable) and anything else on the runner.
+    "* /*": "deny",
+    "* ../*": "deny",
+    "*/../*": "deny",
+    "*/proc/*": "deny",
 }
 
 
@@ -676,7 +794,15 @@ def write_opencode_config(
             "websearch": "deny",
             "external_directory": "deny",
             "doom_loop": "deny",
-            "read": {"*": "allow", "*.env": "deny", "*.env.*": "deny", "*.pem": "deny", "*.key": "deny"},
+            "read": {
+                "*": "allow",
+                "*.env": "deny",
+                "*.env.*": "deny",
+                "*.pem": "deny",
+                "*.key": "deny",
+                "/proc/**": "deny",
+                "**/.git/config": "deny",
+            },
         },
         "agent": {
             "reviewer": {
@@ -928,8 +1054,19 @@ def main() -> int:
 
     gh = GitHub(gh_token, repo)
 
+    def head_moved(pr_data: dict) -> bool:
+        """A push after this run started makes the diff/commit_id pair unreliable
+        and the review stale; the run triggered by the new head covers it."""
+        live = str(pr_data.get("head", {}).get("sha", ""))
+        if live and live != head_sha:
+            log(f"PR head moved from {head_sha[:7]} to {live[:7]}; skipping so the newer run reviews it.")
+            return True
+        return False
+
     log(f"Fetching PR #{pr_number} from {repo}")
     pr = gh.get_pr(pr_number)
+    if head_moved(pr):
+        return 0
     diff = gh.get_diff(pr_number)
     files = parse_diff(diff)
 
@@ -1074,8 +1211,11 @@ def main() -> int:
                                                  else f"`net: {net_lines:+d} lines possible`")
     else:
         heading = f"## {VERDICT_ICON[verdict]} AI Review — {verdict.replace('_', ' ').title()}"
+    # Marker is unique per pass and head commit so an ambiguous GitHub write
+    # failure can check whether this exact review already landed.
+    marker = REVIEW_MARKER.replace("-->", f" {ponytail_mode} {head_sha[:12]} -->")
     parts = [
-        REVIEW_MARKER.replace("-->", f" {ponytail_mode} -->"),
+        marker,
         heading,
         "",
         summary,
@@ -1107,8 +1247,12 @@ def main() -> int:
             log(f"{c['path']}:{c['line']}  {c['body'][:200]}")
         return 0
 
+    # Don't publish a review of a commit that is no longer the head.
+    if head_moved(gh.get_pr(pr_number)):
+        return 0
+
     # Post: try full review with inline comments, then without, then as a plain comment
-    if gh.create_review(pr_number, head_sha, body, inline):
+    if gh.create_review(pr_number, head_sha, body, inline, marker=marker):
         log(f"Posted review with {len(inline)} inline comment(s)")
         return 0
     if inline:
@@ -1116,9 +1260,11 @@ def main() -> int:
         fallback_body = body + "\n\n### Inline comments (could not be attached)\n" + "\n".join(
             f"- `{c['path']}:{c['line']}` — {c['body']}" for c in inline
         )
-        if gh.create_review(pr_number, head_sha, fallback_body, []):
+        if gh.create_review(pr_number, head_sha, fallback_body, [], marker=marker):
             return 0
-    gh.create_issue_comment(pr_number, body)
+    if head_moved(gh.get_pr(pr_number)):
+        return 0
+    gh.create_issue_comment(pr_number, body, marker=marker)
     log("Posted review as an issue comment")
     return 0
 
