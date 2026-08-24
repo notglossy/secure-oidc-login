@@ -455,6 +455,7 @@ add_action('secure_oidc_login_user_created', function($user_id, $claims) {
 - **Rate limiting** protects all authentication endpoints against brute force and DoS attacks
 - **SSRF protection** via `wp_safe_remote_get/post` blocks requests to internal IPs and non-standard ports
 - For intranet identity providers, use the `http_request_host_is_external` WordPress filter
+- **Object-cache note:** rate limiting uses transients, which a persistent object cache (memcached, some Redis configs) may evict under memory pressure before their expiry. On cache-backed sites, rate limiting is best-effort — signature verification, nonce binding, and PKCE do not depend on it. The back-channel logout jti replay cache is stored as database options and is not affected by cache eviction.
 
 ## Troubleshooting
 

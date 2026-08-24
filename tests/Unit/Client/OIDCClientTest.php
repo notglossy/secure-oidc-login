@@ -3081,15 +3081,44 @@ class OIDCClientTest extends OIDCTestCase
     }
 
     /**
+     * Stub the database-backed jti replay cache (non-autoloaded options).
+     *
+     * get_option() answers the settings key with a minimal valid configuration
+     * and returns stored jti expiries for oidc_bcl_jti_* keys; add_option()
+     * records into $stored_jti so tests can assert on what was cached.
+     *
+     * @param array<string, mixed> $stored_jti Storage backend, by reference.
+     */
+    private function stubJtiOptionStorage(array &$stored_jti): void
+    {
+        Functions\when('get_option')->alias(function ($key, $default = false) use (&$stored_jti) {
+            if ('secure_oidc_login_settings' === $key) {
+                return [
+                    'client_id' => 'test-client-id',
+                    'issuer'    => 'https://idp.example.com',
+                ];
+            }
+            return $stored_jti[$key] ?? $default;
+        });
+        Functions\when('add_option')->alias(function ($key, $value) use (&$stored_jti) {
+            if (str_starts_with((string) $key, 'oidc_bcl_jti_')) {
+                $stored_jti[$key] = $value;
+            }
+            return true;
+        });
+        Functions\when('delete_option')->alias(function ($key) use (&$stored_jti) {
+            unset($stored_jti[$key]);
+            return true;
+        });
+    }
+
+    /**
      * Test validate_logout_token accepts a fully valid logout token.
      */
     public function testValidateLogoutTokenAcceptsValidToken(): void
     {
-        $set_jti_keys = [];
-        Functions\when('set_transient')->alias(function ($key, $value, $ttl) use (&$set_jti_keys) {
-            $set_jti_keys[] = $key;
-            return true;
-        });
+        $stored_jti = [];
+        $this->stubJtiOptionStorage($stored_jti);
 
         $client = $this->createClientWithStubbedJwt($this->getSampleLogoutTokenClaims());
 
@@ -3098,7 +3127,7 @@ class OIDCClientTest extends OIDCTestCase
         $this->assertIsArray($result);
         $this->assertSame('user-123-abc', $result['sub']);
         // The jti must be recorded for replay protection
-        $this->assertNotEmpty(array_filter($set_jti_keys, fn($k) => str_starts_with($k, 'oidc_bcl_jti_')));
+        $this->assertNotEmpty(array_filter(array_keys($stored_jti), fn($k) => str_starts_with($k, 'oidc_bcl_jti_')));
     }
 
     /**
@@ -3109,13 +3138,8 @@ class OIDCClientTest extends OIDCTestCase
      */
     public function testValidateLogoutTokenJtiCacheCoversTokenLifetime(): void
     {
-        $captured_ttl = null;
-        Functions\when('set_transient')->alias(function ($key, $value, $ttl) use (&$captured_ttl) {
-            if (str_starts_with((string) $key, 'oidc_bcl_jti_')) {
-                $captured_ttl = $ttl;
-            }
-            return true;
-        });
+        $stored_jti = [];
+        $this->stubJtiOptionStorage($stored_jti);
 
         // Token valid for one hour - the replay cache must last at least that long
         $client = $this->createClientWithStubbedJwt(
@@ -3125,21 +3149,23 @@ class OIDCClientTest extends OIDCTestCase
         $result = $client->validate_logout_token('header.payload.signature');
 
         $this->assertIsArray($result);
-        $this->assertGreaterThanOrEqual(3600, $captured_ttl);
+        $entry = reset($stored_jti);
+        $this->assertGreaterThanOrEqual(time() + 3600, (int) $entry);
 
         // A short-lived token still gets the 10-minute minimum replay-cache TTL
         $client = $this->createClientWithStubbedJwt(
             $this->getSampleLogoutTokenClaims(['exp' => time() + 30, 'jti' => 'jti-short'])
         );
         $client->validate_logout_token('header.payload.signature');
-        $this->assertGreaterThanOrEqual(600, $captured_ttl);
+        $this->assertGreaterThanOrEqual(time() + 600, (int) end($stored_jti));
 
-        // And it is capped at one day even for absurd exp values
+        // And it is capped at one day even for absurd exp values (small slack for
+        // clock drift between capture and assertion)
         $client = $this->createClientWithStubbedJwt(
             $this->getSampleLogoutTokenClaims(['exp' => time() + 10 * 86400, 'jti' => 'jti-far-future'])
         );
         $client->validate_logout_token('header.payload.signature');
-        $this->assertLessThanOrEqual(86400, $captured_ttl);
+        $this->assertLessThanOrEqual(time() + 86400 + 5, (int) end($stored_jti));
     }
 
     /**
@@ -3147,10 +3173,10 @@ class OIDCClientTest extends OIDCTestCase
      */
     public function testValidateLogoutTokenRejectsReplayedJti(): void
     {
-        // The jti replay-cache transient already exists
-        Functions\when('get_transient')->alias(
-            static fn($key) => str_starts_with((string) $key, 'oidc_bcl_jti_') ? 1 : false
-        );
+        // The jti replay-cache entry already exists with a future expiry
+        $stored_jti = [];
+        $this->stubJtiOptionStorage($stored_jti);
+        $stored_jti['oidc_bcl_jti_' . hash('sha256', 'logout-jti-123')] = (string) (time() + 600);
 
         $client = $this->createClientWithStubbedJwt($this->getSampleLogoutTokenClaims());
 
@@ -3158,6 +3184,45 @@ class OIDCClientTest extends OIDCTestCase
 
         $this->assertInstanceOf(WP_Error::class, $result);
         $this->assertStringContainsString('already been used', $result->get_error_message());
+    }
+
+    /**
+     * Test an expired jti entry is treated as unseen and removed.
+     *
+     * Database-durable entries have no native TTL; an expired entry must not
+     * block a fresh logout token carrying the same jti.
+     */
+    public function testValidateLogoutTokenTreatsExpiredJtiAsUnseen(): void
+    {
+        $stored_jti = [];
+        $this->stubJtiOptionStorage($stored_jti);
+        $jti_key = 'oidc_bcl_jti_' . hash('sha256', 'logout-jti-123');
+        $stored_jti[$jti_key] = (string) (time() - 10); // expired
+
+        $client = $this->createClientWithStubbedJwt($this->getSampleLogoutTokenClaims());
+
+        $result = $client->validate_logout_token('header.payload.signature');
+
+        $this->assertIsArray($result);
+        // The expired entry was deleted and replaced by a fresh one under the same key
+        $this->assertGreaterThan(time(), (int) $stored_jti[$jti_key]);
+    }
+
+    /**
+     * Test two tokens sharing one jti: the second is rejected as a replay.
+     */
+    public function testValidateLogoutTokenRejectsSecondUseOfSameJti(): void
+    {
+        $stored_jti = [];
+        $this->stubJtiOptionStorage($stored_jti);
+        $claims = $this->getSampleLogoutTokenClaims();
+
+        $client = $this->createClientWithStubbedJwt($claims);
+        $this->assertIsArray($client->validate_logout_token('header.payload.signature'));
+
+        $replay = $client->validate_logout_token('header.payload.signature');
+        $this->assertInstanceOf(WP_Error::class, $replay);
+        $this->assertStringContainsString('already been used', $replay->get_error_message());
     }
 
     /**
@@ -3216,6 +3281,9 @@ class OIDCClientTest extends OIDCTestCase
     {
         $claims = $this->getSampleLogoutTokenClaims(['sid' => 'idp-session-1']);
         unset($claims['sub']);
+
+        $stored_jti = [];
+        $this->stubJtiOptionStorage($stored_jti);
 
         $client = $this->createClientWithStubbedJwt($claims);
 

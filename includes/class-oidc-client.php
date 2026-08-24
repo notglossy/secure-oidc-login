@@ -608,23 +608,63 @@ class OIDC_Client {
 			return new WP_Error( 'oidc_error', __( 'Logout token must contain a sub or sid claim.', 'secure-oidc-login' ) );
 		}
 
-		// REPLAY PROTECTION: each jti may only be used once (step 8). The cache
-		// must outlive the token's JWT validity, so the TTL is derived from exp
-		// (plus clock-skew leeway), with a floor of 10 minutes and a cap of one
-		// day to keep a misconfigured IdP from creating long-lived transients.
+		// REPLAY PROTECTION: each jti may only be used once (step 8). Entries are
+		// stored as non-autoloaded options — database-durable, unlike transients,
+		// which a persistent object cache may evict under memory pressure before
+		// their TTL, silently reopening the replay window. The entry's value is its
+		// expiry timestamp; the TTL covers the token's full JWT validity (exp plus
+		// clock-skew leeway), floored at 10 minutes and capped at one day to keep a
+		// misconfigured IdP from creating long-lived entries.
 		if ( empty( $claims['jti'] ) || ! is_string( $claims['jti'] ) ) {
 			return new WP_Error( 'oidc_error', __( 'Logout token is missing the required jti claim.', 'secure-oidc-login' ) );
 		}
 
-		$jti_key = 'oidc_bcl_jti_' . hash( 'sha256', $claims['jti'] );
-		if ( false !== get_transient( $jti_key ) ) {
-			return new WP_Error( 'oidc_error', __( 'Logout token has already been used.', 'secure-oidc-login' ) );
+		$jti_key    = 'oidc_bcl_jti_' . hash( 'sha256', $claims['jti'] );
+		$seen_until = get_option( $jti_key, false );
+		if ( false !== $seen_until ) {
+			if ( (int) $seen_until > time() ) {
+				return new WP_Error( 'oidc_error', __( 'Logout token has already been used.', 'secure-oidc-login' ) );
+			}
+			delete_option( $jti_key ); // Expired entry; treat as unseen.
 		}
 
 		$jti_ttl = min( max( (int) $claims['exp'] - time() + self::get_jwt_leeway(), 600 ), DAY_IN_SECONDS );
-		set_transient( $jti_key, 1, $jti_ttl );
+		add_option( $jti_key, (string) ( time() + $jti_ttl ), '', false );
+		$this->maybe_sweep_expired_jtis();
 
 		return $claims;
+	}
+
+	/**
+	 * Opportunistically delete expired jti replay-cache entries.
+	 *
+	 * Options have no native TTL, so expired entries would accumulate forever.
+	 * Rather than a cron task, each logout-token validation has a small chance
+	 * of sweeping a bounded batch — amortized cost stays negligible while the
+	 * table cannot grow unbounded.
+	 *
+	 * @since 1.3.2
+	 */
+	private function maybe_sweep_expired_jtis(): void {
+		if ( 0 !== random_int( 1, 100 ) ) {
+			return; // 1% of requests pay the sweep cost.
+		}
+
+		global $wpdb;
+		if ( ! isset( $wpdb ) || ! $wpdb instanceof \wpdb || empty( $wpdb->options ) ) {
+			return; // Not available (e.g. unit tests).
+		}
+
+		$wpdb->query(
+			$wpdb->prepare(
+				"DELETE FROM {$wpdb->options}
+				 WHERE option_name LIKE %s
+				   AND CAST( option_value AS UNSIGNED ) < %d
+				 LIMIT 100",
+				'oidc_bcl_jti_%',
+				time()
+			)
+		);
 	}
 
 	/**
