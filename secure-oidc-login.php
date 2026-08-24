@@ -1045,6 +1045,23 @@ class Secure_OIDC_Login {
 				'samesite' => 'Lax',
 			)
 		);
+
+		if ( $host_prefixed ) {
+			// Sweep any stale unprefixed cookie from a previous (pre-migration or
+			// subdirectory-install) configuration so it does not linger for its TTL.
+			setcookie(
+				self::STATE_COOKIE,
+				'',
+				array(
+					'expires'  => time() - 3600,
+					'path'     => defined( 'COOKIEPATH' ) && COOKIEPATH ? COOKIEPATH : '/',
+					'domain'   => ( defined( 'COOKIE_DOMAIN' ) && COOKIE_DOMAIN ) ? COOKIE_DOMAIN : '',
+					'secure'   => false,
+					'httponly' => true,
+					'samesite' => 'Lax',
+				)
+			);
+		}
 	}
 
 	/**
@@ -1073,19 +1090,23 @@ class Secure_OIDC_Login {
 			)
 		);
 
-		// __Host- variant: fixed Path=/, no Domain.
-		setcookie(
-			self::STATE_COOKIE_HOST,
-			'',
-			array(
-				'expires'  => time() - 3600,
-				'path'     => '/',
-				'domain'   => '',
-				'secure'   => true,
-				'httponly' => true,
-				'samesite' => 'Lax',
-			)
-		);
+		// __Host- variant: fixed Path=/, no Domain. Only sent over HTTPS — browsers
+		// ignore Secure cookies set in non-secure contexts, so emitting it on HTTP
+		// would be a useless header.
+		if ( is_ssl() ) {
+			setcookie(
+				self::STATE_COOKIE_HOST,
+				'',
+				array(
+					'expires'  => time() - 3600,
+					'path'     => '/',
+					'domain'   => '',
+					'secure'   => true,
+					'httponly' => true,
+					'samesite' => 'Lax',
+				)
+			);
+		}
 	}
 
 	/**
