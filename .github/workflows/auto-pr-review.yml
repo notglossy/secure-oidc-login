@@ -15,19 +15,45 @@ permissions:
 
 jobs:
   review:
-    # Skip drafts, and skip if the required secret isn't configured
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    env:
+      # "api" (default): post the diff to /chat/completions directly.
+      # "opencode": run a read-only OpenCode agent inside the checkout.
+      AI_BACKEND: ${{ vars.AI_BACKEND || 'api' }}
+
     steps:
+      # --- Checkout -------------------------------------------------------
+      # The API backend only needs the script. The OpenCode backend needs the
+      # whole repo so the agent can read around the diff.
       - uses: actions/checkout@v7
+        if: env.AI_BACKEND != 'opencode'
         with:
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
 
-      # No setup-python: the script is stdlib-only (Python >= 3.9) and
-      # ubuntu-latest ships a current Python 3 already.
+      - uses: actions/checkout@v7
+        if: env.AI_BACKEND == 'opencode'
+        with:
+          fetch-depth: 0
+
+      - name: Fetch base branch for diffing
+        if: env.AI_BACKEND == 'opencode'
+        run: git fetch --no-tags origin "${{ github.event.pull_request.base.ref }}"
+
+      # --- OpenCode install (opencode backend only) ------------------------
+      - name: Install OpenCode
+        if: env.AI_BACKEND == 'opencode'
+        run: |
+          curl -fsSL https://opencode.ai/install | bash
+          echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
+      - name: Verify OpenCode
+        if: env.AI_BACKEND == 'opencode'
+        run: opencode --version
+
+      # --- Review ----------------------------------------------------------
       - name: Run AI review
         env:
           # --- Provider configuration ---------------------------------------
@@ -41,8 +67,10 @@ jobs:
           AI_MAX_DIFF_CHARS: ${{ vars.AI_MAX_DIFF_CHARS }}     # default 120000
           AI_TEMPERATURE: ${{ vars.AI_TEMPERATURE }}           # default 0.2
           AI_MAX_TOKENS: ${{ vars.AI_MAX_TOKENS }}             # default 8000; raise for reasoning models
-          AI_TIMEOUT: ${{ vars.AI_TIMEOUT }}                   # per-chunk read timeout, default 600
-          AI_STREAM: ${{ vars.AI_STREAM }}                     # default true; keeps long requests alive
+          AI_TIMEOUT: ${{ vars.AI_TIMEOUT }}                   # api: per-chunk read timeout, default 600
+          AI_AGENT_TIMEOUT: ${{ vars.AI_AGENT_TIMEOUT }}       # opencode: whole run, default 1500
+          AI_STREAM: ${{ vars.AI_STREAM }}                     # api: default true
+          AI_JSON_MODE: ${{ vars.AI_JSON_MODE }}               # api: set false for reasoning models
           # Provider-specific request fields as a JSON object, e.g. to disable thinking:
           #   Poolside/vLLM: {"chat_template_kwargs": {"enable_thinking": false}}
           #   OpenRouter:    {"reasoning": {"effort": "low"}}
@@ -54,6 +82,8 @@ jobs:
           # off  = standard correctness/security review (default)
           # on   = standard review + Ponytail delete-list in the same pass
           # only = Ponytail pass alone; no correctness/security findings
+          # api backend inlines the ruleset from AI_PONYTAIL_REF; opencode
+          # backend loads the native @dietrichgebert/ponytail plugin instead.
           AI_PONYTAIL: ${{ vars.AI_PONYTAIL }}
           AI_PONYTAIL_REF: ${{ vars.AI_PONYTAIL_REF }}          # default: pinned release tag
 

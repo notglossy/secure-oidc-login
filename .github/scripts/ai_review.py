@@ -26,6 +26,17 @@ Optional:
                         spend these on thinking first, so go higher if truncated)
   AI_TIMEOUT            Socket read timeout in seconds (default 600). With streaming
                         on, this is per-chunk, not total, so it rarely needs raising.
+  AI_BACKEND            "api" (default) posts the diff to /chat/completions directly.
+                        "opencode" runs `opencode run` headlessly inside the repo
+                        checkout with a read-only agent, so the model can read the
+                        code around the diff. Requires opencode on PATH and a full
+                        checkout (fetch-depth: 0). Ponytail loads as the native
+                        OpenCode plugin instead of an inlined ruleset.
+  AI_AGENT_TIMEOUT      Seconds allowed for the whole opencode run (default 1500).
+  AI_JSON_MODE          "true" (default) sends response_format=json_object. Set
+                        "false" for reasoning models that stop dead under JSON
+                        mode (Poolside Laguna does); the script auto-detects and
+                        retries without it, but opting out saves a wasted pass.
   AI_STREAM             "true" (default) streams the response, which keeps the
                         connection alive while a reasoning model thinks and avoids
                         gateway idle timeouts. Set "false" for providers that
@@ -168,17 +179,24 @@ def fetch_ponytail(ref: str) -> str:
     return "\n\n".join(parts)
 
 
-def build_system_prompt(ponytail_mode: str, ponytail_ref: str, extra: str) -> str:
-    """ponytail_mode: 'off' (default), 'on' (hybrid), or 'only'."""
+def build_system_prompt(ponytail_mode: str, ponytail_ref: str, extra: str, inline_ruleset: bool = True) -> str:
+    """ponytail_mode: 'off' (default), 'on' (hybrid), or 'only'.
+    inline_ruleset=False when a harness plugin already injects Ponytail every turn."""
     if ponytail_mode == "off":
         prompt = CORRECTNESS_PROMPT + COMMON_RULES + OUTPUT_SCHEMA
     else:
-        try:
-            ruleset = fetch_ponytail(ponytail_ref)
-        except Exception as e:
-            log(f"::warning::Ponytail requested but could not be loaded ({e}); falling back to standard review")
-            ponytail_mode = "off"
-            ruleset = ""
+        if not inline_ruleset:
+            ruleset = (
+                "The Ponytail plugin is active in this session and its ruleset is injected on every turn. "
+                "Apply the `ponytail-review` skill format for over-engineering findings."
+            )
+        else:
+            try:
+                ruleset = fetch_ponytail(ponytail_ref)
+            except Exception as e:
+                log(f"::warning::Ponytail requested but could not be loaded ({e}); falling back to standard review")
+                ponytail_mode = "off"
+                ruleset = ""
         if ponytail_mode == "only":
             prompt = (
                 "You are a senior software engineer reviewing a GitHub pull request.\n"
@@ -468,6 +486,7 @@ def call_model(
     timeout: int = 600,
     extra_body: dict | None = None,
     stream: bool = True,
+    json_mode: bool = True,
 ) -> str:
     url = base_url.rstrip("/") + "/chat/completions"
     headers = {
@@ -484,8 +503,9 @@ def call_model(
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
-        "response_format": {"type": "json_object"},
     }
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
     if stream:
         # Streaming keeps the connection alive while a reasoning model thinks, so
         # gateway idle timeouts don't kill long requests.
@@ -573,6 +593,154 @@ def call_model(
     return content
 
 
+
+# --------------------------------------------------------------------------- #
+# OpenCode backend
+# --------------------------------------------------------------------------- #
+
+# Read-only tool policy for the review agent. OpenCode evaluates rules by pattern
+# with last-match-wins, so the "*" deny goes first and allowances follow.
+READ_ONLY_BASH = {
+    "*": "deny",
+    "git diff*": "allow",
+    "git log*": "allow",
+    "git show*": "allow",
+    "git status*": "allow",
+    "git blame*": "allow",
+    "git ls-files*": "allow",
+    "grep *": "allow",
+    "rg *": "allow",
+    "cat *": "allow",
+    "head *": "allow",
+    "tail *": "allow",
+    "ls*": "allow",
+    "find *": "allow",
+    "find * -delete*": "deny",
+    "find * -exec*": "deny",
+    "wc *": "allow",
+    "tree*": "allow",
+    "pwd*": "allow",
+}
+
+
+def write_opencode_config(
+    cfg_dir: str,
+    model: str,
+    base_url: str,
+    system_prompt: str,
+    temperature: float,
+    max_tokens: int,
+    ponytail: bool,
+    extra_body: dict | None,
+) -> str:
+    """Write an isolated opencode.json + system prompt and return the config path.
+    The API key is referenced via {env:AI_API_KEY}, never written to disk."""
+    os.makedirs(cfg_dir, exist_ok=True)
+    prompt_path = os.path.join(cfg_dir, "system.md")
+    with open(prompt_path, "w") as f:
+        f.write(system_prompt)
+
+    model_entry: dict = {
+        "name": model,
+        "limit": {"context": 200000, "output": max_tokens},
+    }
+    if extra_body:
+        # Provider-specific request options (support varies by provider SDK)
+        model_entry["options"] = extra_body
+
+    config: dict = {
+        "$schema": "https://opencode.ai/config.json",
+        "model": f"review/{model}",
+        "share": "disabled",
+        "autoupdate": False,
+        "provider": {
+            "review": {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": "PR review endpoint",
+                "options": {"baseURL": base_url, "apiKey": "{env:AI_API_KEY}"},
+                "models": {model: model_entry},
+            }
+        },
+        # Global floor: nothing may write, fetch, or leave the checkout.
+        "permission": {
+            "edit": "deny",
+            "bash": READ_ONLY_BASH,
+            "webfetch": "deny",
+            "websearch": "deny",
+            "external_directory": "deny",
+            "doom_loop": "deny",
+            "read": {"*": "allow", "*.env": "deny", "*.env.*": "deny", "*.pem": "deny", "*.key": "deny"},
+        },
+        "agent": {
+            "reviewer": {
+                "description": "Read-only pull request reviewer",
+                "mode": "primary",
+                "prompt": "{file:" + prompt_path + "}",
+                "temperature": temperature,
+                "permission": {"edit": "deny", "bash": READ_ONLY_BASH, "webfetch": "deny", "websearch": "deny"},
+            }
+        },
+    }
+    if ponytail:
+        config["plugin"] = ["@dietrichgebert/ponytail"]
+
+    cfg_path = os.path.join(cfg_dir, "opencode.json")
+    with open(cfg_path, "w") as f:
+        json.dump(config, f, indent=2)
+    return cfg_path
+
+
+def call_opencode(
+    repo_dir: str,
+    cfg_path: str,
+    model: str,
+    task: str,
+    timeout: int,
+) -> str:
+    """Run `opencode run` headlessly in the checkout and return its stdout."""
+    import shutil
+    import subprocess
+
+    exe = shutil.which("opencode")
+    if not exe:
+        raise RuntimeError("opencode is not on PATH; install it in a prior workflow step")
+
+    # Minimal environment: the agent must not see GITHUB_TOKEN or other CI secrets.
+    env = {
+        k: v for k, v in os.environ.items()
+        if k in ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "AI_API_KEY", "TMPDIR")
+        or k.startswith("XDG_")
+    }
+    env.update({
+        "OPENCODE_CONFIG": cfg_path,
+        "OPENCODE_DISABLE_AUTOUPDATE": "1",
+        "CI": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_PAGER": "cat",
+        "PAGER": "cat",
+    })
+
+    cmd = [exe, "run", "--agent", "reviewer", "--model", f"review/{model}", task]
+    log(f"Running: opencode run --agent reviewer --model review/{model} <task>")
+    try:
+        proc = subprocess.run(
+            cmd, cwd=repo_dir, env=env, capture_output=True, text=True, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(f"opencode timed out after {timeout}s") from e
+
+    if proc.stderr.strip():
+        tail = proc.stderr.strip().splitlines()[-30:]
+        log("opencode stderr (tail):\n  " + "\n  ".join(tail))
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"opencode exited {proc.returncode}. stdout tail:\n{proc.stdout[-1500:]}"
+        )
+    if not proc.stdout.strip():
+        raise RuntimeError("opencode produced no output")
+    return proc.stdout
+
+
 def extract_json(text: str) -> dict:
     """Tolerate code fences, leading/trailing prose, <think> blocks, and an
     unterminated reasoning block. Scans for the first balanced {...} that parses."""
@@ -619,6 +787,13 @@ def main() -> int:
     max_tokens = int(env("AI_MAX_TOKENS", "8000"))
     timeout = int(env("AI_TIMEOUT", "600"))
     stream = env("AI_STREAM", "true").strip().lower() not in ("false", "0", "no", "off")
+    json_mode = env("AI_JSON_MODE", "true").strip().lower() not in ("false", "0", "no", "off")
+    backend = env("AI_BACKEND", "api").strip().lower()
+    if backend not in ("api", "opencode"):
+        log(f"::warning::Unknown AI_BACKEND {backend!r}; using 'api'")
+        backend = "api"
+    repo_dir = env("GITHUB_WORKSPACE", os.getcwd())
+    agent_timeout = int(env("AI_AGENT_TIMEOUT", "1500"))
     extra_body: dict = {}
     if env("AI_EXTRA_BODY"):
         try:
@@ -666,24 +841,46 @@ def main() -> int:
     log(f"Reviewing {len(kept)} file(s); excluded {len(skipped_excluded)}, over budget {len(skipped_size)}")
 
     if ponytail_mode != "off":
-        log(f"Ponytail mode: {ponytail_mode} (ref {ponytail_ref})")
-    system = build_system_prompt(ponytail_mode, ponytail_ref, extra_instructions)
+        log(f"Ponytail mode: {ponytail_mode}" + (f" (ref {ponytail_ref})" if backend == "api" else " (OpenCode plugin)"))
 
-    user_prompt = (
+    pr_header = (
         f"Repository: {repo}\n"
         f"PR #{pr_number}: {pr.get('title', '')}\n"
         f"Author: {pr.get('user', {}).get('login', '')}\n"
-        f"Base: {pr.get('base', {}).get('ref', '')}  Head: {pr.get('head', {}).get('ref', '')}\n\n"
+        f"Base: {pr.get('base', {}).get('ref', '')}  Head: {pr.get('head', {}).get('ref', '')} ({head_sha[:7]})\n\n"
         f"PR description:\n{(pr.get('body') or '(none)').strip()}\n\n"
-        f"Unified diff ({len(kept)} files):\n\n"
-        + "".join(f.text for f in kept)
     )
 
-    log(f"Calling {model} at {base_url}")
-    raw = call_model(
-        base_url, api_key, model, system, user_prompt, temperature, max_tokens,
-        timeout=timeout, extra_body=extra_body, stream=stream,
-    )
+    if backend == "opencode":
+        base_ref = pr.get("base", {}).get("ref", "main")
+        system = build_system_prompt(ponytail_mode, ponytail_ref, extra_instructions, inline_ruleset=False)
+        system += (
+            "\n\nYou are running inside a checkout of the PR head commit with read-only tools. "
+            "Use them: get the diff with `git diff origin/" + base_ref + "...HEAD`, then read the "
+            "surrounding code, callers, and existing helpers before judging a change. "
+            "Do not attempt to edit files, run tests, install anything, or access the network. "
+            "Your final message must be ONLY the JSON object described above, nothing before or after it."
+        )
+        task = (
+            pr_header
+            + f"Changed files ({len(kept)}): " + ", ".join(f.path for f in kept) + "\n\n"
+            + f"Review this pull request. Start with `git diff origin/{base_ref}...HEAD`."
+        )
+        cfg_dir = os.path.join(env("RUNNER_TEMP", "/tmp"), "ai-review-opencode")
+        cfg_path = write_opencode_config(
+            cfg_dir, model, base_url, system, temperature, max_tokens,
+            ponytail=(ponytail_mode != "off"), extra_body=extra_body or None,
+        )
+        log(f"Calling {model} via OpenCode at {base_url}")
+        raw = call_opencode(repo_dir, cfg_path, model, task, agent_timeout)
+    else:
+        system = build_system_prompt(ponytail_mode, ponytail_ref, extra_instructions)
+        user_prompt = pr_header + f"Unified diff ({len(kept)} files):\n\n" + "".join(f.text for f in kept)
+        log(f"Calling {model} at {base_url}")
+        raw = call_model(
+            base_url, api_key, model, system, user_prompt, temperature, max_tokens,
+            timeout=timeout, extra_body=extra_body, stream=stream, json_mode=json_mode,
+        )
 
     try:
         result = extract_json(raw)
