@@ -1047,20 +1047,25 @@ class Secure_OIDC_Login {
 		);
 
 		if ( $host_prefixed ) {
-			// Sweep any stale unprefixed cookie from a previous (pre-migration or
-			// subdirectory-install) configuration so it does not linger for its TTL.
-			setcookie(
-				self::STATE_COOKIE,
-				'',
-				array(
-					'expires'  => time() - 3600,
-					'path'     => defined( 'COOKIEPATH' ) && COOKIEPATH ? COOKIEPATH : '/',
-					'domain'   => ( defined( 'COOKIE_DOMAIN' ) && COOKIE_DOMAIN ) ? COOKIE_DOMAIN : '',
-					'secure'   => false,
-					'httponly' => true,
-					'samesite' => 'Lax',
-				)
-			);
+			// Sweep any stale unprefixed cookie from a previous configuration so it
+			// does not linger for its TTL. Emit both Secure variants: browsers treat
+			// the Secure flag as part of cookie identity for deletion, so a single
+			// Set-Cookie cannot clear both an HTTP-era (non-Secure) and an HTTPS-era
+			// (Secure) stale cookie.
+			foreach ( array( false, true ) as $stale_secure ) {
+				setcookie(
+					self::STATE_COOKIE,
+					'',
+					array(
+						'expires'  => time() - 3600,
+						'path'     => defined( 'COOKIEPATH' ) && COOKIEPATH ? COOKIEPATH : '/',
+						'domain'   => ( defined( 'COOKIE_DOMAIN' ) && COOKIE_DOMAIN ) ? COOKIE_DOMAIN : '',
+						'secure'   => $stale_secure,
+						'httponly' => true,
+						'samesite' => 'Lax',
+					)
+				);
+			}
 		}
 	}
 
@@ -1070,6 +1075,10 @@ class Secure_OIDC_Login {
 	 * Clears both name variants: a client may carry a stale unprefixed cookie
 	 * from before an HTTP-to-HTTPS migration (or vice versa), which would
 	 * otherwise linger until it expires naturally.
+	 *
+	 * Limitation: after an HTTPS-to-HTTP downgrade, a stale __Host- cookie cannot
+	 * be cleared from HTTP responses (browsers ignore Secure cookies set in
+	 * non-secure contexts); it lingers until the next HTTPS request.
 	 *
 	 * @since 1.3.2
 	 */
