@@ -82,6 +82,18 @@ class Secure_OIDC_Login {
 	 */
 	const STATE_COOKIE = 'secure_oidc_state';
 
+	/**
+	 * __Host- prefixed variant of STATE_COOKIE, used on HTTPS sites.
+	 *
+	 * SECURITY: The __Host- prefix makes browsers reject any Set-Cookie for this
+	 * name that carries a Domain attribute or a Path other than /, so a subdomain
+	 * or sibling path can never shadow or overwrite the binding secret mid-flow.
+	 * The prefix is only honored with the Secure flag, hence the is_ssl() gate.
+	 *
+	 * @var string
+	 */
+	const STATE_COOKIE_HOST = '__Host-' . self::STATE_COOKIE;
+
 	/** @var Secure_OIDC_Login|null Singleton instance */
 	private static $instance = null;
 
@@ -652,8 +664,12 @@ class Secure_OIDC_Login {
 		// flow. The state transient holds the hash of a secret that was set as an
 		// HttpOnly cookie on initiation; a forwarded callback opened in any other
 		// browser lacks that cookie and is rejected (login-CSRF / session fixation).
-		$state_cookie = isset( $_COOKIE[ self::STATE_COOKIE ] )
-			? sanitize_text_field( wp_unslash( $_COOKIE[ self::STATE_COOKIE ] ) )
+		// Read only the cookie name this request's scheme uses: HTTPS accepts solely
+		// the __Host- variant, so an injected legacy-name cookie can never satisfy
+		// the binding check. HTTP has no __Host- cookie by definition.
+		$cookie_name  = $this->state_cookie_name();
+		$state_cookie = isset( $_COOKIE[ $cookie_name ] )
+			? sanitize_text_field( wp_unslash( $_COOKIE[ $cookie_name ] ) )
 			: '';
 
 		if ( ! OIDC_State_Binding::is_valid( $stored_state, $state_cookie ) ) {
@@ -981,11 +997,32 @@ class Secure_OIDC_Login {
 	}
 
 	/**
+	 * The cookie name to use for the state binding on this request.
+	 *
+	 * HTTPS sites get the __Host- prefixed variant; HTTP dev environments keep
+	 * the unprefixed name (browsers reject __Host- cookies without Secure).
+	 *
+	 * NOTE: This inherits is_ssl()'s reverse-proxy caveat — behind a TLS-
+	 * terminating proxy, is_ssl() is only true when the proxy sets
+	 * $_SERVER['HTTPS']='on' (or X-Forwarded-Proto handling is in place). A
+	 * misconfigured proxy would keep the site on the unprefixed cookie name.
+	 *
+	 * @since 1.3.2
+	 *
+	 * @return string Cookie name.
+	 */
+	private function state_cookie_name(): string {
+		return is_ssl() ? self::STATE_COOKIE_HOST : self::STATE_COOKIE;
+	}
+
+	/**
 	 * Set the browser-binding cookie for the OIDC flow.
 	 *
 	 * SECURITY: SameSite=Lax (not Strict) is required so the cookie is sent on
 	 * the IdP's top-level cross-site redirect back to the callback. HttpOnly
 	 * keeps it out of JavaScript; Secure is gated on is_ssl() so HTTP dev still works.
+	 * On HTTPS the __Host- prefixed name is used with Path=/ and no Domain, per
+	 * the prefix requirements — see STATE_COOKIE_HOST.
 	 *
 	 * @since 1.3.2
 	 *
@@ -993,27 +1030,62 @@ class Secure_OIDC_Login {
 	 * @param int    $ttl   Cookie lifetime in seconds (matches the state TTL).
 	 */
 	private function set_state_cookie( string $value, int $ttl ): void {
+		$cookie_name   = $this->state_cookie_name();
+		$host_prefixed = self::STATE_COOKIE_HOST === $cookie_name;
 		setcookie(
-			self::STATE_COOKIE,
+			$cookie_name,
 			$value,
 			array(
 				'expires'  => time() + $ttl,
-				'path'     => defined( 'COOKIEPATH' ) && COOKIEPATH ? COOKIEPATH : '/',
-				'domain'   => ( defined( 'COOKIE_DOMAIN' ) && COOKIE_DOMAIN ) ? COOKIE_DOMAIN : '',
-				'secure'   => is_ssl(),
+				// __Host- requires Path=/ and no Domain attribute.
+				'path'     => $host_prefixed ? '/' : ( defined( 'COOKIEPATH' ) && COOKIEPATH ? COOKIEPATH : '/' ),
+				'domain'   => $host_prefixed ? '' : ( defined( 'COOKIE_DOMAIN' ) && COOKIE_DOMAIN ? COOKIE_DOMAIN : '' ),
+				'secure'   => $host_prefixed,
 				'httponly' => true,
 				'samesite' => 'Lax',
 			)
 		);
+
+		if ( $host_prefixed ) {
+			// Sweep any stale unprefixed cookie from a previous configuration so it
+			// does not linger for its TTL. Emit both Secure variants: browsers treat
+			// the Secure flag as part of cookie identity for deletion, so a single
+			// Set-Cookie cannot clear both an HTTP-era (non-Secure) and an HTTPS-era
+			// (Secure) stale cookie.
+			foreach ( array( false, true ) as $stale_secure ) {
+				setcookie(
+					self::STATE_COOKIE,
+					'',
+					array(
+						'expires'  => time() - 3600,
+						'path'     => defined( 'COOKIEPATH' ) && COOKIEPATH ? COOKIEPATH : '/',
+						'domain'   => ( defined( 'COOKIE_DOMAIN' ) && COOKIE_DOMAIN ) ? COOKIE_DOMAIN : '',
+						'secure'   => $stale_secure,
+						'httponly' => true,
+						'samesite' => 'Lax',
+					)
+				);
+			}
+		}
 	}
 
 	/**
 	 * Clear the browser-binding cookie once the flow is consumed.
 	 *
+	 * Clears both name variants: a client may carry a stale unprefixed cookie
+	 * from before an HTTP-to-HTTPS migration (or vice versa), which would
+	 * otherwise linger until it expires naturally.
+	 *
+	 * Limitation: after an HTTPS-to-HTTP downgrade, a stale __Host- cookie cannot
+	 * be cleared from HTTP responses (browsers ignore Secure cookies set in
+	 * non-secure contexts); it lingers until the next HTTPS request.
+	 *
 	 * @since 1.3.2
 	 */
 	private function clear_state_cookie(): void {
-		unset( $_COOKIE[ self::STATE_COOKIE ] );
+		unset( $_COOKIE[ self::STATE_COOKIE ], $_COOKIE[ self::STATE_COOKIE_HOST ] );
+
+		// Unprefixed variant: original path/domain so the browser matches and drops it.
 		setcookie(
 			self::STATE_COOKIE,
 			'',
@@ -1026,6 +1098,24 @@ class Secure_OIDC_Login {
 				'samesite' => 'Lax',
 			)
 		);
+
+		// __Host- variant: fixed Path=/, no Domain. Only sent over HTTPS — browsers
+		// ignore Secure cookies set in non-secure contexts, so emitting it on HTTP
+		// would be a useless header.
+		if ( is_ssl() ) {
+			setcookie(
+				self::STATE_COOKIE_HOST,
+				'',
+				array(
+					'expires'  => time() - 3600,
+					'path'     => '/',
+					'domain'   => '',
+					'secure'   => true,
+					'httponly' => true,
+					'samesite' => 'Lax',
+				)
+			);
+		}
 	}
 
 	/**
