@@ -494,57 +494,77 @@ def call_model(
     if extra_body:
         payload.update(extra_body)  # provider-specific knobs, e.g. chat_template_kwargs
 
-    reply: ModelReply | None = None
-    transport_failures = 0
-    for _ in range(8):  # bounded: at most a few param adaptations + 2 transport retries
-        try:
-            reply = _post_chat(url, headers, payload, timeout)
-            break
-        except ProviderError as e:
-            err = e.body.lower()
-            if e.status == 400 and "response_format" in err and "response_format" in payload:
-                log("Provider rejected response_format; retrying without JSON mode")
-                payload.pop("response_format")
-            elif e.status == 400 and "stream_options" in err and "stream_options" in payload:
-                log("Provider rejected stream_options; retrying without it")
-                payload.pop("stream_options")
-            elif e.status == 400 and "stream" in err and payload.get("stream"):
-                log("Provider rejected streaming; retrying non-streaming")
-                payload.pop("stream", None)
-                payload.pop("stream_options", None)
-            elif e.status == 400 and "max_completion_tokens" in err and "max_tokens" in payload:
-                log("Provider wants max_completion_tokens; retrying")
-                payload["max_completion_tokens"] = payload.pop("max_tokens")
-            elif e.status == 400 and "temperature" in err and "temperature" in payload:
-                log("Provider rejected temperature; retrying without it")
-                payload.pop("temperature")
-            elif e.status in (429, 500, 502, 503, 504) and transport_failures < 2:
+    def request(payload: dict) -> ModelReply:
+        transport_failures = 0
+        for _ in range(8):  # bounded: a few param adaptations + 2 transport retries
+            try:
+                return _post_chat(url, headers, payload, timeout)
+            except ProviderError as e:
+                err = e.body.lower()
+                if e.status == 400 and "response_format" in err and "response_format" in payload:
+                    log("Provider rejected response_format; retrying without JSON mode")
+                    payload.pop("response_format")
+                elif e.status == 400 and "stream_options" in err and "stream_options" in payload:
+                    log("Provider rejected stream_options; retrying without it")
+                    payload.pop("stream_options")
+                elif e.status == 400 and "stream" in err and payload.get("stream"):
+                    log("Provider rejected streaming; retrying non-streaming")
+                    payload.pop("stream", None)
+                    payload.pop("stream_options", None)
+                elif e.status == 400 and "max_completion_tokens" in err and "max_tokens" in payload:
+                    log("Provider wants max_completion_tokens; retrying")
+                    payload["max_completion_tokens"] = payload.pop("max_tokens")
+                elif e.status == 400 and "temperature" in err and "temperature" in payload:
+                    log("Provider rejected temperature; retrying without it")
+                    payload.pop("temperature")
+                elif e.status in (429, 500, 502, 503, 504) and transport_failures < 2:
+                    transport_failures += 1
+                    log(f"HTTP {e.status} from provider (retry {transport_failures}/2): {e.body[:200]}")
+                    time.sleep(5 * transport_failures)
+                else:
+                    raise RuntimeError(f"Model request failed ({e.status}): {e.body[:800]}") from None
+            except RETRYABLE as e:
                 transport_failures += 1
-                log(f"HTTP {e.status} from provider (retry {transport_failures}/2): {e.body[:200]}")
+                if transport_failures > 2:
+                    raise RuntimeError(f"Model request failed after retries: {e!r}") from None
+                log(f"Transport error (retry {transport_failures}/2): {e!r}")
                 time.sleep(5 * transport_failures)
-            else:
-                raise RuntimeError(f"Model request failed ({e.status}): {e.body[:800]}") from None
-        except RETRYABLE as e:
-            transport_failures += 1
-            if transport_failures > 2:
-                raise RuntimeError(f"Model request failed after retries: {e!r}") from None
-            log(f"Transport error (retry {transport_failures}/2): {e!r}")
-            time.sleep(5 * transport_failures)
-    if reply is None:
         raise RuntimeError("Model request failed: too many parameter adaptations")
 
-    if reply.usage:
-        log(f"Usage: {json.dumps(reply.usage)}")
-    if reply.finish_reason == "length":
-        log(
-            "::warning::Response was cut off at max_tokens. Reasoning models spend tokens "
-            "thinking before answering; raise AI_MAX_TOKENS or lower AI_MAX_DIFF_CHARS."
-        )
+    def report(reply: ModelReply) -> None:
+        if reply.usage:
+            log(f"Usage: {json.dumps(reply.usage)}")
+        log(f"finish_reason={reply.finish_reason!r}, content={len(reply.content)} chars, reasoning={len(reply.reasoning)} chars")
+        if reply.finish_reason == "length":
+            log(
+                "::warning::Response was cut off at max_tokens. Reasoning models spend tokens "
+                "thinking before answering; raise AI_MAX_TOKENS or lower AI_MAX_DIFF_CHARS."
+            )
+
+    reply = request(payload)
+    report(reply)
+
+    # Reasoning models on some stacks stop dead when JSON mode is on: they think,
+    # then emit nothing. Retry once without response_format if that's what we see.
+    if not reply.content.strip() and reply.reasoning.strip() and "response_format" in payload \
+            and reply.finish_reason != "length":
+        log("::warning::Model reasoned but produced no content with JSON mode on; retrying without response_format")
+        payload.pop("response_format")
+        reply = request(payload)
+        report(reply)
 
     content = reply.content
     if not content.strip() and reply.reasoning.strip():
-        log("::warning::content was empty; falling back to reasoning text")
-        content = reply.reasoning
+        # Last resort: some models put the final JSON inside the reasoning channel
+        try:
+            extract_json(reply.reasoning)
+            log("::warning::content was empty but reasoning contains a review object; using it")
+            content = reply.reasoning
+        except json.JSONDecodeError:
+            raise RuntimeError(
+                f"Model reasoned ({len(reply.reasoning)} chars) but returned no answer "
+                f"(finish_reason={reply.finish_reason!r}). Start of reasoning:\n{reply.reasoning[:600]}"
+            ) from None
     if not content.strip():
         raise RuntimeError(
             f"Model returned no content (finish_reason={reply.finish_reason!r}). "
