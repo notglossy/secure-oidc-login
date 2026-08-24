@@ -18,7 +18,7 @@ jobs:
     # Skip drafts, and skip if the required secret isn't configured
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v7
@@ -40,7 +40,12 @@ jobs:
           # --- Optional tuning (all have sensible defaults) -----------------
           AI_MAX_DIFF_CHARS: ${{ vars.AI_MAX_DIFF_CHARS }}     # default 120000
           AI_TEMPERATURE: ${{ vars.AI_TEMPERATURE }}           # default 0.2
-          AI_MAX_TOKENS: ${{ vars.AI_MAX_TOKENS }}             # default 4000
+          AI_MAX_TOKENS: ${{ vars.AI_MAX_TOKENS }}             # default 8000; raise for reasoning models
+          AI_TIMEOUT: ${{ vars.AI_TIMEOUT }}                   # seconds, default 600
+          # Provider-specific request fields as a JSON object, e.g. to disable thinking:
+          #   Poolside/vLLM: {"chat_template_kwargs": {"enable_thinking": false}}
+          #   OpenRouter:    {"reasoning": {"effort": "low"}}
+          AI_EXTRA_BODY: ${{ vars.AI_EXTRA_BODY }}
           AI_EXCLUDE_PATTERNS: ${{ vars.AI_EXCLUDE_PATTERNS }} # comma-separated globs
           AI_EXTRA_INSTRUCTIONS: ${{ vars.AI_EXTRA_INSTRUCTIONS }}
 

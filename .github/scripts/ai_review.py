@@ -22,7 +22,17 @@ Required:
 Optional:
   AI_MAX_DIFF_CHARS     Cap on diff size sent to the model (default 120000)
   AI_TEMPERATURE        Sampling temperature (default 0.2)
-  AI_MAX_TOKENS         Max completion tokens (default 4000)
+  AI_MAX_TOKENS         Max completion tokens (default 8000; reasoning models
+                        spend these on thinking first, so go higher if truncated)
+  AI_TIMEOUT            Seconds to wait for the model response (default 600).
+                        Reasoning models on large diffs can take several minutes.
+  AI_EXTRA_BODY         JSON object merged into the chat-completions request body
+                        for provider-specific options. Examples:
+                          Poolside / vLLM, turn off thinking:
+                            {"chat_template_kwargs": {"enable_thinking": false}}
+                          OpenRouter, cap reasoning effort:
+                            {"reasoning": {"effort": "low"}}
+                          Ollama:  {"think": false}
   AI_EXCLUDE_PATTERNS   Comma-separated fnmatch globs to skip, e.g.
                         "*.lock,package-lock.json,dist/*,*.min.js"
   AI_EXTRA_INSTRUCTIONS Free text appended to the system prompt
@@ -355,6 +365,8 @@ def call_model(
     user: str,
     temperature: float,
     max_tokens: int,
+    timeout: int = 600,
+    extra_body: dict | None = None,
 ) -> str:
     url = base_url.rstrip("/") + "/chat/completions"
     headers = {
@@ -371,35 +383,95 @@ def call_model(
             {"role": "user", "content": user},
         ],
     }
+    if extra_body:
+        base_payload.update(extra_body)  # provider-specific knobs, e.g. chat_template_kwargs
 
-    # First try with JSON mode; many providers support it, some 400 on it.
+    # Try with JSON mode first; adapt to whichever parameters the provider rejects.
     payload = dict(base_payload, response_format={"type": "json_object"})
-    status, text = http("POST", url, headers, payload)
-    if status == 400 and "response_format" in text:
-        log("Provider rejected response_format; retrying without JSON mode")
-        status, text = http("POST", url, headers, base_payload)
+    status, text = http("POST", url, headers, payload, retries=2, timeout=timeout)
+    for attempt in range(3):
+        if status != 400:
+            break
+        err = text.lower()
+        if "response_format" in err and "response_format" in payload:
+            log("Provider rejected response_format; retrying without JSON mode")
+            payload.pop("response_format")
+        elif "max_completion_tokens" in err and "max_tokens" in payload:
+            log("Provider wants max_completion_tokens; retrying")
+            payload["max_completion_tokens"] = payload.pop("max_tokens")
+        elif "temperature" in err and "temperature" in payload:
+            log("Provider rejected temperature; retrying without it")
+            payload.pop("temperature")
+        else:
+            break
+        status, text = http("POST", url, headers, payload, retries=2, timeout=timeout)
 
     if status != 200:
         raise RuntimeError(f"Model request failed ({status}): {text[:800]}")
 
     data = json.loads(text)
     try:
-        return data["choices"][0]["message"]["content"]
+        choice = data["choices"][0]
     except (KeyError, IndexError, TypeError) as e:
         raise RuntimeError(f"Unexpected response shape: {text[:800]}") from e
 
+    msg = choice.get("message") or {}
+    content = msg.get("content")
+
+    # Some providers return content as a list of {"type": "text", "text": ...} parts
+    if isinstance(content, list):
+        content = "".join(p.get("text", "") for p in content if isinstance(p, dict))
+
+    # Some put the answer in a reasoning field, or use the legacy completions shape
+    if not content:
+        for key in ("reasoning_content", "reasoning", "refusal"):
+            if isinstance(msg.get(key), str) and msg[key].strip():
+                log(f"::warning::message.content was empty; using message.{key}")
+                content = msg[key]
+                break
+    if not content and isinstance(choice.get("text"), str):
+        content = choice["text"]
+
+    finish = choice.get("finish_reason")
+    usage = data.get("usage") or {}
+    if usage:
+        log(f"Usage: {json.dumps(usage)}")
+
+    if finish == "length":
+        log(
+            "::warning::Response was cut off at max_tokens. Reasoning models spend tokens "
+            "thinking before answering; raise AI_MAX_TOKENS (e.g. 16000) or lower AI_MAX_DIFF_CHARS."
+        )
+    if not content or not str(content).strip():
+        raise RuntimeError(
+            f"Model returned no content (finish_reason={finish!r}). "
+            + ("It hit the token limit; raise AI_MAX_TOKENS. " if finish == "length" else "")
+            + f"Raw response: {text[:800]}"
+        )
+    return str(content)
+
 
 def extract_json(text: str) -> dict:
-    """Tolerate code fences, leading prose, and <think> blocks."""
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
+    """Tolerate code fences, leading/trailing prose, <think> blocks, and an
+    unterminated reasoning block. Scans for the first balanced {...} that parses."""
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
+    text = re.sub(r"<think>.*\Z", "", text, flags=re.S).strip()  # unterminated
     fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.S)
     if fence:
-        text = fence.group(1)
-    else:
-        start, end = text.find("{"), text.rfind("}")
-        if start != -1 and end != -1:
-            text = text[start : end + 1]
-    return json.loads(text)
+        try:
+            return json.loads(fence.group(1))
+        except json.JSONDecodeError:
+            pass
+    # Walk candidate start braces; find a balanced object that parses
+    decoder = json.JSONDecoder()
+    for m in re.finditer(r"\{", text):
+        try:
+            obj, _ = decoder.raw_decode(text, m.start())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and ("summary" in obj or "comments" in obj):
+            return obj
+    raise json.JSONDecodeError("no review object found", text, 0)
 
 
 # --------------------------------------------------------------------------- #
@@ -422,7 +494,17 @@ def main() -> int:
 
     max_chars = int(env("AI_MAX_DIFF_CHARS", "120000"))
     temperature = float(env("AI_TEMPERATURE", "0.2"))
-    max_tokens = int(env("AI_MAX_TOKENS", "4000"))
+    max_tokens = int(env("AI_MAX_TOKENS", "8000"))
+    timeout = int(env("AI_TIMEOUT", "600"))
+    extra_body: dict = {}
+    if env("AI_EXTRA_BODY"):
+        try:
+            extra_body = json.loads(env("AI_EXTRA_BODY"))
+            if not isinstance(extra_body, dict):
+                raise ValueError("must be a JSON object")
+        except (json.JSONDecodeError, ValueError) as e:
+            log(f"::warning::AI_EXTRA_BODY is not a JSON object ({e}); ignoring")
+            extra_body = {}
     extra_instructions = env("AI_EXTRA_INSTRUCTIONS")
     ponytail_mode = env("AI_PONYTAIL", "off").strip().lower()
     if ponytail_mode in ("true", "1", "yes", "hybrid"):
@@ -475,13 +557,28 @@ def main() -> int:
     )
 
     log(f"Calling {model} at {base_url}")
-    raw = call_model(base_url, api_key, model, system, user_prompt, temperature, max_tokens)
+    raw = call_model(
+        base_url, api_key, model, system, user_prompt, temperature, max_tokens,
+        timeout=timeout, extra_body=extra_body,
+    )
 
     try:
         result = extract_json(raw)
     except json.JSONDecodeError:
-        log("::warning::Model did not return valid JSON; posting raw output")
-        result = {"summary": raw, "verdict": "COMMENT", "comments": []}
+        log("::warning::Model did not return valid JSON. First 1500 chars of output:")
+        log(raw[:1500])
+        result = {
+            "summary": (
+                "_The model returned output that could not be parsed as a review. "
+                "Check the workflow log for the raw response. If the model is a reasoning "
+                "model, try raising `AI_MAX_TOKENS` or disabling thinking via `AI_EXTRA_BODY`._\n\n"
+                "<details><summary>Raw output (truncated)</summary>\n\n```\n"
+                + raw[:3000].replace("```", "` ` `")
+                + "\n```\n</details>"
+            ),
+            "verdict": "COMMENT",
+            "comments": [],
+        }
 
     summary = str(result.get("summary", "")).strip() or "_No summary provided._"
     verdict = str(result.get("verdict", "COMMENT")).upper()
