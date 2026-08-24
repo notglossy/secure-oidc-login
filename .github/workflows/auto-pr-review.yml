@@ -41,7 +41,8 @@ jobs:
           AI_MAX_DIFF_CHARS: ${{ vars.AI_MAX_DIFF_CHARS }}     # default 120000
           AI_TEMPERATURE: ${{ vars.AI_TEMPERATURE }}           # default 0.2
           AI_MAX_TOKENS: ${{ vars.AI_MAX_TOKENS }}             # default 8000; raise for reasoning models
-          AI_TIMEOUT: ${{ vars.AI_TIMEOUT }}                   # seconds, default 600
+          AI_TIMEOUT: ${{ vars.AI_TIMEOUT }}                   # per-chunk read timeout, default 600
+          AI_STREAM: ${{ vars.AI_STREAM }}                     # default true; keeps long requests alive
           # Provider-specific request fields as a JSON object, e.g. to disable thinking:
           #   Poolside/vLLM: {"chat_template_kwargs": {"enable_thinking": false}}
           #   OpenRouter:    {"reasoning": {"effort": "low"}}

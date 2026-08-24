@@ -24,8 +24,12 @@ Optional:
   AI_TEMPERATURE        Sampling temperature (default 0.2)
   AI_MAX_TOKENS         Max completion tokens (default 8000; reasoning models
                         spend these on thinking first, so go higher if truncated)
-  AI_TIMEOUT            Seconds to wait for the model response (default 600).
-                        Reasoning models on large diffs can take several minutes.
+  AI_TIMEOUT            Socket read timeout in seconds (default 600). With streaming
+                        on, this is per-chunk, not total, so it rarely needs raising.
+  AI_STREAM             "true" (default) streams the response, which keeps the
+                        connection alive while a reasoning model thinks and avoids
+                        gateway idle timeouts. Set "false" for providers that
+                        don't support SSE.
   AI_EXTRA_BODY         JSON object merged into the chat-completions request body
                         for provider-specific options. Examples:
                           Poolside / vLLM, turn off thinking:
@@ -46,6 +50,7 @@ Optional:
 from __future__ import annotations
 
 import fnmatch
+import http.client as httpclient
 import json
 import os
 import re
@@ -357,6 +362,101 @@ def excluded(path: str, patterns: list[str]) -> bool:
 # Model
 # --------------------------------------------------------------------------- #
 
+class ProviderError(Exception):
+    def __init__(self, status: int, body: str):
+        super().__init__(f"HTTP {status}: {body[:800]}")
+        self.status, self.body = status, body
+
+
+@dataclass
+class ModelReply:
+    content: str = ""
+    reasoning: str = ""
+    finish_reason: str | None = None
+    usage: dict = field(default_factory=dict)
+
+
+RETRYABLE = (
+    urllib.error.URLError,
+    TimeoutError,
+    ConnectionError,          # includes ConnectionResetError, RemoteDisconnected
+    httpclient.HTTPException,  # IncompleteRead, BadStatusLine, ...
+)
+
+
+def _post_chat(url: str, headers: dict, payload: dict, timeout: int) -> ModelReply:
+    """One POST. Streams if the server streams; otherwise parses a normal JSON body.
+    Raises ProviderError on 4xx/5xx and RETRYABLE on transport failures."""
+    req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST", headers=headers)
+    try:
+        resp = urllib.request.urlopen(req, timeout=timeout)
+    except urllib.error.HTTPError as e:
+        raise ProviderError(e.code, e.read().decode(errors="replace")) from None
+
+    with resp:
+        if "text/event-stream" not in (resp.headers.get("Content-Type") or ""):
+            return _parse_nonstream(json.loads(resp.read().decode()))
+
+        reply = ModelReply()
+        last_log = time.monotonic()
+        phase = ""
+        for raw in resp:
+            line = raw.decode("utf-8", errors="replace").strip()
+            if not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if data == "[DONE]":
+                break
+            try:
+                ev = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(ev.get("usage"), dict):
+                reply.usage = ev["usage"]
+            for ch in ev.get("choices") or []:
+                d = ch.get("delta") or {}
+                c = d.get("content")
+                if isinstance(c, list):
+                    c = "".join(p.get("text", "") for p in c if isinstance(p, dict))
+                r = d.get("reasoning_content") or d.get("reasoning")
+                if r:
+                    reply.reasoning += r
+                    if phase != "thinking":
+                        phase = "thinking"
+                        log("Model is thinking...")
+                if c:
+                    reply.content += c
+                    if phase != "answering":
+                        phase = "answering"
+                        log(f"Model is answering (after {len(reply.reasoning)} chars of reasoning)")
+                if ch.get("finish_reason"):
+                    reply.finish_reason = ch["finish_reason"]
+            now = time.monotonic()
+            if now - last_log > 30:
+                log(f"  ...{len(reply.reasoning)} reasoning chars, {len(reply.content)} content chars so far")
+                last_log = now
+        return reply
+
+
+def _parse_nonstream(data: dict) -> ModelReply:
+    try:
+        choice = data["choices"][0]
+    except (KeyError, IndexError, TypeError) as e:
+        raise RuntimeError(f"Unexpected response shape: {json.dumps(data)[:800]}") from e
+    msg = choice.get("message") or {}
+    content = msg.get("content")
+    if isinstance(content, list):
+        content = "".join(p.get("text", "") for p in content if isinstance(p, dict))
+    if not content and isinstance(choice.get("text"), str):  # legacy completions shape
+        content = choice["text"]
+    return ModelReply(
+        content=content or "",
+        reasoning=msg.get("reasoning_content") or msg.get("reasoning") or "",
+        finish_reason=choice.get("finish_reason"),
+        usage=data.get("usage") or {},
+    )
+
+
 def call_model(
     base_url: str,
     api_key: str,
@@ -367,14 +467,16 @@ def call_model(
     max_tokens: int,
     timeout: int = 600,
     extra_body: dict | None = None,
+    stream: bool = True,
 ) -> str:
     url = base_url.rstrip("/") + "/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
+        "Accept": "text/event-stream, application/json",
         "User-Agent": "ai-pr-review",
     }
-    base_payload = {
+    payload: dict = {
         "model": model,
         "temperature": temperature,
         "max_tokens": max_tokens,
@@ -382,73 +484,73 @@ def call_model(
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
+        "response_format": {"type": "json_object"},
     }
+    if stream:
+        # Streaming keeps the connection alive while a reasoning model thinks, so
+        # gateway idle timeouts don't kill long requests.
+        payload["stream"] = True
+        payload["stream_options"] = {"include_usage": True}
     if extra_body:
-        base_payload.update(extra_body)  # provider-specific knobs, e.g. chat_template_kwargs
+        payload.update(extra_body)  # provider-specific knobs, e.g. chat_template_kwargs
 
-    # Try with JSON mode first; adapt to whichever parameters the provider rejects.
-    payload = dict(base_payload, response_format={"type": "json_object"})
-    status, text = http("POST", url, headers, payload, retries=2, timeout=timeout)
-    for attempt in range(3):
-        if status != 400:
+    reply: ModelReply | None = None
+    transport_failures = 0
+    for _ in range(8):  # bounded: at most a few param adaptations + 2 transport retries
+        try:
+            reply = _post_chat(url, headers, payload, timeout)
             break
-        err = text.lower()
-        if "response_format" in err and "response_format" in payload:
-            log("Provider rejected response_format; retrying without JSON mode")
-            payload.pop("response_format")
-        elif "max_completion_tokens" in err and "max_tokens" in payload:
-            log("Provider wants max_completion_tokens; retrying")
-            payload["max_completion_tokens"] = payload.pop("max_tokens")
-        elif "temperature" in err and "temperature" in payload:
-            log("Provider rejected temperature; retrying without it")
-            payload.pop("temperature")
-        else:
-            break
-        status, text = http("POST", url, headers, payload, retries=2, timeout=timeout)
+        except ProviderError as e:
+            err = e.body.lower()
+            if e.status == 400 and "response_format" in err and "response_format" in payload:
+                log("Provider rejected response_format; retrying without JSON mode")
+                payload.pop("response_format")
+            elif e.status == 400 and "stream_options" in err and "stream_options" in payload:
+                log("Provider rejected stream_options; retrying without it")
+                payload.pop("stream_options")
+            elif e.status == 400 and "stream" in err and payload.get("stream"):
+                log("Provider rejected streaming; retrying non-streaming")
+                payload.pop("stream", None)
+                payload.pop("stream_options", None)
+            elif e.status == 400 and "max_completion_tokens" in err and "max_tokens" in payload:
+                log("Provider wants max_completion_tokens; retrying")
+                payload["max_completion_tokens"] = payload.pop("max_tokens")
+            elif e.status == 400 and "temperature" in err and "temperature" in payload:
+                log("Provider rejected temperature; retrying without it")
+                payload.pop("temperature")
+            elif e.status in (429, 500, 502, 503, 504) and transport_failures < 2:
+                transport_failures += 1
+                log(f"HTTP {e.status} from provider (retry {transport_failures}/2): {e.body[:200]}")
+                time.sleep(5 * transport_failures)
+            else:
+                raise RuntimeError(f"Model request failed ({e.status}): {e.body[:800]}") from None
+        except RETRYABLE as e:
+            transport_failures += 1
+            if transport_failures > 2:
+                raise RuntimeError(f"Model request failed after retries: {e!r}") from None
+            log(f"Transport error (retry {transport_failures}/2): {e!r}")
+            time.sleep(5 * transport_failures)
+    if reply is None:
+        raise RuntimeError("Model request failed: too many parameter adaptations")
 
-    if status != 200:
-        raise RuntimeError(f"Model request failed ({status}): {text[:800]}")
-
-    data = json.loads(text)
-    try:
-        choice = data["choices"][0]
-    except (KeyError, IndexError, TypeError) as e:
-        raise RuntimeError(f"Unexpected response shape: {text[:800]}") from e
-
-    msg = choice.get("message") or {}
-    content = msg.get("content")
-
-    # Some providers return content as a list of {"type": "text", "text": ...} parts
-    if isinstance(content, list):
-        content = "".join(p.get("text", "") for p in content if isinstance(p, dict))
-
-    # Some put the answer in a reasoning field, or use the legacy completions shape
-    if not content:
-        for key in ("reasoning_content", "reasoning", "refusal"):
-            if isinstance(msg.get(key), str) and msg[key].strip():
-                log(f"::warning::message.content was empty; using message.{key}")
-                content = msg[key]
-                break
-    if not content and isinstance(choice.get("text"), str):
-        content = choice["text"]
-
-    finish = choice.get("finish_reason")
-    usage = data.get("usage") or {}
-    if usage:
-        log(f"Usage: {json.dumps(usage)}")
-
-    if finish == "length":
+    if reply.usage:
+        log(f"Usage: {json.dumps(reply.usage)}")
+    if reply.finish_reason == "length":
         log(
             "::warning::Response was cut off at max_tokens. Reasoning models spend tokens "
-            "thinking before answering; raise AI_MAX_TOKENS (e.g. 16000) or lower AI_MAX_DIFF_CHARS."
+            "thinking before answering; raise AI_MAX_TOKENS or lower AI_MAX_DIFF_CHARS."
         )
-    if not content or not str(content).strip():
+
+    content = reply.content
+    if not content.strip() and reply.reasoning.strip():
+        log("::warning::content was empty; falling back to reasoning text")
+        content = reply.reasoning
+    if not content.strip():
         raise RuntimeError(
-            f"Model returned no content (finish_reason={finish!r}). "
-            + ("It hit the token limit; raise AI_MAX_TOKENS. " if finish == "length" else "")
-            + f"Raw response: {text[:800]}"
+            f"Model returned no content (finish_reason={reply.finish_reason!r}). "
+            + ("It hit the token limit; raise AI_MAX_TOKENS. " if reply.finish_reason == "length" else "")
         )
-    return str(content)
+    return content
 
 
 def extract_json(text: str) -> dict:
@@ -496,6 +598,7 @@ def main() -> int:
     temperature = float(env("AI_TEMPERATURE", "0.2"))
     max_tokens = int(env("AI_MAX_TOKENS", "8000"))
     timeout = int(env("AI_TIMEOUT", "600"))
+    stream = env("AI_STREAM", "true").strip().lower() not in ("false", "0", "no", "off")
     extra_body: dict = {}
     if env("AI_EXTRA_BODY"):
         try:
@@ -559,7 +662,7 @@ def main() -> int:
     log(f"Calling {model} at {base_url}")
     raw = call_model(
         base_url, api_key, model, system, user_prompt, temperature, max_tokens,
-        timeout=timeout, extra_body=extra_body,
+        timeout=timeout, extra_body=extra_body, stream=stream,
     )
 
     try:
