@@ -82,6 +82,18 @@ class Secure_OIDC_Login {
 	 */
 	const STATE_COOKIE = 'secure_oidc_state';
 
+	/**
+	 * __Host- prefixed variant of STATE_COOKIE, used on HTTPS sites.
+	 *
+	 * SECURITY: The __Host- prefix makes browsers reject any Set-Cookie for this
+	 * name that carries a Domain attribute or a Path other than /, so a subdomain
+	 * or sibling path can never shadow or overwrite the binding secret mid-flow.
+	 * The prefix is only honored with the Secure flag, hence the is_ssl() gate.
+	 *
+	 * @var string
+	 */
+	const STATE_COOKIE_HOST = '__Host-secure_oidc_state';
+
 	/** @var Secure_OIDC_Login|null Singleton instance */
 	private static $instance = null;
 
@@ -652,9 +664,15 @@ class Secure_OIDC_Login {
 		// flow. The state transient holds the hash of a secret that was set as an
 		// HttpOnly cookie on initiation; a forwarded callback opened in any other
 		// browser lacks that cookie and is rejected (login-CSRF / session fixation).
-		$state_cookie = isset( $_COOKIE[ self::STATE_COOKIE ] )
-			? sanitize_text_field( wp_unslash( $_COOKIE[ self::STATE_COOKIE ] ) )
-			: '';
+		// Read the binding cookie: prefer the __Host- variant (HTTPS), fall back to
+		// the unprefixed name (HTTP dev, or a cookie set before an HTTP-to-HTTPS
+		// migration that has not yet been cleared).
+		$state_cookie = '';
+		if ( isset( $_COOKIE[ self::STATE_COOKIE_HOST ] ) ) {
+			$state_cookie = sanitize_text_field( wp_unslash( $_COOKIE[ self::STATE_COOKIE_HOST ] ) );
+		} elseif ( isset( $_COOKIE[ self::STATE_COOKIE ] ) ) {
+			$state_cookie = sanitize_text_field( wp_unslash( $_COOKIE[ self::STATE_COOKIE ] ) );
+		}
 
 		if ( ! OIDC_State_Binding::is_valid( $stored_state, $state_cookie ) ) {
 			delete_transient( 'oidc_state_' . $state );
@@ -981,11 +999,27 @@ class Secure_OIDC_Login {
 	}
 
 	/**
+	 * The cookie name to use for the state binding on this request.
+	 *
+	 * HTTPS sites get the __Host- prefixed variant; HTTP dev environments keep
+	 * the unprefixed name (browsers reject __Host- cookies without Secure).
+	 *
+	 * @since 1.3.2
+	 *
+	 * @return string Cookie name.
+	 */
+	private function state_cookie_name(): string {
+		return is_ssl() ? self::STATE_COOKIE_HOST : self::STATE_COOKIE;
+	}
+
+	/**
 	 * Set the browser-binding cookie for the OIDC flow.
 	 *
 	 * SECURITY: SameSite=Lax (not Strict) is required so the cookie is sent on
 	 * the IdP's top-level cross-site redirect back to the callback. HttpOnly
 	 * keeps it out of JavaScript; Secure is gated on is_ssl() so HTTP dev still works.
+	 * On HTTPS the __Host- prefixed name is used with Path=/ and no Domain, per
+	 * the prefix requirements — see STATE_COOKIE_HOST.
 	 *
 	 * @since 1.3.2
 	 *
@@ -993,14 +1027,16 @@ class Secure_OIDC_Login {
 	 * @param int    $ttl   Cookie lifetime in seconds (matches the state TTL).
 	 */
 	private function set_state_cookie( string $value, int $ttl ): void {
+		$host_prefixed = is_ssl();
 		setcookie(
-			self::STATE_COOKIE,
+			$host_prefixed ? self::STATE_COOKIE_HOST : self::STATE_COOKIE,
 			$value,
 			array(
 				'expires'  => time() + $ttl,
-				'path'     => defined( 'COOKIEPATH' ) && COOKIEPATH ? COOKIEPATH : '/',
-				'domain'   => ( defined( 'COOKIE_DOMAIN' ) && COOKIE_DOMAIN ) ? COOKIE_DOMAIN : '',
-				'secure'   => is_ssl(),
+				// __Host- requires Path=/ and no Domain attribute.
+				'path'     => $host_prefixed ? '/' : ( defined( 'COOKIEPATH' ) && COOKIEPATH ? COOKIEPATH : '/' ),
+				'domain'   => $host_prefixed ? '' : ( defined( 'COOKIE_DOMAIN' ) && COOKIE_DOMAIN ? COOKIE_DOMAIN : '' ),
+				'secure'   => $host_prefixed,
 				'httponly' => true,
 				'samesite' => 'Lax',
 			)
@@ -1010,10 +1046,16 @@ class Secure_OIDC_Login {
 	/**
 	 * Clear the browser-binding cookie once the flow is consumed.
 	 *
+	 * Clears both name variants: a client may carry a stale unprefixed cookie
+	 * from before an HTTP-to-HTTPS migration (or vice versa), which would
+	 * otherwise linger until it expires naturally.
+	 *
 	 * @since 1.3.2
 	 */
 	private function clear_state_cookie(): void {
-		unset( $_COOKIE[ self::STATE_COOKIE ] );
+		unset( $_COOKIE[ self::STATE_COOKIE ], $_COOKIE[ self::STATE_COOKIE_HOST ] );
+
+		// Unprefixed variant: original path/domain so the browser matches and drops it.
 		setcookie(
 			self::STATE_COOKIE,
 			'',
@@ -1022,6 +1064,20 @@ class Secure_OIDC_Login {
 				'path'     => defined( 'COOKIEPATH' ) && COOKIEPATH ? COOKIEPATH : '/',
 				'domain'   => ( defined( 'COOKIE_DOMAIN' ) && COOKIE_DOMAIN ) ? COOKIE_DOMAIN : '',
 				'secure'   => is_ssl(),
+				'httponly' => true,
+				'samesite' => 'Lax',
+			)
+		);
+
+		// __Host- variant: fixed Path=/, no Domain.
+		setcookie(
+			self::STATE_COOKIE_HOST,
+			'',
+			array(
+				'expires'  => time() - 3600,
+				'path'     => '/',
+				'domain'   => '',
+				'secure'   => true,
 				'httponly' => true,
 				'samesite' => 'Lax',
 			)
