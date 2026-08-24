@@ -92,7 +92,7 @@ class Secure_OIDC_Login {
 	 *
 	 * @var string
 	 */
-	const STATE_COOKIE_HOST = '__Host-secure_oidc_state';
+	const STATE_COOKIE_HOST = '__Host-' . self::STATE_COOKIE;
 
 	/** @var Secure_OIDC_Login|null Singleton instance */
 	private static $instance = null;
@@ -664,15 +664,13 @@ class Secure_OIDC_Login {
 		// flow. The state transient holds the hash of a secret that was set as an
 		// HttpOnly cookie on initiation; a forwarded callback opened in any other
 		// browser lacks that cookie and is rejected (login-CSRF / session fixation).
-		// Read the binding cookie: prefer the __Host- variant (HTTPS), fall back to
-		// the unprefixed name (HTTP dev, or a cookie set before an HTTP-to-HTTPS
-		// migration that has not yet been cleared).
-		$state_cookie = '';
-		if ( isset( $_COOKIE[ self::STATE_COOKIE_HOST ] ) ) {
-			$state_cookie = sanitize_text_field( wp_unslash( $_COOKIE[ self::STATE_COOKIE_HOST ] ) );
-		} elseif ( isset( $_COOKIE[ self::STATE_COOKIE ] ) ) {
-			$state_cookie = sanitize_text_field( wp_unslash( $_COOKIE[ self::STATE_COOKIE ] ) );
-		}
+		// Read only the cookie name this request's scheme uses: HTTPS accepts solely
+		// the __Host- variant, so an injected legacy-name cookie can never satisfy
+		// the binding check. HTTP has no __Host- cookie by definition.
+		$cookie_name  = $this->state_cookie_name();
+		$state_cookie = isset( $_COOKIE[ $cookie_name ] )
+			? sanitize_text_field( wp_unslash( $_COOKIE[ $cookie_name ] ) )
+			: '';
 
 		if ( ! OIDC_State_Binding::is_valid( $stored_state, $state_cookie ) ) {
 			delete_transient( 'oidc_state_' . $state );
@@ -1027,9 +1025,10 @@ class Secure_OIDC_Login {
 	 * @param int    $ttl   Cookie lifetime in seconds (matches the state TTL).
 	 */
 	private function set_state_cookie( string $value, int $ttl ): void {
-		$host_prefixed = is_ssl();
+		$cookie_name   = $this->state_cookie_name();
+		$host_prefixed = self::STATE_COOKIE_HOST === $cookie_name;
 		setcookie(
-			$host_prefixed ? self::STATE_COOKIE_HOST : self::STATE_COOKIE,
+			$cookie_name,
 			$value,
 			array(
 				'expires'  => time() + $ttl,
