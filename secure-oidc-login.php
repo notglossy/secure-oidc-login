@@ -1002,6 +1002,11 @@ class Secure_OIDC_Login {
 	 * HTTPS sites get the __Host- prefixed variant; HTTP dev environments keep
 	 * the unprefixed name (browsers reject __Host- cookies without Secure).
 	 *
+	 * NOTE: This inherits is_ssl()'s reverse-proxy caveat — behind a TLS-
+	 * terminating proxy, is_ssl() is only true when the proxy sets
+	 * $_SERVER['HTTPS']='on' (or X-Forwarded-Proto handling is in place). A
+	 * misconfigured proxy would keep the site on the unprefixed cookie name.
+	 *
 	 * @since 1.3.2
 	 *
 	 * @return string Cookie name.
