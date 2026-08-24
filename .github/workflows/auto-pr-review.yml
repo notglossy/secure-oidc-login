@@ -1,0 +1,59 @@
+name: AI PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# Prevent overlapping reviews on rapid pushes to the same PR
+concurrency:
+  group: ai-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    # Skip drafts, and skip if the required secret isn't configured
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      # No setup-python: the script is stdlib-only (Python >= 3.9) and
+      # ubuntu-latest ships a current Python 3 already.
+      - name: Run AI review
+        env:
+          # --- Provider configuration ---------------------------------------
+          # Secrets  -> Settings > Secrets and variables > Actions > Secrets
+          # Variables-> Settings > Secrets and variables > Actions > Variables
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_BASE_URL: ${{ vars.AI_BASE_URL }}       # e.g. https://api.openai.com/v1
+          AI_MODEL: ${{ vars.AI_MODEL }}             # e.g. gpt-4o-mini
+
+          # --- Optional tuning (all have sensible defaults) -----------------
+          AI_MAX_DIFF_CHARS: ${{ vars.AI_MAX_DIFF_CHARS }}     # default 120000
+          AI_TEMPERATURE: ${{ vars.AI_TEMPERATURE }}           # default 0.2
+          AI_MAX_TOKENS: ${{ vars.AI_MAX_TOKENS }}             # default 4000
+          AI_EXCLUDE_PATTERNS: ${{ vars.AI_EXCLUDE_PATTERNS }} # comma-separated globs
+          AI_EXTRA_INSTRUCTIONS: ${{ vars.AI_EXTRA_INSTRUCTIONS }}
+
+          # --- Ponytail (over-engineering review) --------------------------
+          # off  = standard correctness/security review (default)
+          # on   = standard review + Ponytail delete-list in the same pass
+          # only = Ponytail pass alone; no correctness/security findings
+          AI_PONYTAIL: ${{ vars.AI_PONYTAIL }}
+          AI_PONYTAIL_REF: ${{ vars.AI_PONYTAIL_REF }}          # default: pinned release tag
+
+          # --- GitHub context (automatic) ----------------------------------
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 .github/scripts/ai_review.py
