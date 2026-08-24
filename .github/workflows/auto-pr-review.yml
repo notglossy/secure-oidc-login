@@ -1,0 +1,115 @@
+name: AI PR Review
+
+# Deliberately `pull_request`, not `pull_request_target`: fork PRs then get no
+# secrets and a read-only token, so untrusted code can never run next to
+# AI_API_KEY. The fork guard below skips them cleanly instead of failing.
+# (`pull_request_target` would instead run privileged against fork PRs, which
+# is exactly the combination the opencode backend must never see.)
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    # Same-repo, non-draft PRs only: fork PRs have no access to AI_API_KEY,
+    # so running the job for them could only ever end in a red X.
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Pass 1: correctness / security review from the diff.
+          - pass: review
+            ponytail: "off"
+            backend: ${{ vars.AI_BACKEND || 'api' }}
+            model: ${{ vars.AI_MODEL }}
+            base_url: ${{ vars.AI_BASE_URL }}
+          # Pass 2: Ponytail over-engineering review. Defaults to the same
+          # endpoint/model but can be pointed at a cheaper or faster one, and
+          # to the opencode backend so it can read the codebase.
+          - pass: ponytail
+            ponytail: "only"
+            backend: ${{ vars.AI_PONYTAIL_BACKEND || vars.AI_BACKEND || 'api' }}
+            model: ${{ vars.AI_PONYTAIL_MODEL || vars.AI_MODEL }}
+            base_url: ${{ vars.AI_PONYTAIL_BASE_URL || vars.AI_BASE_URL }}
+
+    # One in-flight run per PR per pass; a new push cancels the stale one.
+    concurrency:
+      group: ai-review-${{ matrix.pass }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+
+    # Set AI_PASSES to "review" or "ponytail" to run only one of them.
+    env:
+      AI_BACKEND: ${{ matrix.backend }}
+      RUN_THIS_PASS: ${{ !vars.AI_PASSES || contains(vars.AI_PASSES, matrix.pass) }}
+
+    steps:
+      # --- Checkout -------------------------------------------------------
+      # Pinned to a full commit SHA so an upstream tag move cannot change the
+      # code this workflow runs. persist-credentials: false keeps GITHUB_TOKEN
+      # out of .git/config (the repo is public; later fetches work anonymously).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN_THIS_PASS == 'true' && env.AI_BACKEND != 'opencode'
+        with:
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN_THIS_PASS == 'true' && env.AI_BACKEND == 'opencode'
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch base branch for diffing
+        if: env.RUN_THIS_PASS == 'true' && env.AI_BACKEND == 'opencode'
+        run: git fetch --no-tags origin "${{ github.event.pull_request.base.ref }}"
+
+      # --- OpenCode install (opencode backend only) ------------------------
+      - name: Install OpenCode
+        if: env.RUN_THIS_PASS == 'true' && env.AI_BACKEND == 'opencode'
+        run: |
+          curl -fsSL https://opencode.ai/install | bash
+          echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
+
+      # --- Review ----------------------------------------------------------
+      - name: Run ${{ matrix.pass }} pass
+        if: env.RUN_THIS_PASS == 'true'
+        env:
+          # --- Provider (per pass; see matrix above) -------------------------
+          AI_API_KEY: ${{ matrix.pass == 'ponytail' && secrets.AI_PONYTAIL_API_KEY || secrets.AI_API_KEY }}
+          AI_BASE_URL: ${{ matrix.base_url }}
+          AI_MODEL: ${{ matrix.model }}
+          AI_PONYTAIL: ${{ matrix.ponytail }}
+          AI_PONYTAIL_REF: ${{ vars.AI_PONYTAIL_REF }}
+
+          # --- Optional tuning (shared by both passes) -----------------------
+          AI_MAX_DIFF_CHARS: ${{ vars.AI_MAX_DIFF_CHARS }}     # default 120000
+          AI_TEMPERATURE: ${{ vars.AI_TEMPERATURE }}           # default 0.2
+          AI_MAX_TOKENS: ${{ vars.AI_MAX_TOKENS }}             # default 8000; raise for reasoning models
+          AI_TIMEOUT: ${{ vars.AI_TIMEOUT }}                   # api: per-chunk read timeout, default 600
+          AI_AGENT_TIMEOUT: ${{ vars.AI_AGENT_TIMEOUT }}       # opencode: whole run, default 1500
+          AI_STREAM: ${{ vars.AI_STREAM }}                     # api: default true
+          AI_JSON_MODE: ${{ vars.AI_JSON_MODE }}               # api: set false for reasoning models
+          # Provider-specific request fields as a JSON object, e.g. to disable thinking:
+          #   Poolside/vLLM: {"chat_template_kwargs": {"enable_thinking": false}}
+          #   OpenRouter:    {"reasoning": {"effort": "low"}}
+          AI_EXTRA_BODY: ${{ vars.AI_EXTRA_BODY }}
+          AI_EXCLUDE_PATTERNS: ${{ vars.AI_EXCLUDE_PATTERNS }} # comma-separated globs
+          AI_EXTRA_INSTRUCTIONS: ${{ vars.AI_EXTRA_INSTRUCTIONS }}
+
+          # --- GitHub context (automatic) ----------------------------------
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 .github/scripts/ai_review.py
