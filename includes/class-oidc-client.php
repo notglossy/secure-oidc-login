@@ -619,20 +619,44 @@ class OIDC_Client {
 			return new WP_Error( 'oidc_error', __( 'Logout token is missing the required jti claim.', 'secure-oidc-login' ) );
 		}
 
-		$jti_key    = 'oidc_bcl_jti_' . hash( 'sha256', $claims['jti'] );
-		$seen_until = get_option( $jti_key, false );
-		if ( false !== $seen_until ) {
-			if ( (int) $seen_until > time() ) {
+		$jti_key = 'oidc_bcl_jti_' . hash( 'sha256', $claims['jti'] );
+
+		// REPLAY GATE: jti_insert() is atomic (INSERT of a unique key), so it — not
+		// a prior get_option() check — decides whether this token is first. Two
+		// concurrent requests with the same jti cannot both win the insert.
+		$jti_ttl    = min( max( (int) $claims['exp'] - time() + self::get_jwt_leeway(), 600 ), DAY_IN_SECONDS );
+		$expires_at = (string) ( time() + $jti_ttl );
+
+		for ( $attempt = 0; $attempt < 2; $attempt++ ) {
+			if ( $this->jti_insert( $jti_key, $expires_at ) ) {
+				$this->maybe_sweep_expired_jtis();
+				return $claims;
+			}
+
+			// Key exists. A fresh entry means this token was already processed
+			// (replay); an expired entry is swept so the claim can be retried once.
+			$seen_until = get_option( $jti_key, false );
+			if ( false !== $seen_until && (int) $seen_until > time() ) {
 				return new WP_Error( 'oidc_error', __( 'Logout token has already been used.', 'secure-oidc-login' ) );
 			}
-			delete_option( $jti_key ); // Expired entry; treat as unseen.
+			delete_option( $jti_key );
 		}
 
-		$jti_ttl = min( max( (int) $claims['exp'] - time() + self::get_jwt_leeway(), 600 ), DAY_IN_SECONDS );
-		add_option( $jti_key, (string) ( time() + $jti_ttl ), '', false );
-		$this->maybe_sweep_expired_jtis();
+		return new WP_Error( 'oidc_error', __( 'Logout token has already been used.', 'secure-oidc-login' ) );
+	}
 
-		return $claims;
+	/**
+	 * Insert a jti replay-cache entry. Returns false when the key already exists
+	 * (add_option is an atomic INSERT), making it suitable as a replay gate.
+	 *
+	 * @since 1.3.2
+	 *
+	 * @param string $key        Option name.
+	 * @param string $expires_at Expiry timestamp.
+	 * @return bool True on insert, false when the key exists.
+	 */
+	private function jti_insert( string $key, string $expires_at ): bool {
+		return (bool) add_option( $key, $expires_at, '', false );
 	}
 
 	/**
@@ -645,8 +669,8 @@ class OIDC_Client {
 	 *
 	 * @since 1.3.2
 	 */
-	private function maybe_sweep_expired_jtis(): void {
-		if ( 0 !== random_int( 1, 100 ) ) {
+	private function maybe_sweep_expired_jtis( bool $force = false ): void {
+		if ( ! $force && 1 !== random_int( 1, 100 ) ) {
 			return; // 1% of requests pay the sweep cost.
 		}
 
@@ -661,7 +685,7 @@ class OIDC_Client {
 				 WHERE option_name LIKE %s
 				   AND CAST( option_value AS UNSIGNED ) < %d
 				 LIMIT 100",
-				'oidc_bcl_jti_%',
+				$wpdb->esc_like( 'oidc_bcl_jti_' ) . '%',
 				time()
 			)
 		);

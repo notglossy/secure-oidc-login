@@ -3081,13 +3081,7 @@ class OIDCClientTest extends OIDCTestCase
     }
 
     /**
-     * Stub the database-backed jti replay cache (non-autoloaded options).
-     *
-     * get_option() answers the settings key with a minimal valid configuration
-     * and returns stored jti expiries for oidc_bcl_jti_* keys; add_option()
-     * records into $stored_jti so tests can assert on what was cached.
-     *
-     * @param array<string, mixed> $stored_jti Storage backend, by reference.
+     * Stub the database-backed jti replay cache (options keyed oidc_bcl_jti_*).
      */
     private function stubJtiOptionStorage(array &$stored_jti): void
     {
@@ -3100,7 +3094,11 @@ class OIDCClientTest extends OIDCTestCase
             }
             return $stored_jti[$key] ?? $default;
         });
+        // Simulates real add_option(): fails when the key already exists (atomic gate).
         Functions\when('add_option')->alias(function ($key, $value) use (&$stored_jti) {
+            if (null !== ($stored_jti[$key] ?? null)) {
+                return false;
+            }
             if (str_starts_with((string) $key, 'oidc_bcl_jti_')) {
                 $stored_jti[$key] = $value;
             }
@@ -3223,6 +3221,28 @@ class OIDCClientTest extends OIDCTestCase
         $replay = $client->validate_logout_token('header.payload.signature');
         $this->assertInstanceOf(WP_Error::class, $replay);
         $this->assertStringContainsString('already been used', $replay->get_error_message());
+    }
+
+    /**
+     * Test the expired-entry sweep issues a bounded, escaped DELETE.
+     *
+     * Defines a minimal fake wpdb so the sweep's database path executes; the
+     * captured query must use an escaped LIKE prefix and a time bound.
+     */
+    public function testSweepDeletesOnlyExpiredJtiEntries(): void
+    {
+        global $wpdb;
+        $wpdb = new \wpdb();
+
+        $client = $this->createClientWithStubbedJwt($this->getSampleLogoutTokenClaims());
+        $method = new \ReflectionMethod(OIDC_Client::class, 'maybe_sweep_expired_jtis');
+        $method->setAccessible(true);
+        $method->invoke($client, true); // force past the 1% gate
+
+        // The LIKE prefix must be escaped (\_ for literal underscores) and end with %
+        $this->assertSame("oidc\\_bcl\\_jti\_%", $wpdb->last_args[0]);
+        $this->assertLessThanOrEqual(time(), $wpdb->last_args[1]);
+        $this->assertStringContainsString('LIMIT 100', end($wpdb->queries));
     }
 
     /**
