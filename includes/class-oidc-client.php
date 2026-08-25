@@ -621,42 +621,45 @@ class OIDC_Client {
 
 		$jti_key = 'oidc_bcl_jti_' . hash( 'sha256', $claims['jti'] );
 
-		// REPLAY GATE: jti_insert() is atomic (INSERT of a unique key), so it — not
-		// a prior get_option() check — decides whether this token is first. Two
-		// concurrent requests with the same jti cannot both win the insert.
+		// REPLAY GATE, two layers:
+		//
+		// 1. Object cache: wp_cache_add() is an atomic test-and-set on persistent
+		//    object caches (memcached/Redis), so concurrent requests with the same
+		//    jti cannot both pass. On non-persistent setups it always succeeds and
+		//    the durable layer below decides.
+		// 2. Durable option: database-backed, immune to cache eviction. A fresh
+		//    entry means this token was already processed.
+		//
+		// Note the durable write uses update_option() (insert-or-update) rather
+		// than add_option(): core's add_option treats a CHANGED duplicate as
+		// success (ON DUPLICATE KEY UPDATE), which would let near-simultaneous
+		// requests with differing computed expiries both claim the same jti.
 		$jti_ttl    = min( max( (int) $claims['exp'] - time() + self::get_jwt_leeway(), 600 ), DAY_IN_SECONDS );
 		$expires_at = (string) ( time() + $jti_ttl );
 
-		for ( $attempt = 0; $attempt < 2; $attempt++ ) {
-			if ( $this->jti_insert( $jti_key, $expires_at ) ) {
-				$this->maybe_sweep_expired_jtis();
-				return $claims;
-			}
+		$replay = false;
 
-			// Key exists. A fresh entry means this token was already processed
-			// (replay); an expired entry is swept so the claim can be retried once.
-			$seen_until = get_option( $jti_key, false );
-			if ( false !== $seen_until && (int) $seen_until > time() ) {
-				return new WP_Error( 'oidc_error', __( 'Logout token has already been used.', 'secure-oidc-login' ) );
-			}
-			delete_option( $jti_key );
+		if ( ! wp_cache_add( $jti_key, 1, 'secure_oidc_bcl', $jti_ttl ) ) {
+			$replay = true;
 		}
 
-		return new WP_Error( 'oidc_error', __( 'Logout token has already been used.', 'secure-oidc-login' ) );
-	}
+		$durable_until = get_option( $jti_key, false );
+		if ( false !== $durable_until ) {
+			if ( (int) $durable_until > time() ) {
+				$replay = true;
+			} else {
+				delete_option( $jti_key ); // Expired entry; start fresh.
+			}
+		}
 
-	/**
-	 * Insert a jti replay-cache entry. Returns false when the key already exists
-	 * (add_option is an atomic INSERT), making it suitable as a replay gate.
-	 *
-	 * @since 1.3.2
-	 *
-	 * @param string $key        Option name.
-	 * @param string $expires_at Expiry timestamp.
-	 * @return bool True on insert, false when the key exists.
-	 */
-	private function jti_insert( string $key, string $expires_at ): bool {
-		return (bool) add_option( $key, $expires_at, '', false );
+		update_option( $jti_key, $expires_at, false );
+		$this->maybe_sweep_expired_jtis();
+
+		if ( $replay ) {
+			return new WP_Error( 'oidc_error', __( 'Logout token has already been used.', 'secure-oidc-login' ) );
+		}
+
+		return $claims;
 	}
 
 	/**
@@ -670,25 +673,32 @@ class OIDC_Client {
 	 * @since 1.3.2
 	 */
 	private function maybe_sweep_expired_jtis( bool $force = false ): void {
-		if ( ! $force && 1 !== random_int( 1, 100 ) ) {
-			return; // 1% of requests pay the sweep cost.
+		try {
+			if ( ! $force && 1 !== random_int( 1, 100 ) ) {
+				return; // 1% of requests pay the sweep cost.
+			}
+		} catch ( \Throwable $e ) {
+			return; // CSPRNG unavailable: skipping an opportunistic sweep is fine.
 		}
 
 		global $wpdb;
-		if ( ! isset( $wpdb ) || ! $wpdb instanceof \wpdb || empty( $wpdb->options ) ) {
+		// Deliberately duck-typed: drop-ins like HyperDB/LudicrousDB replace the
+		// global with a wrapper that does not extend wpdb.
+		if ( ! is_object( $wpdb ) || empty( $wpdb->options ) || ! method_exists( $wpdb, 'query' ) || ! method_exists( $wpdb, 'esc_like' ) || ! method_exists( $wpdb, 'prepare' ) ) {
 			return; // Not available (e.g. unit tests).
 		}
 
-		$wpdb->query(
-			$wpdb->prepare(
-				"DELETE FROM {$wpdb->options}
+		/** @var callable-string|(callable(mixed...): string)|string $prepared */
+		$prepared = $wpdb->prepare(
+			"DELETE FROM {$wpdb->options}
 				 WHERE option_name LIKE %s
 				   AND CAST( option_value AS UNSIGNED ) < %d
 				 LIMIT 100",
-				$wpdb->esc_like( 'oidc_bcl_jti_' ) . '%',
-				time()
-			)
+			$wpdb->esc_like( 'oidc_bcl_jti_' ) . '%',
+			time()
 		);
+		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $wpdb is duck-typed (HyperDB/LudicrousDB wrappers); prepare() is verified via method_exists above and the query uses placeholders.
+		$wpdb->query( $prepared );
 	}
 
 	/**

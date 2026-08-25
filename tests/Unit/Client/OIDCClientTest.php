@@ -3081,7 +3081,7 @@ class OIDCClientTest extends OIDCTestCase
     }
 
     /**
-     * Stub the database-backed jti replay cache (options keyed oidc_bcl_jti_*).
+     * Stub the jti replay-cache storage layers (object cache + durable options).
      */
     private function stubJtiOptionStorage(array &$stored_jti): void
     {
@@ -3094,11 +3094,7 @@ class OIDCClientTest extends OIDCTestCase
             }
             return $stored_jti[$key] ?? $default;
         });
-        // Simulates real add_option(): fails when the key already exists (atomic gate).
-        Functions\when('add_option')->alias(function ($key, $value) use (&$stored_jti) {
-            if (null !== ($stored_jti[$key] ?? null)) {
-                return false;
-            }
+        Functions\when('update_option')->alias(function ($key, $value) use (&$stored_jti) {
             if (str_starts_with((string) $key, 'oidc_bcl_jti_')) {
                 $stored_jti[$key] = $value;
             }
@@ -3108,6 +3104,10 @@ class OIDCClientTest extends OIDCTestCase
             unset($stored_jti[$key]);
             return true;
         });
+        // Object-cache gate: always succeeds unless a test pre-seeds failure.
+        Functions\when('wp_cache_add')->justReturn(true);
+        Functions\when('wp_cache_get')->justReturn(false);
+        Functions\when('wp_cache_delete')->justReturn(true);
     }
 
     /**
@@ -3221,6 +3221,26 @@ class OIDCClientTest extends OIDCTestCase
         $replay = $client->validate_logout_token('header.payload.signature');
         $this->assertInstanceOf(WP_Error::class, $replay);
         $this->assertStringContainsString('already been used', $replay->get_error_message());
+    }
+
+    /**
+     * Test the object-cache gate rejects a replay even before the durable layer.
+     *
+     * wp_cache_add() is an atomic test-and-set on persistent object caches; when
+     * it reports the jti is already claimed, validation must fail immediately.
+     */
+    public function testValidateLogoutTokenRejectsWhenCacheGateFails(): void
+    {
+        $stored_jti = [];
+        $this->stubJtiOptionStorage($stored_jti);
+        Functions\when('wp_cache_add')->justReturn(false); // already claimed
+
+        $client = $this->createClientWithStubbedJwt($this->getSampleLogoutTokenClaims());
+
+        $result = $client->validate_logout_token('header.payload.signature');
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertStringContainsString('already been used', $result->get_error_message());
     }
 
     /**
