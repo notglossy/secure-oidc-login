@@ -652,8 +652,10 @@ class OIDC_Client {
 			}
 		}
 
-		update_option( $jti_key, $expires_at, false );
-		$this->maybe_sweep_expired_jtis();
+		if ( ! $replay ) {
+			update_option( $jti_key, $expires_at, false );
+			$this->maybe_sweep_expired_jtis();
+		}
 
 		if ( $replay ) {
 			return new WP_Error( 'oidc_error', __( 'Logout token has already been used.', 'secure-oidc-login' ) );
@@ -692,6 +694,7 @@ class OIDC_Client {
 		$prepared = $wpdb->prepare(
 			"DELETE FROM {$wpdb->options}
 				 WHERE option_name LIKE %s
+				   AND option_value REGEXP '^[0-9]+$'
 				   AND CAST( option_value AS UNSIGNED ) < %d
 				 LIMIT 100",
 			$wpdb->esc_like( 'oidc_bcl_jti_' ) . '%',
