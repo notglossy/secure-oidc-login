@@ -281,7 +281,13 @@ def load_instructions_file(repo_dir: str, rel_path: str) -> str:
     Missing file is normal; unreadable content is a warning, not a failure.
     The path must stay inside the checkout: whatever it reads is appended to
     the system prompt and sent to the model provider, so an absolute path,
-    ../ traversal, or symlink escaping the repo would exfiltrate that file."""
+    ../ traversal, or symlink escaping the repo would exfiltrate that file.
+
+    Trust model: the file is deliberately read from the PR head, so a PR that
+    changes the instructions is reviewed under its own rules. That is safe
+    here because the workflow's fork guard means only same-repo PRs run at
+    all, and on a `pull_request` event those authors already control this
+    entire script via the merge commit — the file adds no new surface."""
     if not rel_path:
         return ""
     base = os.path.realpath(repo_dir)

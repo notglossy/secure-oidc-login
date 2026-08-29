@@ -16,6 +16,14 @@ entries short and factual; delete them when the code they describe is gone.
 
 ## Settled decisions — do not re-flag
 
+Decided on PR #94 (this review tooling):
+
+- This file is deliberately loaded from the PR head, not the base branch, so
+  a PR that changes the instructions is reviewed under its own rules. This is
+  not an injection surface: the workflow's fork guard restricts runs to
+  same-repo PRs, whose authors already control the whole review script via
+  the merge commit that `pull_request` events execute.
+
 Decided on PR #93 (back-channel logout jti replay cache):
 
 - The two-layer replay gate in `includes/class-oidc-client.php`
