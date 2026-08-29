@@ -397,11 +397,12 @@ class GitHub:
         return text
 
     def get_review_comments(self, number: int, max_pages: int = 3) -> list[dict]:
-        """All inline review comments on the PR (paginated, oldest first).
-        Best-effort: the review must still run if this fails."""
+        """Inline review comments on the PR, newest first so that when a huge
+        PR overflows max_pages it is the oldest rounds that fall off, not the
+        latest author responses. Best-effort: the review must run if this fails."""
         comments: list[dict] = []
         for page in range(1, max_pages + 1):
-            url = f"{self.base}/pulls/{number}/comments?per_page=100&page={page}"
+            url = f"{self.base}/pulls/{number}/comments?per_page=100&page={page}&sort=created&direction=desc"
             status, text = http("GET", url, self.headers, retries=2, timeout=30)
             if status != 200:
                 raise RuntimeError(f"Failed to fetch review comments: {status} {text[:300]}")
@@ -616,9 +617,17 @@ def build_thread_digest(comments: list[dict], max_chars: int) -> str:
     budget = max_chars
     for thread in reversed(rendered):  # newest first while trimming
         if len(thread) + 1 > budget:
-            break  # keep a contiguous newest suffix; never an older thread over a newer one
+            # A single thread bigger than the whole budget: keep its head
+            # rather than nothing, or the history rules would be enabled with
+            # no history to honor. Otherwise keep a contiguous newest suffix —
+            # never an older thread over a newer one.
+            if not kept and budget > 200:
+                kept.append(thread[: budget - 2].rstrip() + " …")
+            break
         kept.append(thread)
         budget -= len(thread) + 1
+    if not kept:
+        return ""  # no usable history; caller must not enable the history rules
     dropped = len(rendered) - len(kept)
     kept.reverse()
     digest = "\n".join(kept)
