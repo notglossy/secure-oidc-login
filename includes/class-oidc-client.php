@@ -639,7 +639,7 @@ class OIDC_Client {
 		$has_wpdb = is_object( $wpdb ) && isset( $wpdb->options ) && is_string( $wpdb->options ) && '' !== $wpdb->options
 			&& method_exists( $wpdb, 'query' ) && method_exists( $wpdb, 'prepare' ) && method_exists( $wpdb, 'esc_like' );
 
-		$durable_until = get_option( $jti_key, false );
+		$durable_until  = get_option( $jti_key, false );
 		$durable_replay = false;
 		if ( false !== $durable_until ) {
 			if ( (int) $durable_until > time() ) {
