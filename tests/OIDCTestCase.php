@@ -80,6 +80,17 @@ abstract class OIDCTestCase extends TestCase
         Functions\stubs([
             'is_email' => static fn($email) => filter_var($email, FILTER_VALIDATE_EMAIL) !== false,
         ]);
+
+        // Default usermeta/accessor stubs - per-test ::when() overrides as needed
+        if (!isset($GLOBALS['wpdb']) || !$GLOBALS['wpdb'] instanceof \wpdb) {
+            $GLOBALS['wpdb'] = new \wpdb();
+        }
+        Functions\stubs([
+            'get_user_meta'    => static fn($uid, $key, $single = false) => $single ? '' : [],
+            'update_user_meta' => static fn($uid, $key, $value) => true,
+            'add_user_meta'    => static fn($uid, $key, $value) => 1,
+            'delete_user_meta' => static fn($uid, $key, $value = '') => true,
+        ]);
     }
 
     /**

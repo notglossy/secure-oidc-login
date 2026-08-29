@@ -58,6 +58,7 @@ require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-env.php';
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-client.php';
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-state-binding.php';
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-admin.php';
+require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-user-index.php';
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-user-handler.php';
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-token-crypto.php';
 require_once SECURE_OIDC_LOGIN_PLUGIN_DIR . 'includes/class-oidc-rest-controller.php';

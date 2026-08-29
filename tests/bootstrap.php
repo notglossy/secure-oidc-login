@@ -67,11 +67,13 @@ if (!class_exists('wpdb')) {
     class wpdb
     {
         public $options = 'wp_options';
+        public $usermeta = 'wp_usermeta';
         public $queries = [];
         public $last_args = [];
         public function esc_like($s) { return addcslashes($s, '_%'); }
         public function prepare($q, ...$a) { $this->last_args = $a; return $q; }
         public function query($q) { $this->queries[] = $q; return 1; }
+        public function get_var($q) { $this->queries[] = $q; return '0'; }
     }
 }
 require_once __DIR__ . '/stubs/class-wp-rest-controller.php';
@@ -88,6 +90,7 @@ require_once dirname(__DIR__) . '/includes/class-oidc-token-crypto.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-admin.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-client.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-state-binding.php';
+require_once dirname(__DIR__) . '/includes/class-oidc-user-index.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-user-handler.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-rest-controller.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-rate-limiter.php';

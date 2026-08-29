@@ -51,7 +51,6 @@ class OIDC_Backchannel_Logout {
 	 * @var OIDC_Client
 	 */
 	private OIDC_Client $client;
-
 	/**
 	 * Token Manager for clearing stored tokens.
 	 *
@@ -77,6 +76,9 @@ class OIDC_Backchannel_Logout {
 	 * later logout token containing only sid can be mapped back to the user.
 	 * Each sid is stored as its own meta row (appended, not overwritten) so
 	 * concurrent IdP sessions - e.g. two browsers - all remain correlated.
+	 * Stores both the indexed form (oidc_sid_<hash> meta_key, served by the
+	 * meta_key index) and the legacy form (oidc_sid_hash meta_key + meta_value)
+	 * for migration/downgrade safety.
 	 *
 	 * @param int                  $user_id The WordPress user ID.
 	 * @param array<string, mixed> $claims  Validated ID token claims.
@@ -87,22 +89,60 @@ class OIDC_Backchannel_Logout {
 			return;
 		}
 
-		$sid_hash = hash( 'sha256', $claims['sid'] );
+		$sid          = $claims['sid'];
+		$sid_hash     = hash( 'sha256', $sid );
+		$indexed_key  = OIDC_User_Index::sid_key( $sid );
+
+		// Already indexed: nothing to do.
+		$already_indexed = get_user_meta( $user_id, $indexed_key, true );
+		if ( '' !== $already_indexed && false !== $already_indexed && null !== $already_indexed ) {
+			return;
+		}
+
 		$existing = get_user_meta( $user_id, self::SID_HASH_META_KEY, false );
 		$existing = is_array( $existing ) ? $existing : array();
 
-		// Same IdP session re-authenticating: already tracked.
+		// Same IdP session already tracked via legacy storage: migrate to indexed and return.
 		if ( in_array( $sid_hash, $existing, true ) ) {
+			OIDC_User_Index::ensure_sid_index( $user_id, $sid, self::MAX_TRACKED_SIDS );
 			return;
 		}
 
 		// Bound growth: past the cap, drop all older associations rather than
 		// growing forever. Affected sessions remain reachable via the sub claim.
-		if ( count( $existing ) >= self::MAX_TRACKED_SIDS ) {
+		// Count both legacy and indexed rows so the cap is enforced during migration.
+		$indexed_count = self::count_indexed_sids( $user_id );
+		$total         = count( $existing ) + ( $indexed_count >= 0 ? $indexed_count : 0 );
+		if ( $total >= self::MAX_TRACKED_SIDS ) {
 			delete_user_meta( $user_id, self::SID_HASH_META_KEY );
+			OIDC_User_Index::delete_sid_indexes( $user_id );
 		}
 
 		add_user_meta( $user_id, self::SID_HASH_META_KEY, $sid_hash );
+		update_user_meta( $user_id, $indexed_key, '1' );
+	}
+
+	/**
+	 * Count indexed sid rows for a user.
+	 *
+	 * @param int $user_id The WordPress user ID.
+	 * @return int Count, or -1 if unavailable (e.g. no $wpdb in tests).
+	 */
+	private static function count_indexed_sids( int $user_id ): int {
+		global $wpdb;
+		if ( ! isset( $wpdb ) || ! $wpdb instanceof wpdb ) {
+			return -1;
+		}
+		$like = $wpdb->esc_like( OIDC_User_Index::SID_PREFIX ) . '%';
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- indexed count, no caching.
+		$count = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT COUNT(*) FROM {$wpdb->usermeta} WHERE user_id = %d AND meta_key LIKE %s",
+				$user_id,
+				$like
+			)
+		);
+		return null !== $count ? (int) $count : -1;
 	}
 
 	/**
@@ -172,33 +212,70 @@ class OIDC_Backchannel_Logout {
 
 		$this->token_manager->clear_tokens( $user_id );
 		delete_user_meta( $user_id, self::SID_HASH_META_KEY );
+		OIDC_User_Index::delete_sid_indexes( $user_id );
 	}
 
 	/**
 	 * Find a WordPress user by their OIDC subject identifier.
 	 *
+	 * Tries the indexed lookup (meta_key = oidc_subject_<sha256>) first so the
+	 * existing meta_key index serves the query; falls back to the legacy
+	 * meta_key + meta_value query and lazily creates the indexed row.
+	 *
 	 * @param string $subject The sub claim value.
 	 * @return WP_User|null User object or null if not found.
 	 */
 	private function get_user_by_subject( string $subject ): ?WP_User {
+		$indexed_key = OIDC_User_Index::subject_key( $subject );
+		$users       = get_users(
+			array(
+				'meta_key' => $indexed_key,
+				'number'   => 1,
+			)
+		);
+		if ( ! empty( $users ) ) {
+			return $users[0];
+		}
+
+		// Legacy fallback.
 		$users = get_users(
 			array(
-				'meta_key'   => 'oidc_subject',
+				'meta_key'   => OIDC_User_Index::LEGACY_SUBJECT_KEY,
 				'meta_value' => $subject,
 				'number'     => 1,
 			)
 		);
+		if ( ! empty( $users ) ) {
+			OIDC_User_Index::ensure_subject_index( (int) $users[0]->ID, $subject );
+			return $users[0];
+		}
 
-		return ! empty( $users ) ? $users[0] : null;
+		return null;
 	}
 
 	/**
 	 * Find a WordPress user by the hash of their IdP session ID.
 	 *
+	 * Tries the indexed lookup (meta_key = oidc_sid_<sha256(sid)>) first so the
+	 * existing meta_key index serves the query; falls back to the legacy
+	 * meta_key + meta_value query and lazily creates the indexed row.
+	 *
 	 * @param string $sid The sid claim value.
 	 * @return WP_User|null User object or null if not found.
 	 */
 	private function get_user_by_sid( string $sid ): ?WP_User {
+		$indexed_key = OIDC_User_Index::sid_key( $sid );
+		$users       = get_users(
+			array(
+				'meta_key' => $indexed_key,
+				'number'   => 1,
+			)
+		);
+		if ( ! empty( $users ) ) {
+			return $users[0];
+		}
+
+		// Legacy fallback.
 		$users = get_users(
 			array(
 				'meta_key'   => self::SID_HASH_META_KEY,
@@ -206,7 +283,11 @@ class OIDC_Backchannel_Logout {
 				'number'     => 1,
 			)
 		);
+		if ( ! empty( $users ) ) {
+			OIDC_User_Index::ensure_sid_index( (int) $users[0]->ID, $sid, self::MAX_TRACKED_SIDS );
+			return $users[0];
+		}
 
-		return ! empty( $users ) ? $users[0] : null;
+		return null;
 	}
 }

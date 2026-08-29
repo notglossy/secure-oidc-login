@@ -173,6 +173,8 @@ class OIDC_User_Handler {
 					);
 				}
 
+				OIDC_User_Index::ensure_subject_index( (int) $user->ID, $subject );
+
 				$this->update_user_from_claims( $user, $claims );
 				return $user;
 			}
@@ -189,19 +191,39 @@ class OIDC_User_Handler {
 	/**
 	 * Find a WordPress user by their OIDC subject identifier.
 	 *
+	 * Tries the indexed lookup (meta_key = oidc_subject_<sha256>) first so the
+	 * existing meta_key index serves the query; falls back to the legacy
+	 * meta_key + meta_value query and lazily creates the indexed row.
+	 *
 	 * @param string $subject The OIDC subject identifier.
 	 * @return WP_User|null User object or null if not found.
 	 */
 	private function get_user_by_oidc_subject( string $subject ): ?WP_User {
+		$indexed_key = OIDC_User_Index::subject_key( $subject );
+		$users       = get_users(
+			array(
+				'meta_key' => $indexed_key,
+				'number'   => 1,
+			)
+		);
+		if ( ! empty( $users ) ) {
+			return $users[0];
+		}
+
+		// Legacy fallback: meta_key='oidc_subject' AND meta_value=<sub>.
 		$users = get_users(
 			array(
-				'meta_key'   => 'oidc_subject',
+				'meta_key'   => OIDC_User_Index::LEGACY_SUBJECT_KEY,
 				'meta_value' => $subject,
 				'number'     => 1,
 			)
 		);
+		if ( ! empty( $users ) ) {
+			OIDC_User_Index::ensure_subject_index( (int) $users[0]->ID, $subject );
+			return $users[0];
+		}
 
-		return ! empty( $users ) ? $users[0] : null;
+		return null;
 	}
 
 	/**
@@ -271,6 +293,8 @@ class OIDC_User_Handler {
 				__( 'Failed to create user account. Please contact the site administrator.', 'secure-oidc-login' )
 			);
 		}
+
+		OIDC_User_Index::ensure_subject_index( (int) $user_id, $subject );
 
 		/**
 		 * Fires after a new user is created via OIDC authentication.
