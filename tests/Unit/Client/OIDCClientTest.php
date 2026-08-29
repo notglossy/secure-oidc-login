@@ -3104,10 +3104,21 @@ class OIDCClientTest extends OIDCTestCase
             unset($stored_jti[$key]);
             return true;
         });
+        Functions\when('add_option')->alias(function ($key, $value) use (&$stored_jti) {
+            if (str_starts_with((string) $key, 'oidc_bcl_jti_')) {
+                if (isset($stored_jti[$key])) {
+                    return false;
+                }
+                $stored_jti[$key] = $value;
+            }
+            return true;
+        });
         // Object-cache gate: always succeeds unless a test pre-seeds failure.
         Functions\when('wp_cache_add')->justReturn(true);
         Functions\when('wp_cache_get')->justReturn(false);
         Functions\when('wp_cache_delete')->justReturn(true);
+        // Ensure no real $wpdb leaks into option-only tests.
+        $GLOBALS['wpdb'] = null;
     }
 
     /**
@@ -3260,9 +3271,89 @@ class OIDCClientTest extends OIDCTestCase
         $method->invoke($client, true); // force past the 1% gate
 
         // The LIKE prefix must be escaped (\_ for literal underscores) and end with %
-        $this->assertSame("oidc\\_bcl\\_jti\_%", $wpdb->last_args[0]);
+        $this->assertSame("oidc\\_bcl\\_jti\\_%", $wpdb->last_args[0]);
         $this->assertLessThanOrEqual(time(), $wpdb->last_args[1]);
         $this->assertStringContainsString('LIMIT 100', end($wpdb->queries));
+        $GLOBALS['wpdb'] = null;
+    }
+
+    /**
+     * Regression: concurrent INSERT race — get_option misses but the atomic
+     * INSERT reports 0 rows (duplicate key), so the second caller is rejected.
+     *
+     * Covers the TOCTOU where two requests both pass the get_option check
+     * before either writes; only the DB unique key decides the winner.
+     */
+    public function testValidateLogoutTokenAtomicInsertRejectsRaceDuplicate(): void
+    {
+        $stored_jti = [];
+        $this->stubJtiOptionStorage($stored_jti);
+        // Simulate a DB that reports duplicate-key on INSERT (race loser).
+        global $wpdb;
+        $wpdb = new class extends \wpdb {
+            public $options = 'wp_options';
+            public $queries = [];
+            public $last_args = [];
+            public function esc_like($s) { return addcslashes($s, '_%'); }
+            public function prepare($q, ...$a) { $this->last_args = $a; return $q; }
+            public function query($q) { $this->queries[] = $q; return str_contains($q, 'INSERT IGNORE') ? 0 : 1; }
+        };
+
+        $client = $this->createClientWithStubbedJwt($this->getSampleLogoutTokenClaims());
+        $result = $client->validate_logout_token('header.payload.signature');
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertStringContainsString('already been used', $result->get_error_message());
+        $GLOBALS['wpdb'] = null;
+    }
+
+    /**
+     * Regression: DB error on INSERT must fail closed (treated as replay) so
+     * a flaky database does not reopen the replay window.
+     */
+    public function testValidateLogoutTokenFailsClosedOnInsertError(): void
+    {
+        $stored_jti = [];
+        $this->stubJtiOptionStorage($stored_jti);
+        global $wpdb;
+        $wpdb = new class extends \wpdb {
+            public $options = 'wp_options';
+            public $queries = [];
+            public $last_args = [];
+            public function esc_like($s) { return addcslashes($s, '_%'); }
+            public function prepare($q, ...$a) { $this->last_args = $a; return $q; }
+            public function query($q) { $this->queries[] = $q; return false; }
+        };
+
+        $client = $this->createClientWithStubbedJwt($this->getSampleLogoutTokenClaims());
+        $result = $client->validate_logout_token('header.payload.signature');
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertStringContainsString('already been used', $result->get_error_message());
+        $GLOBALS['wpdb'] = null;
+    }
+
+    /**
+     * Test durable INSERT is attempted even when wp_cache_add already reports
+     * a replay — the sweep must still run on idle/replay-only sites.
+     */
+    public function testValidateLogoutTokenSweepRunsEvenOnReplay(): void
+    {
+        $stored_jti = [];
+        $this->stubJtiOptionStorage($stored_jti);
+        // Pre-seed an expired sweep target so DELETE would remove something.
+        $stored_jti['oidc_bcl_jti_' . hash('sha256', 'old-jti')] = (string) (time() - 100);
+        Functions\when('wp_cache_add')->justReturn(false); // force replay
+        global $wpdb;
+        $wpdb = new \wpdb();
+        // Force sweep deterministically.
+        $client = $this->createClientWithStubbedJwt($this->getSampleLogoutTokenClaims());
+        $result = $client->validate_logout_token('header.payload.signature');
+        $this->assertInstanceOf(WP_Error::class, $result);
+        // Directly force sweep to verify query shape (probabilistic gate would otherwise flake).
+        $m = new \ReflectionMethod(OIDC_Client::class, 'maybe_sweep_expired_jtis');
+        $m->setAccessible(true);
+        $m->invoke($client, true);
+        $this->assertStringContainsString('LIMIT 100', end($wpdb->queries));
+        $GLOBALS['wpdb'] = null;
     }
 
     /**

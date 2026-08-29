@@ -627,13 +627,9 @@ class OIDC_Client {
 		//    object caches (memcached/Redis), so concurrent requests with the same
 		//    jti cannot both pass. On non-persistent setups it always succeeds and
 		//    the durable layer below decides.
-		// 2. Durable option: database-backed, immune to cache eviction. A fresh
-		//    entry means this token was already processed.
-		//
-		// Note the durable write uses update_option() (insert-or-update) rather
-		// than add_option(): core's add_option treats a CHANGED duplicate as
-		// success (ON DUPLICATE KEY UPDATE), which would let near-simultaneous
-		// requests with differing computed expiries both claim the same jti.
+		// 2. Durable option: database-backed, immune to cache eviction. Uses an
+		//    atomic INSERT IGNORE on the option_name unique key so concurrent
+		//    requests without a persistent cache still select a single winner.
 		$jti_ttl    = min( max( (int) $claims['exp'] - time() + self::get_jwt_leeway(), 600 ), DAY_IN_SECONDS );
 		$expires_at = (string) ( time() + $jti_ttl );
 
@@ -643,19 +639,66 @@ class OIDC_Client {
 			$replay = true;
 		}
 
+		global $wpdb;
+		$has_wpdb = is_object( $wpdb ) && isset( $wpdb->options ) && is_string( $wpdb->options ) && '' !== $wpdb->options
+			&& method_exists( $wpdb, 'query' ) && method_exists( $wpdb, 'prepare' ) && method_exists( $wpdb, 'esc_like' );
+
 		$durable_until = get_option( $jti_key, false );
 		if ( false !== $durable_until ) {
 			if ( (int) $durable_until > time() ) {
+				// If the existing row was created with the wrong autoload
+				// (e.g. manual edit or older code), force it to 'no' so it
+				// does not load on every request.
+				if ( $has_wpdb ) {
+					// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery -- correcting autoload on an existing replay-cache row.
+					$wpdb->query( $wpdb->prepare( "UPDATE {$wpdb->options} SET autoload='no' WHERE option_name=%s AND autoload<>'no'", $jti_key ) );
+				}
 				$replay = true;
 			} else {
 				delete_option( $jti_key ); // Expired entry; start fresh.
+				$durable_until = false;
 			}
 		}
 
 		if ( ! $replay ) {
-			update_option( $jti_key, $expires_at, false );
-			$this->maybe_sweep_expired_jtis();
+			// Prefer an atomic INSERT IGNORE via $wpdb when available so the
+			// durable layer is itself atomic (get_option + update_option is
+			// racy). INSERT IGNORE reports 1 on insert, 0 on duplicate — only
+			// 1 means this request claimed the jti.
+
+			if ( $has_wpdb ) {
+				$prepared = $wpdb->prepare(
+					"INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
+					$jti_key,
+					$expires_at
+				);
+				// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $wpdb is duck-typed (HyperDB/LudicrousDB wrappers); prepare() is verified via method_exists above and the query uses placeholders.
+				$inserted = $wpdb->query( $prepared );
+				if ( 1 === $inserted ) {
+					// Keep the options cache coherent when bypassing the Options API.
+					if ( function_exists( 'wp_cache_delete' ) ) {
+						wp_cache_delete( $jti_key, 'options' );
+					}
+				} elseif ( 0 === $inserted ) {
+					$replay = true;
+				} else {
+					// Query error (false/null): fail closed and treat as replay
+					// so a flaky DB does not reopen the replay window.
+					error_log( '[Secure OIDC Login] jti replay-cache INSERT failed; treating as replay.' );
+					$replay = true;
+				}
+			} elseif ( ! add_option( $jti_key, $expires_at, '', false ) ) {
+				// Fallback without $wpdb (e.g. unit tests): get_option above
+				// already filtered fresh entries, so any failure to add means
+				// another request claimed it.
+				$replay = true;
+			}
 		}
+
+		// Opportunistic GC must run even when this request is a replay or the
+		// site is idle (otherwise expired rows accumulate forever on sites that
+		// only receive replays).
+		$this->maybe_sweep_expired_jtis();
 
 		if ( $replay ) {
 			return new WP_Error( 'oidc_error', __( 'Logout token has already been used.', 'secure-oidc-login' ) );
