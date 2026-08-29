@@ -382,8 +382,13 @@ class Secure_OIDC_Login {
 	/**
 	 * Block native username/password authentication when OIDC-only mode is enabled.
 	 *
-	 * Filters the authenticate process to prevent password-based login unless
-	 * emergency bypass is active.
+	 * Filters the authenticate process to prevent interactive password-based
+	 * login (wp-login.php form) unless emergency bypass is active.
+	 * Application-password requests (REST / XML-RPC, detected via the same
+	 * application_password_is_api_request check WordPress uses) are preserved
+	 * so API clients, mobile apps and Jetpack-style integrations keep working.
+	 * Prior WP_Error results are also preserved to avoid masking the real
+	 * failure reason.
 	 *
 	 * @param WP_User|WP_Error|null $user     User object or error.
 	 * @param string                $username Username or email.
@@ -391,6 +396,19 @@ class Secure_OIDC_Login {
 	 * @return WP_User|WP_Error|null User object or error.
 	 */
 	public function block_native_authentication( $user, $username, $password ): WP_User|WP_Error|null {
+		if ( $user instanceof WP_Error ) {
+			return $user;
+		}
+
+		if ( $user instanceof WP_User ) {
+			$is_api_request = ( defined( 'XMLRPC_REQUEST' ) && XMLRPC_REQUEST ) || ( defined( 'REST_REQUEST' ) && REST_REQUEST );
+			/** This filter is documented in wp-includes/user.php */
+			$is_api_request = (bool) apply_filters( 'application_password_is_api_request', $is_api_request );
+			if ( $is_api_request ) {
+				return $user;
+			}
+		}
+
 		if ( empty( $username ) || empty( $password ) ) {
 			return $user;
 		}

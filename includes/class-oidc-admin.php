@@ -492,7 +492,7 @@ class OIDC_Admin {
 			'oidc_login_section',
 			array(
 				'field'       => 'disable_native_login',
-				'description' => __( 'Hide username/password form and block native authentication. Emergency access: add ?native=1 to login URL.', 'secure-oidc-login' ),
+				'description' => __( 'Hide username/password form and block interactive native authentication. REST API and XML-RPC application passwords keep working. Emergency access: add ?native=1 to login URL.', 'secure-oidc-login' ),
 			)
 		);
 
