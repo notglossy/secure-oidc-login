@@ -278,10 +278,17 @@ def build_system_prompt(
 
 def load_instructions_file(repo_dir: str, rel_path: str) -> str:
     """Versioned, in-repo review instructions (settled decisions, conventions).
-    Missing file is normal; unreadable content is a warning, not a failure."""
+    Missing file is normal; unreadable content is a warning, not a failure.
+    The path must stay inside the checkout: whatever it reads is appended to
+    the system prompt and sent to the model provider, so an absolute path,
+    ../ traversal, or symlink escaping the repo would exfiltrate that file."""
     if not rel_path:
         return ""
-    path = os.path.join(repo_dir, rel_path)
+    base = os.path.realpath(repo_dir)
+    path = os.path.realpath(os.path.join(base, rel_path))
+    if path != base and not path.startswith(base + os.sep):
+        log(f"::warning::Refusing to read {rel_path}: it resolves outside the repository checkout")
+        return ""
     if not os.path.isfile(path):
         return ""
     try:
@@ -1201,7 +1208,12 @@ def main() -> int:
             extra_body = {}
     extra_instructions = env("AI_EXTRA_INSTRUCTIONS")
     instructions_file = env("AI_INSTRUCTIONS_FILE", ".github/ai-review-instructions.md")
-    max_thread_chars = int(env("AI_MAX_THREAD_CHARS", "12000"))
+    raw_thread_chars = env("AI_MAX_THREAD_CHARS", "12000")
+    try:
+        max_thread_chars = int(raw_thread_chars)
+    except ValueError:
+        log(f"::warning::AI_MAX_THREAD_CHARS {raw_thread_chars!r} is not an integer; using 12000")
+        max_thread_chars = 12000
     ponytail_mode = env("AI_PONYTAIL", "off").strip().lower()
     if ponytail_mode in ("true", "1", "yes", "hybrid"):
         ponytail_mode = "on"
