@@ -60,7 +60,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: env.RUN_THIS_PASS == 'true' && env.AI_BACKEND != 'opencode'
         with:
-          sparse-checkout: .github/scripts
+          # ai-review-instructions.md carries the project's settled review
+          # decisions; the script appends it to the system prompt when present.
+          sparse-checkout: |
+            .github/scripts
+            .github/ai-review-instructions.md
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -106,6 +110,8 @@ jobs:
           AI_EXTRA_BODY: ${{ vars.AI_EXTRA_BODY }}
           AI_EXCLUDE_PATTERNS: ${{ vars.AI_EXCLUDE_PATTERNS }} # comma-separated globs
           AI_EXTRA_INSTRUCTIONS: ${{ vars.AI_EXTRA_INSTRUCTIONS }}
+          AI_INSTRUCTIONS_FILE: ${{ vars.AI_INSTRUCTIONS_FILE }} # default .github/ai-review-instructions.md
+          AI_MAX_THREAD_CHARS: ${{ vars.AI_MAX_THREAD_CHARS }}   # prior-thread digest budget, default 12000; 0 disables
 
           # --- GitHub context (automatic) ----------------------------------
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
