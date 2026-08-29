@@ -633,17 +633,14 @@ class OIDC_Client {
 		$jti_ttl    = min( max( (int) $claims['exp'] - time() + self::get_jwt_leeway(), 600 ), DAY_IN_SECONDS );
 		$expires_at = (string) ( time() + $jti_ttl );
 
-		$replay = false;
-
-		if ( ! wp_cache_add( $jti_key, 1, 'secure_oidc_bcl', $jti_ttl ) ) {
-			$replay = true;
-		}
+		$cache_replay = ! wp_cache_add( $jti_key, 1, 'secure_oidc_bcl', $jti_ttl );
 
 		global $wpdb;
 		$has_wpdb = is_object( $wpdb ) && isset( $wpdb->options ) && is_string( $wpdb->options ) && '' !== $wpdb->options
 			&& method_exists( $wpdb, 'query' ) && method_exists( $wpdb, 'prepare' ) && method_exists( $wpdb, 'esc_like' );
 
 		$durable_until = get_option( $jti_key, false );
+		$durable_replay = false;
 		if ( false !== $durable_until ) {
 			if ( (int) $durable_until > time() ) {
 				// If the existing row was created with the wrong autoload
@@ -653,12 +650,21 @@ class OIDC_Client {
 					// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery -- correcting autoload on an existing replay-cache row.
 					$wpdb->query( $wpdb->prepare( "UPDATE {$wpdb->options} SET autoload='no' WHERE option_name=%s AND autoload<>'no'", $jti_key ) );
 				}
-				$replay = true;
+				$durable_replay = true;
 			} else {
 				delete_option( $jti_key ); // Expired entry; start fresh.
+				if ( function_exists( 'wp_cache_delete' ) ) {
+					wp_cache_delete( $jti_key, 'secure_oidc_bcl' );
+				}
 				$durable_until = false;
+				// The DB window has closed, so the matching cache entry is
+				// also stale. Clear the cache-replay flag that was set before
+				// we knew the durable entry was expired; the INSERT below
+				// will decide the race if two requests reuse the expired jti.
+				$cache_replay = false;
 			}
 		}
+		$replay = $cache_replay || $durable_replay;
 
 		if ( ! $replay ) {
 			// Prefer an atomic INSERT IGNORE via $wpdb when available so the
@@ -682,9 +688,18 @@ class OIDC_Client {
 				} elseif ( 0 === $inserted ) {
 					$replay = true;
 				} else {
-					// Query error (false/null): fail closed and treat as replay
-					// so a flaky DB does not reopen the replay window.
-					error_log( '[Secure OIDC Login] jti replay-cache INSERT failed; treating as replay.' );
+					$last_error = '';
+					if ( isset( $wpdb->last_error ) && is_string( $wpdb->last_error ) ) {
+						$last_error = $wpdb->last_error;
+					}
+					// Fail closed (treat as replay) so a flaky DB does not
+					// reopen the replay window. Include wpdb error for ops.
+					error_log(
+						sprintf(
+							'[Secure OIDC Login] jti replay-cache INSERT failed (last_error=%s); treating as replay.',
+							$last_error
+						)
+					);
 					$replay = true;
 				}
 			} elseif ( ! add_option( $jti_key, $expires_at, '', false ) ) {
