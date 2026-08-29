@@ -3238,12 +3238,16 @@ class OIDCClientTest extends OIDCTestCase
      * Test the object-cache gate rejects a replay even before the durable layer.
      *
      * wp_cache_add() is an atomic test-and-set on persistent object caches; when
-     * it reports the jti is already claimed, validation must fail immediately.
+     * it reports the jti is already claimed *and* the durable layer also shows
+     * a fresh entry (or INSERT reports duplicate), validation must fail.
      */
     public function testValidateLogoutTokenRejectsWhenCacheGateFails(): void
     {
         $stored_jti = [];
         $this->stubJtiOptionStorage($stored_jti);
+        // Seed durable replay so the new durable-as-source-of-truth logic
+        // still rejects; cache_flaky fallback would otherwise succeed via INSERT.
+        $stored_jti['oidc_bcl_jti_' . hash('sha256', 'logout-jti-123')] = (string) (time() + 600);
         Functions\when('wp_cache_add')->justReturn(false); // already claimed
 
         $client = $this->createClientWithStubbedJwt($this->getSampleLogoutTokenClaims());
@@ -3252,6 +3256,37 @@ class OIDCClientTest extends OIDCTestCase
 
         $this->assertInstanceOf(WP_Error::class, $result);
         $this->assertStringContainsString('already been used', $result->get_error_message());
+    }
+
+    /**
+     * Regression: flaky cache must not DoS fresh jtis when durable layer is empty.
+     *
+     * If wp_cache_add returns false due to a connection error, but get_option
+     * shows no durable entry, the durable INSERT should arbitrate: 1 row =
+     * claimed (accept), 0 rows = replay.
+     */
+    public function testValidateLogoutTokenFlakyCacheDoesNotBlockFreshJti(): void
+    {
+        $stored_jti = [];
+        $this->stubJtiOptionStorage($stored_jti);
+        Functions\when('wp_cache_add')->justReturn(false); // flaky cache
+        global $wpdb;
+        $wpdb = new class extends \wpdb {
+            public $options = 'wp_options';
+            public $queries = [];
+            public $last_args = [];
+            public $last_error = '';
+            public function esc_like($s) { return addcslashes($s, '_%'); }
+            public function prepare($q, ...$a) { $this->last_args = $a; return $q; }
+            public function query($q) { $this->queries[] = $q; return str_contains($q, 'INSERT IGNORE') ? 1 : 1; }
+        };
+
+        $client = $this->createClientWithStubbedJwt($this->getSampleLogoutTokenClaims());
+
+        $result = $client->validate_logout_token('header.payload.signature');
+
+        $this->assertIsArray($result);
+        $GLOBALS['wpdb'] = null;
     }
 
     /**
@@ -3332,23 +3367,24 @@ class OIDCClientTest extends OIDCTestCase
     }
 
     /**
-     * Test durable INSERT is attempted even when wp_cache_add already reports
-     * a replay — the sweep must still run on idle/replay-only sites.
+     * Test sweep still runs when validation is a replay (durable hit).
+     *
+     * The sweep must run even on replay/idle sites; this test seeds a
+     * fresh durable entry for the jti under test so validation is a
+     * replay (durable_replay true) and asserts the sweep still executes.
      */
     public function testValidateLogoutTokenSweepRunsEvenOnReplay(): void
     {
         $stored_jti = [];
         $this->stubJtiOptionStorage($stored_jti);
-        // Pre-seed an expired sweep target so DELETE would remove something.
+        $stored_jti['oidc_bcl_jti_' . hash('sha256', 'logout-jti-123')] = (string) (time() + 600);
         $stored_jti['oidc_bcl_jti_' . hash('sha256', 'old-jti')] = (string) (time() - 100);
-        Functions\when('wp_cache_add')->justReturn(false); // force replay
+        Functions\when('wp_cache_add')->justReturn(false);
         global $wpdb;
         $wpdb = new \wpdb();
-        // Force sweep deterministically.
         $client = $this->createClientWithStubbedJwt($this->getSampleLogoutTokenClaims());
         $result = $client->validate_logout_token('header.payload.signature');
         $this->assertInstanceOf(WP_Error::class, $result);
-        // Directly force sweep to verify query shape (probabilistic gate would otherwise flake).
         $m = new \ReflectionMethod(OIDC_Client::class, 'maybe_sweep_expired_jtis');
         $m->setAccessible(true);
         $m->invoke($client, true);

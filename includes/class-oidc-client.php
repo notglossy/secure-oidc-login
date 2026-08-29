@@ -633,7 +633,12 @@ class OIDC_Client {
 		$jti_ttl    = min( max( (int) $claims['exp'] - time() + self::get_jwt_leeway(), 600 ), DAY_IN_SECONDS );
 		$expires_at = (string) ( time() + $jti_ttl );
 
-		$cache_replay = ! wp_cache_add( $jti_key, 1, 'secure_oidc_bcl', $jti_ttl );
+		// Populate the persistent-cache fast-path when available, but do not fail
+		// closed on a flaky cache. wp_cache_add can return false for reasons other
+		// than duplicate (connection error), which would otherwise DoS every fresh
+		// jti as "already been used". The durable INSERT is the source of truth
+		// when available.
+		wp_cache_add( $jti_key, 1, 'secure_oidc_bcl', $jti_ttl );
 
 		global $wpdb;
 		$has_wpdb = is_object( $wpdb ) && isset( $wpdb->options ) && is_string( $wpdb->options ) && '' !== $wpdb->options
@@ -657,21 +662,15 @@ class OIDC_Client {
 					wp_cache_delete( $jti_key, 'secure_oidc_bcl' );
 				}
 				$durable_until = false;
-				// The DB window has closed, so the matching cache entry is
-				// also stale. Clear the cache-replay flag that was set before
-				// we knew the durable entry was expired; the INSERT below
-				// will decide the race if two requests reuse the expired jti.
-				$cache_replay = false;
 			}
 		}
-		$replay = $cache_replay || $durable_replay;
-
-		if ( ! $replay ) {
-			// Prefer an atomic INSERT IGNORE via $wpdb when available so the
-			// durable layer is itself atomic (get_option + update_option is
-			// racy). INSERT IGNORE reports 1 on insert, 0 on duplicate — only
-			// 1 means this request claimed the jti.
-
+		if ( $durable_replay ) {
+			$replay = true;
+		} else {
+			// No fresh durable entry: let the durable layer arbitrate even
+			// when the cache reports a replay. The DB unique key is the
+			// source of truth when available: INSERT 1 = this request claimed
+			// it, 0 = replay.
 			if ( $has_wpdb ) {
 				$prepared = $wpdb->prepare(
 					"INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
@@ -685,6 +684,7 @@ class OIDC_Client {
 					if ( function_exists( 'wp_cache_delete' ) ) {
 						wp_cache_delete( $jti_key, 'options' );
 					}
+					$replay = false;
 				} elseif ( 0 === $inserted ) {
 					$replay = true;
 				} else {
@@ -702,10 +702,9 @@ class OIDC_Client {
 					);
 					$replay = true;
 				}
-			} elseif ( ! add_option( $jti_key, $expires_at, '', false ) ) {
-				// Fallback without $wpdb (e.g. unit tests): get_option above
-				// already filtered fresh entries, so any failure to add means
-				// another request claimed it.
+			} elseif ( add_option( $jti_key, $expires_at, '', false ) ) {
+				$replay = false;
+			} else {
 				$replay = true;
 			}
 		}
