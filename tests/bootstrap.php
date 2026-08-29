@@ -60,6 +60,20 @@ if (!defined('DAY_IN_SECONDS')) {
 // Load stubs
 require_once __DIR__ . '/stubs/class-wp-error.php';
 require_once __DIR__ . '/stubs/class-wp-user.php';
+
+// Minimal wpdb stand-in for tests that exercise database-touching code paths
+// (e.g. the jti replay-cache sweep). Records executed queries for assertions.
+if (!class_exists('wpdb')) {
+    class wpdb
+    {
+        public $options = 'wp_options';
+        public $queries = [];
+        public $last_args = [];
+        public function esc_like($s) { return addcslashes($s, '_%'); }
+        public function prepare($q, ...$a) { $this->last_args = $a; return $q; }
+        public function query($q) { $this->queries[] = $q; return 1; }
+    }
+}
 require_once __DIR__ . '/stubs/class-wp-rest-controller.php';
 require_once __DIR__ . '/stubs/class-wp-rest-request.php';
 require_once __DIR__ . '/stubs/class-wp-rest-response.php';

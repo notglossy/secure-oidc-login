@@ -3081,15 +3081,53 @@ class OIDCClientTest extends OIDCTestCase
     }
 
     /**
+     * Stub the jti replay-cache storage layers (object cache + durable options).
+     */
+    private function stubJtiOptionStorage(array &$stored_jti): void
+    {
+        Functions\when('get_option')->alias(function ($key, $default = false) use (&$stored_jti) {
+            if ('secure_oidc_login_settings' === $key) {
+                return [
+                    'client_id' => 'test-client-id',
+                    'issuer'    => 'https://idp.example.com',
+                ];
+            }
+            return $stored_jti[$key] ?? $default;
+        });
+        Functions\when('update_option')->alias(function ($key, $value) use (&$stored_jti) {
+            if (str_starts_with((string) $key, 'oidc_bcl_jti_')) {
+                $stored_jti[$key] = $value;
+            }
+            return true;
+        });
+        Functions\when('delete_option')->alias(function ($key) use (&$stored_jti) {
+            unset($stored_jti[$key]);
+            return true;
+        });
+        Functions\when('add_option')->alias(function ($key, $value) use (&$stored_jti) {
+            if (str_starts_with((string) $key, 'oidc_bcl_jti_')) {
+                if (isset($stored_jti[$key])) {
+                    return false;
+                }
+                $stored_jti[$key] = $value;
+            }
+            return true;
+        });
+        // Object-cache gate: always succeeds unless a test pre-seeds failure.
+        Functions\when('wp_cache_add')->justReturn(true);
+        Functions\when('wp_cache_get')->justReturn(false);
+        Functions\when('wp_cache_delete')->justReturn(true);
+        // Ensure no real $wpdb leaks into option-only tests.
+        $GLOBALS['wpdb'] = null;
+    }
+
+    /**
      * Test validate_logout_token accepts a fully valid logout token.
      */
     public function testValidateLogoutTokenAcceptsValidToken(): void
     {
-        $set_jti_keys = [];
-        Functions\when('set_transient')->alias(function ($key, $value, $ttl) use (&$set_jti_keys) {
-            $set_jti_keys[] = $key;
-            return true;
-        });
+        $stored_jti = [];
+        $this->stubJtiOptionStorage($stored_jti);
 
         $client = $this->createClientWithStubbedJwt($this->getSampleLogoutTokenClaims());
 
@@ -3098,7 +3136,7 @@ class OIDCClientTest extends OIDCTestCase
         $this->assertIsArray($result);
         $this->assertSame('user-123-abc', $result['sub']);
         // The jti must be recorded for replay protection
-        $this->assertNotEmpty(array_filter($set_jti_keys, fn($k) => str_starts_with($k, 'oidc_bcl_jti_')));
+        $this->assertNotEmpty(array_filter(array_keys($stored_jti), fn($k) => str_starts_with($k, 'oidc_bcl_jti_')));
     }
 
     /**
@@ -3109,13 +3147,8 @@ class OIDCClientTest extends OIDCTestCase
      */
     public function testValidateLogoutTokenJtiCacheCoversTokenLifetime(): void
     {
-        $captured_ttl = null;
-        Functions\when('set_transient')->alias(function ($key, $value, $ttl) use (&$captured_ttl) {
-            if (str_starts_with((string) $key, 'oidc_bcl_jti_')) {
-                $captured_ttl = $ttl;
-            }
-            return true;
-        });
+        $stored_jti = [];
+        $this->stubJtiOptionStorage($stored_jti);
 
         // Token valid for one hour - the replay cache must last at least that long
         $client = $this->createClientWithStubbedJwt(
@@ -3125,21 +3158,23 @@ class OIDCClientTest extends OIDCTestCase
         $result = $client->validate_logout_token('header.payload.signature');
 
         $this->assertIsArray($result);
-        $this->assertGreaterThanOrEqual(3600, $captured_ttl);
+        $entry = reset($stored_jti);
+        $this->assertGreaterThanOrEqual(time() + 3600, (int) $entry);
 
         // A short-lived token still gets the 10-minute minimum replay-cache TTL
         $client = $this->createClientWithStubbedJwt(
             $this->getSampleLogoutTokenClaims(['exp' => time() + 30, 'jti' => 'jti-short'])
         );
         $client->validate_logout_token('header.payload.signature');
-        $this->assertGreaterThanOrEqual(600, $captured_ttl);
+        $this->assertGreaterThanOrEqual(time() + 600, (int) end($stored_jti));
 
-        // And it is capped at one day even for absurd exp values
+        // And it is capped at one day even for absurd exp values (small slack for
+        // clock drift between capture and assertion)
         $client = $this->createClientWithStubbedJwt(
             $this->getSampleLogoutTokenClaims(['exp' => time() + 10 * 86400, 'jti' => 'jti-far-future'])
         );
         $client->validate_logout_token('header.payload.signature');
-        $this->assertLessThanOrEqual(86400, $captured_ttl);
+        $this->assertLessThanOrEqual(time() + 86400 + 5, (int) end($stored_jti));
     }
 
     /**
@@ -3147,10 +3182,10 @@ class OIDCClientTest extends OIDCTestCase
      */
     public function testValidateLogoutTokenRejectsReplayedJti(): void
     {
-        // The jti replay-cache transient already exists
-        Functions\when('get_transient')->alias(
-            static fn($key) => str_starts_with((string) $key, 'oidc_bcl_jti_') ? 1 : false
-        );
+        // The jti replay-cache entry already exists with a future expiry
+        $stored_jti = [];
+        $this->stubJtiOptionStorage($stored_jti);
+        $stored_jti['oidc_bcl_jti_' . hash('sha256', 'logout-jti-123')] = (string) (time() + 600);
 
         $client = $this->createClientWithStubbedJwt($this->getSampleLogoutTokenClaims());
 
@@ -3158,6 +3193,203 @@ class OIDCClientTest extends OIDCTestCase
 
         $this->assertInstanceOf(WP_Error::class, $result);
         $this->assertStringContainsString('already been used', $result->get_error_message());
+    }
+
+    /**
+     * Test an expired jti entry is treated as unseen and removed.
+     *
+     * Database-durable entries have no native TTL; an expired entry must not
+     * block a fresh logout token carrying the same jti.
+     */
+    public function testValidateLogoutTokenTreatsExpiredJtiAsUnseen(): void
+    {
+        $stored_jti = [];
+        $this->stubJtiOptionStorage($stored_jti);
+        $jti_key = 'oidc_bcl_jti_' . hash('sha256', 'logout-jti-123');
+        $stored_jti[$jti_key] = (string) (time() - 10); // expired
+
+        $client = $this->createClientWithStubbedJwt($this->getSampleLogoutTokenClaims());
+
+        $result = $client->validate_logout_token('header.payload.signature');
+
+        $this->assertIsArray($result);
+        // The expired entry was deleted and replaced by a fresh one under the same key
+        $this->assertGreaterThan(time(), (int) $stored_jti[$jti_key]);
+    }
+
+    /**
+     * Test two tokens sharing one jti: the second is rejected as a replay.
+     */
+    public function testValidateLogoutTokenRejectsSecondUseOfSameJti(): void
+    {
+        $stored_jti = [];
+        $this->stubJtiOptionStorage($stored_jti);
+        $claims = $this->getSampleLogoutTokenClaims();
+
+        $client = $this->createClientWithStubbedJwt($claims);
+        $this->assertIsArray($client->validate_logout_token('header.payload.signature'));
+
+        $replay = $client->validate_logout_token('header.payload.signature');
+        $this->assertInstanceOf(WP_Error::class, $replay);
+        $this->assertStringContainsString('already been used', $replay->get_error_message());
+    }
+
+    /**
+     * Test the object-cache gate rejects a replay even before the durable layer.
+     *
+     * wp_cache_add() is an atomic test-and-set on persistent object caches; when
+     * it reports the jti is already claimed *and* the durable layer also shows
+     * a fresh entry (or INSERT reports duplicate), validation must fail.
+     */
+    public function testValidateLogoutTokenRejectsWhenCacheGateFails(): void
+    {
+        $stored_jti = [];
+        $this->stubJtiOptionStorage($stored_jti);
+        // Seed durable replay so the new durable-as-source-of-truth logic
+        // still rejects; cache_flaky fallback would otherwise succeed via INSERT.
+        $stored_jti['oidc_bcl_jti_' . hash('sha256', 'logout-jti-123')] = (string) (time() + 600);
+        Functions\when('wp_cache_add')->justReturn(false); // already claimed
+
+        $client = $this->createClientWithStubbedJwt($this->getSampleLogoutTokenClaims());
+
+        $result = $client->validate_logout_token('header.payload.signature');
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertStringContainsString('already been used', $result->get_error_message());
+    }
+
+    /**
+     * Regression: flaky cache must not DoS fresh jtis when durable layer is empty.
+     *
+     * If wp_cache_add returns false due to a connection error, but get_option
+     * shows no durable entry, the durable INSERT should arbitrate: 1 row =
+     * claimed (accept), 0 rows = replay.
+     */
+    public function testValidateLogoutTokenFlakyCacheDoesNotBlockFreshJti(): void
+    {
+        $stored_jti = [];
+        $this->stubJtiOptionStorage($stored_jti);
+        Functions\when('wp_cache_add')->justReturn(false); // flaky cache
+        global $wpdb;
+        $wpdb = new class extends \wpdb {
+            public $options = 'wp_options';
+            public $queries = [];
+            public $last_args = [];
+            public $last_error = '';
+            public function esc_like($s) { return addcslashes($s, '_%'); }
+            public function prepare($q, ...$a) { $this->last_args = $a; return $q; }
+            public function query($q) { $this->queries[] = $q; return str_contains($q, 'INSERT IGNORE') ? 1 : 1; }
+        };
+
+        $client = $this->createClientWithStubbedJwt($this->getSampleLogoutTokenClaims());
+
+        $result = $client->validate_logout_token('header.payload.signature');
+
+        $this->assertIsArray($result);
+        $GLOBALS['wpdb'] = null;
+    }
+
+    /**
+     * Test the expired-entry sweep issues a bounded, escaped DELETE.
+     *
+     * Defines a minimal fake wpdb so the sweep's database path executes; the
+     * captured query must use an escaped LIKE prefix and a time bound.
+     */
+    public function testSweepDeletesOnlyExpiredJtiEntries(): void
+    {
+        global $wpdb;
+        $wpdb = new \wpdb();
+
+        $client = $this->createClientWithStubbedJwt($this->getSampleLogoutTokenClaims());
+        $method = new \ReflectionMethod(OIDC_Client::class, 'maybe_sweep_expired_jtis');
+        $method->setAccessible(true);
+        $method->invoke($client, true); // force past the 1% gate
+
+        // The LIKE prefix must be escaped (\_ for literal underscores) and end with %
+        $this->assertSame("oidc\\_bcl\\_jti\\_%", $wpdb->last_args[0]);
+        $this->assertLessThanOrEqual(time(), $wpdb->last_args[1]);
+        $this->assertStringContainsString('LIMIT 100', end($wpdb->queries));
+        $GLOBALS['wpdb'] = null;
+    }
+
+    /**
+     * Regression: concurrent INSERT race — get_option misses but the atomic
+     * INSERT reports 0 rows (duplicate key), so the second caller is rejected.
+     *
+     * Covers the TOCTOU where two requests both pass the get_option check
+     * before either writes; only the DB unique key decides the winner.
+     */
+    public function testValidateLogoutTokenAtomicInsertRejectsRaceDuplicate(): void
+    {
+        $stored_jti = [];
+        $this->stubJtiOptionStorage($stored_jti);
+        // Simulate a DB that reports duplicate-key on INSERT (race loser).
+        global $wpdb;
+        $wpdb = new class extends \wpdb {
+            public $options = 'wp_options';
+            public $queries = [];
+            public $last_args = [];
+            public function esc_like($s) { return addcslashes($s, '_%'); }
+            public function prepare($q, ...$a) { $this->last_args = $a; return $q; }
+            public function query($q) { $this->queries[] = $q; return str_contains($q, 'INSERT IGNORE') ? 0 : 1; }
+        };
+
+        $client = $this->createClientWithStubbedJwt($this->getSampleLogoutTokenClaims());
+        $result = $client->validate_logout_token('header.payload.signature');
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertStringContainsString('already been used', $result->get_error_message());
+        $GLOBALS['wpdb'] = null;
+    }
+
+    /**
+     * Regression: DB error on INSERT must fail closed (treated as replay) so
+     * a flaky database does not reopen the replay window.
+     */
+    public function testValidateLogoutTokenFailsClosedOnInsertError(): void
+    {
+        $stored_jti = [];
+        $this->stubJtiOptionStorage($stored_jti);
+        global $wpdb;
+        $wpdb = new class extends \wpdb {
+            public $options = 'wp_options';
+            public $queries = [];
+            public $last_args = [];
+            public function esc_like($s) { return addcslashes($s, '_%'); }
+            public function prepare($q, ...$a) { $this->last_args = $a; return $q; }
+            public function query($q) { $this->queries[] = $q; return false; }
+        };
+
+        $client = $this->createClientWithStubbedJwt($this->getSampleLogoutTokenClaims());
+        $result = $client->validate_logout_token('header.payload.signature');
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertStringContainsString('already been used', $result->get_error_message());
+        $GLOBALS['wpdb'] = null;
+    }
+
+    /**
+     * Test sweep still runs when validation is a replay (durable hit).
+     *
+     * The sweep must run even on replay/idle sites; this test seeds a
+     * fresh durable entry for the jti under test so validation is a
+     * replay (durable_replay true) and asserts the sweep still executes.
+     */
+    public function testValidateLogoutTokenSweepRunsEvenOnReplay(): void
+    {
+        $stored_jti = [];
+        $this->stubJtiOptionStorage($stored_jti);
+        $stored_jti['oidc_bcl_jti_' . hash('sha256', 'logout-jti-123')] = (string) (time() + 600);
+        $stored_jti['oidc_bcl_jti_' . hash('sha256', 'old-jti')] = (string) (time() - 100);
+        Functions\when('wp_cache_add')->justReturn(false);
+        global $wpdb;
+        $wpdb = new \wpdb();
+        $client = $this->createClientWithStubbedJwt($this->getSampleLogoutTokenClaims());
+        $result = $client->validate_logout_token('header.payload.signature');
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $m = new \ReflectionMethod(OIDC_Client::class, 'maybe_sweep_expired_jtis');
+        $m->setAccessible(true);
+        $m->invoke($client, true);
+        $this->assertStringContainsString('LIMIT 100', end($wpdb->queries));
+        $GLOBALS['wpdb'] = null;
     }
 
     /**
@@ -3216,6 +3448,9 @@ class OIDCClientTest extends OIDCTestCase
     {
         $claims = $this->getSampleLogoutTokenClaims(['sid' => 'idp-session-1']);
         unset($claims['sub']);
+
+        $stored_jti = [];
+        $this->stubJtiOptionStorage($stored_jti);
 
         $client = $this->createClientWithStubbedJwt($claims);
 

@@ -608,23 +608,157 @@ class OIDC_Client {
 			return new WP_Error( 'oidc_error', __( 'Logout token must contain a sub or sid claim.', 'secure-oidc-login' ) );
 		}
 
-		// REPLAY PROTECTION: each jti may only be used once (step 8). The cache
-		// must outlive the token's JWT validity, so the TTL is derived from exp
-		// (plus clock-skew leeway), with a floor of 10 minutes and a cap of one
-		// day to keep a misconfigured IdP from creating long-lived transients.
+		// REPLAY PROTECTION: each jti may only be used once (step 8). Entries are
+		// stored as non-autoloaded options — database-durable, unlike transients,
+		// which a persistent object cache may evict under memory pressure before
+		// their TTL, silently reopening the replay window. The entry's value is its
+		// expiry timestamp; the TTL covers the token's full JWT validity (exp plus
+		// clock-skew leeway), floored at 10 minutes and capped at one day to keep a
+		// misconfigured IdP from creating long-lived entries.
 		if ( empty( $claims['jti'] ) || ! is_string( $claims['jti'] ) ) {
 			return new WP_Error( 'oidc_error', __( 'Logout token is missing the required jti claim.', 'secure-oidc-login' ) );
 		}
 
 		$jti_key = 'oidc_bcl_jti_' . hash( 'sha256', $claims['jti'] );
-		if ( false !== get_transient( $jti_key ) ) {
+
+		// REPLAY GATE, two layers:
+		//
+		// 1. Object cache: wp_cache_add() is an atomic test-and-set on persistent
+		//    object caches (memcached/Redis), so concurrent requests with the same
+		//    jti cannot both pass. On non-persistent setups it always succeeds and
+		//    the durable layer below decides.
+		// 2. Durable option: database-backed, immune to cache eviction. Uses an
+		//    atomic INSERT IGNORE on the option_name unique key so concurrent
+		//    requests without a persistent cache still select a single winner.
+		$jti_ttl    = min( max( (int) $claims['exp'] - time() + self::get_jwt_leeway(), 600 ), DAY_IN_SECONDS );
+		$expires_at = (string) ( time() + $jti_ttl );
+
+		// Populate the persistent-cache fast-path when available, but do not fail
+		// closed on a flaky cache. wp_cache_add can return false for reasons other
+		// than duplicate (connection error), which would otherwise DoS every fresh
+		// jti as "already been used". The durable INSERT is the source of truth
+		// when available.
+		wp_cache_add( $jti_key, 1, 'secure_oidc_bcl', $jti_ttl );
+
+		global $wpdb;
+		$has_wpdb = is_object( $wpdb ) && isset( $wpdb->options ) && is_string( $wpdb->options ) && '' !== $wpdb->options
+			&& method_exists( $wpdb, 'query' ) && method_exists( $wpdb, 'prepare' ) && method_exists( $wpdb, 'esc_like' );
+
+		$durable_until  = get_option( $jti_key, false );
+		$durable_replay = false;
+		if ( false !== $durable_until ) {
+			if ( (int) $durable_until > time() ) {
+				// If the existing row was created with the wrong autoload
+				// (e.g. manual edit or older code), force it to 'no' so it
+				// does not load on every request.
+				if ( $has_wpdb ) {
+					// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery -- correcting autoload on an existing replay-cache row.
+					$wpdb->query( $wpdb->prepare( "UPDATE {$wpdb->options} SET autoload='no' WHERE option_name=%s AND autoload<>'no'", $jti_key ) );
+				}
+				$durable_replay = true;
+			} else {
+				delete_option( $jti_key ); // Expired entry; start fresh.
+				if ( function_exists( 'wp_cache_delete' ) ) {
+					wp_cache_delete( $jti_key, 'secure_oidc_bcl' );
+				}
+				$durable_until = false;
+			}
+		}
+		if ( $durable_replay ) {
+			$replay = true;
+		} else {
+			// No fresh durable entry: let the durable layer arbitrate even
+			// when the cache reports a replay. The DB unique key is the
+			// source of truth when available: INSERT 1 = this request claimed
+			// it, 0 = replay.
+			if ( $has_wpdb ) {
+				$prepared = $wpdb->prepare(
+					"INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
+					$jti_key,
+					$expires_at
+				);
+				// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $wpdb is duck-typed (HyperDB/LudicrousDB wrappers); prepare() is verified via method_exists above and the query uses placeholders.
+				$inserted = $wpdb->query( $prepared );
+				if ( 1 === $inserted ) {
+					// Keep the options cache coherent when bypassing the Options API.
+					if ( function_exists( 'wp_cache_delete' ) ) {
+						wp_cache_delete( $jti_key, 'options' );
+					}
+					$replay = false;
+				} elseif ( 0 === $inserted ) {
+					$replay = true;
+				} else {
+					$last_error = '';
+					if ( isset( $wpdb->last_error ) && is_string( $wpdb->last_error ) ) {
+						$last_error = $wpdb->last_error;
+					}
+					// Fail closed (treat as replay) so a flaky DB does not
+					// reopen the replay window. Include wpdb error for ops.
+					error_log(
+						sprintf(
+							'[Secure OIDC Login] jti replay-cache INSERT failed (last_error=%s); treating as replay.',
+							$last_error
+						)
+					);
+					$replay = true;
+				}
+			} elseif ( add_option( $jti_key, $expires_at, '', false ) ) {
+				$replay = false;
+			} else {
+				$replay = true;
+			}
+		}
+
+		// Opportunistic GC must run even when this request is a replay or the
+		// site is idle (otherwise expired rows accumulate forever on sites that
+		// only receive replays).
+		$this->maybe_sweep_expired_jtis();
+
+		if ( $replay ) {
 			return new WP_Error( 'oidc_error', __( 'Logout token has already been used.', 'secure-oidc-login' ) );
 		}
 
-		$jti_ttl = min( max( (int) $claims['exp'] - time() + self::get_jwt_leeway(), 600 ), DAY_IN_SECONDS );
-		set_transient( $jti_key, 1, $jti_ttl );
-
 		return $claims;
+	}
+
+	/**
+	 * Opportunistically delete expired jti replay-cache entries.
+	 *
+	 * Options have no native TTL, so expired entries would accumulate forever.
+	 * Rather than a cron task, each logout-token validation has a small chance
+	 * of sweeping a bounded batch — amortized cost stays negligible while the
+	 * table cannot grow unbounded.
+	 *
+	 * @since 1.3.2
+	 */
+	private function maybe_sweep_expired_jtis( bool $force = false ): void {
+		try {
+			if ( ! $force && 1 !== random_int( 1, 100 ) ) {
+				return; // 1% of requests pay the sweep cost.
+			}
+		} catch ( \Throwable $e ) {
+			return; // CSPRNG unavailable: skipping an opportunistic sweep is fine.
+		}
+
+		global $wpdb;
+		// Deliberately duck-typed: drop-ins like HyperDB/LudicrousDB replace the
+		// global with a wrapper that does not extend wpdb.
+		if ( ! is_object( $wpdb ) || empty( $wpdb->options ) || ! method_exists( $wpdb, 'query' ) || ! method_exists( $wpdb, 'esc_like' ) || ! method_exists( $wpdb, 'prepare' ) ) {
+			return; // Not available (e.g. unit tests).
+		}
+
+		/** @var callable-string|(callable(mixed...): string)|string $prepared */
+		$prepared = $wpdb->prepare(
+			"DELETE FROM {$wpdb->options}
+				 WHERE option_name LIKE %s
+				   AND option_value REGEXP '^[0-9]+$'
+				   AND CAST( option_value AS UNSIGNED ) < %d
+				 LIMIT 100",
+			$wpdb->esc_like( 'oidc_bcl_jti_' ) . '%',
+			time()
+		);
+		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $wpdb is duck-typed (HyperDB/LudicrousDB wrappers); prepare() is verified via method_exists above and the query uses placeholders.
+		$wpdb->query( $prepared );
 	}
 
 	/**

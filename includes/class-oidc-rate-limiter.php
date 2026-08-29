@@ -24,7 +24,15 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Implementation follows WordPress core patterns:
  * - Similar to check_comment_flood_db() for comment spam prevention
  * - Similar to wp-mail.php email check rate limiting
- * - Uses transients for storage (auto-cleanup on expiration)
+ * - Uses transients for storage (auto-cleanup on expiration; best-effort
+ *   under object-cache eviction — see the SECURITY NOTE below)
+ *
+ * SECURITY NOTE: on sites with a persistent object cache (memcached, some
+ * Redis configurations), transients live in the cache and can be evicted
+ * under memory pressure before their TTL, resetting counters or ending
+ * lockouts early. Rate limiting is therefore best-effort on cache-backed
+ * sites; it is a defense-in-depth measure, not the primary control
+ * (signature verification, nonce binding, and PKCE do not depend on it).
  */
 class OIDC_Rate_Limiter {
 	/**
