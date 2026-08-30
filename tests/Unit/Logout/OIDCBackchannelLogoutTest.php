@@ -14,6 +14,7 @@ use Mockery;
 use OIDC_Backchannel_Logout;
 use OIDC_Client;
 use OIDC_Token_Manager;
+use OIDC_User_Index;
 use SecureOIDCLogin\Tests\OIDCTestCase;
 use WP_Error;
 use WP_Session_Tokens;
@@ -96,20 +97,28 @@ class OIDCBackchannelLogoutTest extends OIDCTestCase
     }
 
     /**
-     * Test store_session_id stores the SHA-256 hash of the sid claim as a new meta row.
+     * Test store_session_id stores the SHA-256 hash of the sid claim as a new
+     * meta row, plus the indexed lookup row keyed by the hash.
      */
     public function testStoreSessionIdStoresHashedSid(): void
     {
         $added = [];
+        $updated = [];
         Functions\when('get_user_meta')->justReturn([]);
         Functions\when('add_user_meta')->alias(function ($user_id, $key, $value) use (&$added) {
             $added[$key] = $value;
             return 1;
         });
+        Functions\when('update_user_meta')->alias(function ($user_id, $key, $value) use (&$updated) {
+            $updated[$key] = $value;
+            return true;
+        });
 
         OIDC_Backchannel_Logout::store_session_id(42, ['sid' => 'idp-session-1']);
 
-        $this->assertSame(hash('sha256', 'idp-session-1'), $added['oidc_sid_hash']);
+        $sid_hash = hash('sha256', 'idp-session-1');
+        $this->assertSame($sid_hash, $added['oidc_sid_hash']);
+        $this->assertArrayHasKey(OIDC_User_Index::sid_index_key($sid_hash), $updated);
     }
 
     /**
@@ -122,6 +131,7 @@ class OIDCBackchannelLogoutTest extends OIDCTestCase
 
         // A different IdP session is already tracked
         Functions\when('get_user_meta')->justReturn([hash('sha256', 'idp-session-1')]);
+        Functions\when('update_user_meta')->justReturn(true);
         Functions\when('add_user_meta')->alias(function ($user_id, $key, $value) use (&$added) {
             $added[] = $value;
             return 2;
@@ -138,12 +148,18 @@ class OIDCBackchannelLogoutTest extends OIDCTestCase
     }
 
     /**
-     * Test store_session_id does not duplicate an already-tracked session.
+     * Test store_session_id does not duplicate an already-tracked session,
+     * while still (idempotently) asserting the indexed lookup row.
      */
     public function testStoreSessionIdSkipsDuplicateSid(): void
     {
         $added = false;
+        $updated = [];
         Functions\when('get_user_meta')->justReturn([hash('sha256', 'idp-session-1')]);
+        Functions\when('update_user_meta')->alias(function ($user_id, $key, $value) use (&$updated) {
+            $updated[] = $key;
+            return true;
+        });
         Functions\when('add_user_meta')->alias(function () use (&$added) {
             $added = true;
             return 1;
@@ -152,10 +168,16 @@ class OIDCBackchannelLogoutTest extends OIDCTestCase
         OIDC_Backchannel_Logout::store_session_id(42, ['sid' => 'idp-session-1']);
 
         $this->assertFalse($added);
+        $this->assertSame(
+            [OIDC_User_Index::sid_index_key(hash('sha256', 'idp-session-1'))],
+            $updated,
+            'Legacy rows written before the index existed must be healed on re-login'
+        );
     }
 
     /**
-     * Test store_session_id resets tracked hashes once the cap is reached.
+     * Test store_session_id resets tracked hashes once the cap is reached,
+     * removing the indexed lookup rows alongside the legacy rows.
      */
     public function testStoreSessionIdResetsAtCap(): void
     {
@@ -164,12 +186,13 @@ class OIDCBackchannelLogoutTest extends OIDCTestCase
             $existing[] = hash('sha256', "idp-session-{$i}");
         }
 
-        $deleted = false;
+        $deleted = [];
         $added = [];
 
         Functions\when('get_user_meta')->justReturn($existing);
-        Functions\when('delete_user_meta')->alias(function () use (&$deleted) {
-            $deleted = true;
+        Functions\when('update_user_meta')->justReturn(true);
+        Functions\when('delete_user_meta')->alias(function ($user_id, $key) use (&$deleted) {
+            $deleted[] = $key;
             return true;
         });
         Functions\when('add_user_meta')->alias(function ($user_id, $key, $value) use (&$added) {
@@ -179,7 +202,10 @@ class OIDCBackchannelLogoutTest extends OIDCTestCase
 
         OIDC_Backchannel_Logout::store_session_id(42, ['sid' => 'idp-session-new']);
 
-        $this->assertTrue($deleted);
+        $this->assertContains('oidc_sid_hash', $deleted);
+        foreach ($existing as $stale_hash) {
+            $this->assertContains(OIDC_User_Index::sid_index_key($stale_hash), $deleted);
+        }
         $this->assertSame([hash('sha256', 'idp-session-new')], $added);
     }
 
@@ -240,9 +266,13 @@ class OIDCBackchannelLogoutTest extends OIDCTestCase
             ->once()
             ->andReturn($this->logoutClaims());
 
-        // Lookup by oidc_subject meta finds the user
+        // The indexed subject lookup finds the user; verification against the
+        // authoritative oidc_subject row must pass for the hit to count.
         Functions\when('get_users')->alias(function ($args) use ($user) {
-            return 'oidc_subject' === $args['meta_key'] ? [$user] : [];
+            return OIDC_User_Index::subject_index_key('user-123-abc') === $args['meta_key'] ? [$user] : [];
+        });
+        Functions\when('get_user_meta')->alias(function ($user_id, $key, $single = false) {
+            return 'oidc_subject' === $key ? 'user-123-abc' : [];
         });
 
         $deleted_meta = [];
@@ -264,6 +294,51 @@ class OIDCBackchannelLogoutTest extends OIDCTestCase
     }
 
     /**
+     * Test handle_logout_token still resolves users via the legacy
+     * meta_value scan and lazily creates the indexed row on that hit.
+     */
+    public function testHandleLogoutTokenFallsBackToLegacySubjectRows(): void
+    {
+        $user = $this->makeUser(42);
+
+        $this->client
+            ->shouldReceive('validate_logout_token')
+            ->once()
+            ->andReturn($this->logoutClaims());
+
+        // No indexed row exists yet - only the legacy value-bearing row.
+        Functions\when('get_users')->alias(function ($args) use ($user) {
+            if ('oidc_subject' === $args['meta_key'] && 'user-123-abc' === ($args['meta_value'] ?? null)) {
+                return [$user];
+            }
+            return [];
+        });
+        Functions\when('get_user_meta')->justReturn([]);
+        Functions\when('delete_user_meta')->justReturn(true);
+
+        $indexed = [];
+        Functions\when('update_user_meta')->alias(function ($user_id, $key, $value) use (&$indexed) {
+            $indexed[] = [$user_id, $key];
+            return true;
+        });
+
+        $this->token_manager
+            ->shouldReceive('clear_tokens')
+            ->with(42)
+            ->once();
+
+        $result = $this->handler->handle_logout_token('valid.token.here');
+
+        $this->assertTrue($result);
+        $this->assertSame([42], WP_Session_Tokens::$destroyed_user_ids);
+        $this->assertContains(
+            [42, OIDC_User_Index::subject_index_key('user-123-abc')],
+            $indexed,
+            'A legacy hit must lazily create the indexed row'
+        );
+    }
+
+    /**
      * Test handle_logout_token terminates sessions for a user matched by sid only.
      */
     public function testHandleLogoutTokenTerminatesSessionsBySid(): void
@@ -277,12 +352,14 @@ class OIDCBackchannelLogoutTest extends OIDCTestCase
             ->once()
             ->andReturn($claims);
 
-        Functions\when('get_users')->alias(function ($args) use ($user) {
-            if ('oidc_sid_hash' === $args['meta_key']
-                && hash('sha256', 'idp-session-1') === $args['meta_value']) {
-                return [$user];
-            }
-            return [];
+        $sid_hash = hash('sha256', 'idp-session-1');
+
+        // Indexed row exists and is confirmed by the legacy tracked hashes.
+        Functions\when('get_users')->alias(function ($args) use ($user, $sid_hash) {
+            return OIDC_User_Index::sid_index_key($sid_hash) === $args['meta_key'] ? [$user] : [];
+        });
+        Functions\when('get_user_meta')->alias(function ($user_id, $key, $single = false) use ($sid_hash) {
+            return 'oidc_sid_hash' === $key ? [$sid_hash] : [];
         });
 
         Functions\when('delete_user_meta')->justReturn(true);
@@ -317,8 +394,25 @@ class OIDCBackchannelLogoutTest extends OIDCTestCase
             ->once()
             ->andReturn($this->logoutClaims(['sid' => 'idp-session-1']));
 
-        Functions\when('get_users')->alias(function ($args) use ($sub_user, $sid_user) {
-            return 'oidc_subject' === $args['meta_key'] ? [$sub_user] : [$sid_user];
+        $sid_hash = hash('sha256', 'idp-session-1');
+
+        Functions\when('get_users')->alias(function ($args) use ($sub_user, $sid_user, $sid_hash) {
+            if (OIDC_User_Index::subject_index_key('user-123-abc') === $args['meta_key']) {
+                return [$sub_user];
+            }
+            if (OIDC_User_Index::sid_index_key($sid_hash) === $args['meta_key']) {
+                return [$sid_user];
+            }
+            return [];
+        });
+        Functions\when('get_user_meta')->alias(function ($user_id, $key, $single = false) use ($sid_hash) {
+            if ('oidc_subject' === $key && 42 === $user_id) {
+                return 'user-123-abc';
+            }
+            if ('oidc_sid_hash' === $key && 99 === $user_id) {
+                return [$sid_hash];
+            }
+            return $single ? '' : [];
         });
 
         $this->token_manager->shouldNotReceive('clear_tokens');

@@ -45,7 +45,9 @@ class OIDCUserHandlerTest extends OIDCTestCase
             ],
             'get_users' => static fn($args) => [],
             'get_user_by' => static fn($field, $value) => false,
+            'get_user_meta' => static fn($user_id, $key, $single = false) => $single ? '' : [],
             'update_user_meta' => static fn($user_id, $key, $value) => true,
+            'delete_user_meta' => static fn($user_id, $key) => true,
             'wp_insert_user' => static fn($userdata) => 1,
             'wp_update_user' => static fn($userdata) => $userdata['ID'],
             'wp_generate_password' => static fn($length, $special, $extra_special) => 'random-password-123',
@@ -437,10 +439,14 @@ class OIDCUserHandlerTest extends OIDCTestCase
     {
         $claims = $this->getSampleClaims();
 
-        // Mock existing user
+        // Mock existing user, found via the indexed subject lookup and
+        // confirmed by the authoritative oidc_subject row.
         $existingUser = new WP_User(42, 'existinguser', 'existing@example.com');
 
         Functions\when('get_users')->justReturn([$existingUser]);
+        Functions\when('get_user_meta')->alias(function($user_id, $key, $single = false) use ($claims) {
+            return $key === 'oidc_subject' ? $claims['sub'] : [];
+        });
         Functions\when('get_user_by')->alias(function($field, $value) use ($existingUser) {
             return $field === 'ID' && $value === 42 ? $existingUser : false;
         });

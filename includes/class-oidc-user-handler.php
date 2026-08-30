@@ -156,7 +156,7 @@ class OIDC_User_Handler {
 				// Link this WordPress account to the OIDC identity
 				// CRITICAL: If metadata storage fails, authentication should fail
 				// Without the oidc_subject link, future logins will fail or create duplicate accounts
-				$subject_stored = update_user_meta( $user->ID, 'oidc_subject', $subject );
+				$subject_stored = OIDC_User_Index::link_subject( $user->ID, $subject );
 
 				if ( false === $subject_stored ) {
 					$error_msg = sprintf(
@@ -189,19 +189,14 @@ class OIDC_User_Handler {
 	/**
 	 * Find a WordPress user by their OIDC subject identifier.
 	 *
+	 * Runs on every OIDC login. Delegates to OIDC_User_Index so the lookup is
+	 * served by the wp_usermeta meta_key index instead of a meta_value scan.
+	 *
 	 * @param string $subject The OIDC subject identifier.
 	 * @return WP_User|null User object or null if not found.
 	 */
 	private function get_user_by_oidc_subject( string $subject ): ?WP_User {
-		$users = get_users(
-			array(
-				'meta_key'   => 'oidc_subject',
-				'meta_value' => $subject,
-				'number'     => 1,
-			)
-		);
-
-		return ! empty( $users ) ? $users[0] : null;
+		return OIDC_User_Index::find_user_by_subject( $subject );
 	}
 
 	/**
@@ -249,7 +244,7 @@ class OIDC_User_Handler {
 
 		// Store OIDC metadata for future authentication
 		// CRITICAL: If metadata storage fails, delete the user to prevent orphaned accounts
-		$subject_stored = update_user_meta( $user_id, 'oidc_subject', $subject );
+		$subject_stored = OIDC_User_Index::link_subject( $user_id, $subject );
 		$created_stored = update_user_meta( $user_id, 'oidc_created', true );
 
 		if ( false === $subject_stored || false === $created_stored ) {

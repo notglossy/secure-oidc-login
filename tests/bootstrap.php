@@ -88,6 +88,7 @@ require_once dirname(__DIR__) . '/includes/class-oidc-token-crypto.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-admin.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-client.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-state-binding.php';
+require_once dirname(__DIR__) . '/includes/class-oidc-user-index.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-user-handler.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-rest-controller.php';
 require_once dirname(__DIR__) . '/includes/class-oidc-rate-limiter.php';
