@@ -91,18 +91,29 @@ class OIDC_Backchannel_Logout {
 		$existing = get_user_meta( $user_id, self::SID_HASH_META_KEY, false );
 		$existing = is_array( $existing ) ? $existing : array();
 
-		// Same IdP session re-authenticating: already tracked.
+		// Same IdP session re-authenticating: already tracked. Re-assert the
+		// indexed row (idempotent) in case this row predates the lookup index.
 		if ( in_array( $sid_hash, $existing, true ) ) {
+			OIDC_User_Index::index_sid( $user_id, $sid_hash );
 			return;
 		}
 
 		// Bound growth: past the cap, drop all older associations rather than
 		// growing forever. Affected sessions remain reachable via the sub claim.
+		// Only the legacy rows are counted (the authoritative store), so the
+		// indexed rows can never inflate the count toward the cap.
 		if ( count( $existing ) >= self::MAX_TRACKED_SIDS ) {
 			delete_user_meta( $user_id, self::SID_HASH_META_KEY );
+
+			foreach ( $existing as $stale_hash ) {
+				if ( is_string( $stale_hash ) && '' !== $stale_hash ) {
+					OIDC_User_Index::unindex_sid( $user_id, $stale_hash );
+				}
+			}
 		}
 
 		add_user_meta( $user_id, self::SID_HASH_META_KEY, $sid_hash );
+		OIDC_User_Index::index_sid( $user_id, $sid_hash );
 	}
 
 	/**
@@ -171,42 +182,45 @@ class OIDC_Backchannel_Logout {
 		$sessions->destroy_all();
 
 		$this->token_manager->clear_tokens( $user_id );
+
+		// Capture the tracked hashes before deleting the legacy rows so their
+		// indexed counterparts can be removed as well.
+		$tracked = get_user_meta( $user_id, self::SID_HASH_META_KEY, false );
+
 		delete_user_meta( $user_id, self::SID_HASH_META_KEY );
+
+		if ( is_array( $tracked ) ) {
+			foreach ( $tracked as $sid_hash ) {
+				if ( is_string( $sid_hash ) && '' !== $sid_hash ) {
+					OIDC_User_Index::unindex_sid( $user_id, $sid_hash );
+				}
+			}
+		}
 	}
 
 	/**
 	 * Find a WordPress user by their OIDC subject identifier.
 	 *
+	 * Delegates to OIDC_User_Index so the lookup is served by the wp_usermeta
+	 * meta_key index instead of a meta_value scan.
+	 *
 	 * @param string $subject The sub claim value.
 	 * @return WP_User|null User object or null if not found.
 	 */
 	private function get_user_by_subject( string $subject ): ?WP_User {
-		$users = get_users(
-			array(
-				'meta_key'   => 'oidc_subject',
-				'meta_value' => $subject,
-				'number'     => 1,
-			)
-		);
-
-		return ! empty( $users ) ? $users[0] : null;
+		return OIDC_User_Index::find_user_by_subject( $subject );
 	}
 
 	/**
 	 * Find a WordPress user by the hash of their IdP session ID.
 	 *
+	 * Delegates to OIDC_User_Index so the lookup is served by the wp_usermeta
+	 * meta_key index instead of a meta_value scan.
+	 *
 	 * @param string $sid The sid claim value.
 	 * @return WP_User|null User object or null if not found.
 	 */
 	private function get_user_by_sid( string $sid ): ?WP_User {
-		$users = get_users(
-			array(
-				'meta_key'   => self::SID_HASH_META_KEY,
-				'meta_value' => hash( 'sha256', $sid ),
-				'number'     => 1,
-			)
-		);
-
-		return ! empty( $users ) ? $users[0] : null;
+		return OIDC_User_Index::find_user_by_sid_hash( hash( 'sha256', $sid ) );
 	}
 }
