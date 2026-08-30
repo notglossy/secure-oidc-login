@@ -133,11 +133,14 @@ class OIDC_User_Index {
 	/**
 	 * Store the subject-to-user link (legacy row plus indexed row).
 	 *
-	 * Mirrors update_user_meta() semantics for the authoritative legacy row:
-	 * returns false when that write fails, in which case the index is not
-	 * touched. The indexed row itself is best-effort - if it cannot be
-	 * written, the value-scan fallback still resolves the user and indexing
-	 * is re-attempted on that hit.
+	 * Returns false only when the authoritative legacy row cannot be written,
+	 * in which case the index is not touched. A no-op write (the stored value
+	 * already equals $subject, which update_user_meta() also reports as
+	 * false) counts as success, so idempotent re-links - e.g. two concurrent
+	 * first logins linking the same account - cannot fail authentication.
+	 * The indexed row itself is best-effort - if it cannot be written, the
+	 * value-scan fallback still resolves the user and indexing is
+	 * re-attempted on that hit.
 	 *
 	 * @param int    $user_id The WordPress user ID.
 	 * @param string $subject The raw sub claim value.
@@ -149,7 +152,14 @@ class OIDC_User_Index {
 		$result = update_user_meta( $user_id, self::LEGACY_SUBJECT_META_KEY, $subject );
 
 		if ( false === $result ) {
-			return false;
+			// update_user_meta() also returns false when the stored value
+			// already equals the new one (nothing to write). Re-read to
+			// distinguish that idempotent no-op from a genuine write failure.
+			if ( get_user_meta( $user_id, self::LEGACY_SUBJECT_META_KEY, true ) !== $subject ) {
+				return false;
+			}
+
+			$result = true;
 		}
 
 		// Relinked to a different subject: drop the old index row so the

@@ -210,6 +210,41 @@ class OIDCUserIndexTest extends OIDCTestCase
     }
 
     /**
+     * Test link_subject treats an unchanged-value no-op as success.
+     *
+     * update_user_meta() returns false when the stored value already equals
+     * the new one, not only on write failure. An idempotent re-link (e.g.
+     * two concurrent first logins linking the same account) must succeed
+     * and still ensure the indexed row exists.
+     */
+    public function testLinkSubjectTreatsUnchangedSubjectAsSuccess(): void
+    {
+        $updated = [];
+        $deleted = false;
+
+        Functions\when('get_user_meta')->justReturn('user-123-abc');
+        // WP reports an unchanged value as false for every write here.
+        Functions\when('update_user_meta')->alias(function ($user_id, $key, $value) use (&$updated) {
+            $updated[] = $key;
+            return false;
+        });
+        Functions\when('delete_user_meta')->alias(function () use (&$deleted) {
+            $deleted = true;
+            return true;
+        });
+
+        $result = OIDC_User_Index::link_subject(42, 'user-123-abc');
+
+        $this->assertTrue($result);
+        $this->assertSame(
+            ['oidc_subject', OIDC_User_Index::subject_index_key('user-123-abc')],
+            $updated,
+            'The indexed row must still be asserted on an idempotent re-link'
+        );
+        $this->assertFalse($deleted);
+    }
+
+    /**
      * Test link_subject propagates a failed legacy write without touching
      * the index.
      */
