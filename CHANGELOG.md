@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `client_id` parameter on RP-initiated logout requests per OIDC RP-Initiated Logout 1.0
 
 ### Changed
+- Automatic token refresh no longer blocks page render: a token inside the refresh buffer is refreshed on the `shutdown` hook after the response is sent (the connection is handed back to the client first under PHP-FPM/LiteSpeed), so no user request waits on the IdP round trip. Only a fully expired token is refreshed synchronously, preserving the logout-on-failure enforcement; the new `secure_oidc_login_defer_token_refresh` filter restores the old inline behavior
 - User lookups by OIDC subject and IdP session ID (every SSO login and back-channel logout) are now served by the `wp_usermeta` `meta_key` index via hash-in-key rows (`oidc_subject_idx_{sha256(sub)}` / `oidc_sid_idx_{sha256(sid)}`) instead of scanning meta values, keeping them fast on large memberships. Existing installs need no migration: legacy rows keep working via a read fallback and are indexed lazily on first use
 
 ### Security

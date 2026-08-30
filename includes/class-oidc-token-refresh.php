@@ -91,6 +91,15 @@ class OIDC_Token_Refresh {
 	private ?array $options = null;
 
 	/**
+	 * User IDs with a token refresh deferred to the shutdown hook.
+	 *
+	 * Keyed by user ID so the same user is only scheduled once per request.
+	 *
+	 * @var array<int, true>
+	 */
+	private array $deferred_user_ids = array();
+
+	/**
 	 * Initialize the token refresh handler.
 	 *
 	 * @param OIDC_Client        $client        The OIDC client for token operations.
@@ -128,6 +137,130 @@ class OIDC_Token_Refresh {
 
 		// Token needs refresh
 		return $this->refresh( $user_id );
+	}
+
+	/**
+	 * Check tokens and refresh without blocking the response when possible.
+	 *
+	 * PERFORMANCE: The cheap checks (options, cached meta reads) run inline,
+	 * but the IdP round trip (up to a 10s timeout against a degraded IdP) is
+	 * deferred to the shutdown hook - after the response has been sent to the
+	 * client - whenever the access token is still valid, i.e. merely inside
+	 * the refresh buffer. No user request then waits on the IdP. Only a token
+	 * that has fully expired is refreshed synchronously: the stored token is
+	 * no longer usable for this request, and on failure the caller enforces
+	 * logout - neither can wait for shutdown.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @param int $user_id The WordPress user ID.
+	 * @return true|WP_Error True when no synchronous refresh was needed (a
+	 *                       deferred refresh counts as true) or the synchronous
+	 *                       refresh succeeded; WP_Error when it failed.
+	 */
+	public function maybe_refresh_async( int $user_id ): bool|WP_Error {
+		if ( ! $this->is_auto_refresh_enabled() ) {
+			return true;
+		}
+
+		if ( ! $this->token_manager->has_refresh_token( $user_id ) ) {
+			return true;
+		}
+
+		if ( ! $this->token_manager->is_token_expired( $user_id, $this->get_refresh_buffer() ) ) {
+			return true;
+		}
+
+		if ( $this->token_manager->is_token_expired( $user_id, 0 ) ) {
+			return $this->refresh( $user_id );
+		}
+
+		/**
+		 * Filter whether an in-buffer token refresh may be deferred to shutdown.
+		 *
+		 * The token is still valid when this fires; deferring only moves the
+		 * IdP round trip off the render path. Return false to restore the
+		 * previous synchronous-on-init behavior.
+		 *
+		 * @since 1.4.0
+		 *
+		 * @param bool $defer   Whether to defer the refresh. Default true.
+		 * @param int  $user_id The user whose token will be refreshed.
+		 */
+		if ( ! apply_filters( 'secure_oidc_login_defer_token_refresh', true, $user_id ) ) {
+			return $this->refresh( $user_id );
+		}
+
+		$this->schedule_deferred_refresh( $user_id );
+
+		return true;
+	}
+
+	/**
+	 * Queue a user's token refresh to run on the shutdown hook.
+	 *
+	 * @param int $user_id The WordPress user ID.
+	 * @return void
+	 */
+	private function schedule_deferred_refresh( int $user_id ): void {
+		if ( isset( $this->deferred_user_ids[ $user_id ] ) ) {
+			return;
+		}
+
+		if ( empty( $this->deferred_user_ids ) ) {
+			// Late priority so other shutdown work (which may still produce
+			// output) runs before the connection is handed back to the client.
+			add_action( 'shutdown', array( $this, 'run_deferred_refreshes' ), 100 );
+		}
+
+		$this->deferred_user_ids[ $user_id ] = true;
+	}
+
+	/**
+	 * Execute the deferred token refreshes on shutdown.
+	 *
+	 * Flushes the response to the client first (where the SAPI supports it),
+	 * then re-runs the full maybe_refresh() checks: a concurrent request may
+	 * already have refreshed the token, in which case this no-ops. Failures
+	 * are logged by the refresh path; the token was still valid when the
+	 * refresh was deferred, so later requests retry via the buffer window and
+	 * the per-user lock TTL throttles retries against a struggling IdP.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @return void
+	 */
+	public function run_deferred_refreshes(): void {
+		if ( empty( $this->deferred_user_ids ) ) {
+			return;
+		}
+
+		$user_ids                = array_keys( $this->deferred_user_ids );
+		$this->deferred_user_ids = array();
+
+		$this->flush_request_to_client();
+
+		foreach ( $user_ids as $user_id ) {
+			$this->maybe_refresh( (int) $user_id );
+		}
+	}
+
+	/**
+	 * Hand the finished response back to the client before slow work.
+	 *
+	 * Under PHP-FPM (and LiteSpeed) this closes the client connection so the
+	 * browser renders immediately while the IdP round trip continues in the
+	 * background. Other SAPIs keep the connection open until the process
+	 * exits, but the full page content has already been generated and sent.
+	 *
+	 * @return void
+	 */
+	private function flush_request_to_client(): void {
+		if ( function_exists( 'fastcgi_finish_request' ) ) {
+			fastcgi_finish_request();
+		} elseif ( function_exists( 'litespeed_finish_request' ) ) {
+			litespeed_finish_request();
+		}
 	}
 
 	/**
