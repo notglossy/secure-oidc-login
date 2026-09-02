@@ -259,6 +259,9 @@ For enhanced security in production environments, you can override sensitive set
 **JWT Validation:**
 - `SECURE_OIDC_JWT_LEEWAY` - Clock skew tolerance in seconds (1-600, default: 15)
 
+**HTTP Timeouts:**
+- `SECURE_OIDC_HTTP_TIMEOUT` - Timeout in seconds for IdP HTTP requests (token exchange, JWKS, userinfo, discovery/refresh) (5-30, default: 10)
+
 **Authentication Flow:**
 - `SECURE_OIDC_STATE_TTL` - State/nonce parameter expiration in seconds (60-600, default: 300)
 
