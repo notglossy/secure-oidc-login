@@ -10,7 +10,6 @@ declare(strict_types=1);
 namespace SecureOIDCLogin\Tests\Unit\Token;
 
 use Brain\Monkey\Actions;
-use Brain\Monkey\Filters;
 use Brain\Monkey\Functions;
 use Mockery;
 use OIDC_Client;
@@ -1771,76 +1770,6 @@ class OIDCTokenRefreshTest extends OIDCTestCase
     }
 
     /**
-     * Test maybe_refresh_async refreshes synchronously when the deferral
-     * filter opts out.
-     */
-    public function testMaybeRefreshAsyncHonorsDeferFilterOptOut(): void
-    {
-        $user_id = 123;
-        $new_tokens = [
-            'access_token' => 'new-access-token',
-            'refresh_token' => 'new-refresh-token',
-            'expires_in' => 3600,
-        ];
-
-        Functions\when('get_option')->justReturn([
-            'enable_auto_token_refresh' => true,
-            'token_refresh_buffer' => 300,
-            'enforce_refresh_token_rotation' => false,
-        ]);
-
-        Filters\expectApplied('secure_oidc_login_defer_token_refresh')
-            ->once()
-            ->with(true, $user_id)
-            ->andReturn(false);
-
-        $this->token_manager
-            ->shouldReceive('has_refresh_token')
-            ->with($user_id)
-            ->once()
-            ->andReturn(true);
-
-        $this->token_manager
-            ->shouldReceive('is_token_expired')
-            ->with($user_id, 300)
-            ->once()
-            ->andReturn(true);
-        $this->token_manager
-            ->shouldReceive('is_token_expired')
-            ->with($user_id, 0)
-            ->once()
-            ->andReturn(false);
-
-        $this->token_manager
-            ->shouldReceive('get_refresh_token')
-            ->with($user_id)
-            ->once()
-            ->andReturn('old-refresh-token');
-
-        $this->client
-            ->shouldReceive('refresh_token')
-            ->with('old-refresh-token')
-            ->once()
-            ->andReturn($new_tokens);
-
-        $this->token_manager
-            ->shouldReceive('was_refresh_token_rotated')
-            ->with($user_id, 'new-refresh-token')
-            ->once()
-            ->andReturn(true);
-
-        $this->token_manager
-            ->shouldReceive('store_tokens')
-            ->with($user_id, $new_tokens)
-            ->once()
-            ->andReturn(true);
-
-        $result = $this->refresh->maybe_refresh_async($user_id);
-
-        $this->assertTrue($result);
-    }
-
-    /**
      * Test the same user is only scheduled once per request even when
      * maybe_refresh_async runs multiple times.
      */
@@ -1875,11 +1804,11 @@ class OIDCTokenRefreshTest extends OIDCTestCase
     }
 
     /**
-     * Test run_deferred_refreshes re-checks token state at shutdown and
+     * Test run_deferred_refresh re-checks token state at shutdown and
      * no-ops when a concurrent request already refreshed, then clears the
-     * queue so a second invocation does nothing.
+     * slot so a second invocation does nothing.
      */
-    public function testRunDeferredRefreshesReChecksAndClearsQueue(): void
+    public function testRunDeferredRefreshReChecksAndClearsSlot(): void
     {
         Functions\when('get_option')->justReturn([
             'enable_auto_token_refresh' => true,
@@ -1909,18 +1838,18 @@ class OIDCTokenRefreshTest extends OIDCTestCase
 
         $this->assertTrue($this->refresh->maybe_refresh_async(123));
 
-        $this->refresh->run_deferred_refreshes();
+        $this->refresh->run_deferred_refresh();
 
-        // Queue is cleared: a second run must not re-check anything (the
+        // The slot is cleared: a second run must not re-check anything (the
         // mock expectations above are exact counts).
-        $this->refresh->run_deferred_refreshes();
+        $this->refresh->run_deferred_refresh();
     }
 
     /**
-     * Test run_deferred_refreshes performs the actual refresh at shutdown
+     * Test run_deferred_refresh performs the actual refresh at shutdown
      * when the token is still inside the buffer.
      */
-    public function testRunDeferredRefreshesRefreshesAtShutdown(): void
+    public function testRunDeferredRefreshRefreshesAtShutdown(): void
     {
         $user_id = 123;
         $new_tokens = [
@@ -1978,6 +1907,6 @@ class OIDCTokenRefreshTest extends OIDCTestCase
 
         $this->assertTrue($this->refresh->maybe_refresh_async($user_id));
 
-        $this->refresh->run_deferred_refreshes();
+        $this->refresh->run_deferred_refresh();
     }
 }

@@ -91,13 +91,15 @@ class OIDC_Token_Refresh {
 	private ?array $options = null;
 
 	/**
-	 * User IDs with a token refresh deferred to the shutdown hook.
+	 * User ID with a token refresh deferred to the shutdown hook, if any.
 	 *
-	 * Keyed by user ID so the same user is only scheduled once per request.
+	 * A single slot suffices: the init hook defers at most the current user,
+	 * and a dropped extra deferral would be retried on that user's next
+	 * request within the buffer window anyway.
 	 *
-	 * @var array<int, true>
+	 * @var int|null
 	 */
-	private array $deferred_user_ids = array();
+	private ?int $deferred_user_id = null;
 
 	/**
 	 * Initialize the token refresh handler.
@@ -175,22 +177,6 @@ class OIDC_Token_Refresh {
 			return $this->refresh( $user_id );
 		}
 
-		/**
-		 * Filter whether an in-buffer token refresh may be deferred to shutdown.
-		 *
-		 * The token is still valid when this fires; deferring only moves the
-		 * IdP round trip off the render path. Return false to restore the
-		 * previous synchronous-on-init behavior.
-		 *
-		 * @since 1.4.0
-		 *
-		 * @param bool $defer   Whether to defer the refresh. Default true.
-		 * @param int  $user_id The user whose token will be refreshed.
-		 */
-		if ( ! apply_filters( 'secure_oidc_login_defer_token_refresh', true, $user_id ) ) {
-			return $this->refresh( $user_id );
-		}
-
 		$this->schedule_deferred_refresh( $user_id );
 
 		return true;
@@ -203,64 +189,50 @@ class OIDC_Token_Refresh {
 	 * @return void
 	 */
 	private function schedule_deferred_refresh( int $user_id ): void {
-		if ( isset( $this->deferred_user_ids[ $user_id ] ) ) {
+		if ( null !== $this->deferred_user_id ) {
 			return;
 		}
 
-		if ( empty( $this->deferred_user_ids ) ) {
-			// Late priority so other shutdown work (which may still produce
-			// output) runs before the connection is handed back to the client.
-			add_action( 'shutdown', array( $this, 'run_deferred_refreshes' ), 100 );
-		}
+		$this->deferred_user_id = $user_id;
 
-		$this->deferred_user_ids[ $user_id ] = true;
+		// Late priority so other shutdown work (which may still produce
+		// output) runs before the connection is handed back to the client.
+		add_action( 'shutdown', array( $this, 'run_deferred_refresh' ), 100 );
 	}
 
 	/**
-	 * Execute the deferred token refreshes on shutdown.
+	 * Execute the deferred token refresh on shutdown.
 	 *
-	 * Flushes the response to the client first (where the SAPI supports it),
-	 * then re-runs the full maybe_refresh() checks: a concurrent request may
-	 * already have refreshed the token, in which case this no-ops. Failures
-	 * are logged by the refresh path; the token was still valid when the
-	 * refresh was deferred, so later requests retry via the buffer window and
-	 * the per-user lock TTL throttles retries against a struggling IdP.
+	 * Hands the finished response back to the client first - under PHP-FPM
+	 * and LiteSpeed this closes the connection so the browser renders
+	 * immediately while the IdP round trip continues in the background
+	 * (other SAPIs keep the connection open, but the page content has
+	 * already been generated and sent). Then re-runs the full
+	 * maybe_refresh() checks: a concurrent request may already have
+	 * refreshed the token, in which case this no-ops. Failures are logged
+	 * by the refresh path; the token was still valid when the refresh was
+	 * deferred, so later requests retry via the buffer window and the
+	 * per-user lock TTL throttles retries against a struggling IdP.
 	 *
 	 * @since 1.4.0
 	 *
 	 * @return void
 	 */
-	public function run_deferred_refreshes(): void {
-		if ( empty( $this->deferred_user_ids ) ) {
+	public function run_deferred_refresh(): void {
+		if ( null === $this->deferred_user_id ) {
 			return;
 		}
 
-		$user_ids                = array_keys( $this->deferred_user_ids );
-		$this->deferred_user_ids = array();
+		$user_id                = $this->deferred_user_id;
+		$this->deferred_user_id = null;
 
-		$this->flush_request_to_client();
-
-		foreach ( $user_ids as $user_id ) {
-			$this->maybe_refresh( (int) $user_id );
-		}
-	}
-
-	/**
-	 * Hand the finished response back to the client before slow work.
-	 *
-	 * Under PHP-FPM (and LiteSpeed) this closes the client connection so the
-	 * browser renders immediately while the IdP round trip continues in the
-	 * background. Other SAPIs keep the connection open until the process
-	 * exits, but the full page content has already been generated and sent.
-	 *
-	 * @return void
-	 */
-	private function flush_request_to_client(): void {
 		if ( function_exists( 'fastcgi_finish_request' ) ) {
 			fastcgi_finish_request();
 		} elseif ( function_exists( 'litespeed_finish_request' ) ) {
 			litespeed_finish_request();
 		}
+
+		$this->maybe_refresh( $user_id );
 	}
 
 	/**
