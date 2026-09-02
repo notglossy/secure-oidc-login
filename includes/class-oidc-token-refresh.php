@@ -195,9 +195,11 @@ class OIDC_Token_Refresh {
 
 		$this->deferred_user_id = $user_id;
 
-		// Late priority so other shutdown work (which may still produce
-		// output) runs before the connection is handed back to the client.
-		add_action( 'shutdown', array( $this, 'run_deferred_refresh' ), 100 );
+		// Latest possible priority: the response handoff below discards any
+		// output produced afterwards, so every other shutdown callback (which
+		// may still produce output) must run before the connection is handed
+		// back to the client.
+		add_action( 'shutdown', array( $this, 'run_deferred_refresh' ), PHP_INT_MAX );
 	}
 
 	/**
