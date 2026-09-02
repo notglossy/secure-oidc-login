@@ -1334,7 +1334,88 @@ class OIDCClientTest extends OIDCTestCase
             $property->setValue(null, false);
         }
 
+        // Clear the HTTP timeout override so tests cannot leak it
+        putenv('SECURE_OIDC_HTTP_TIMEOUT');
+
         parent::tearDown();
+    }
+
+    /**
+     * Test get_http_timeout returns the default when the env var is unset.
+     */
+    public function testGetHttpTimeoutDefaultsWhenEnvUnset(): void
+    {
+        putenv('SECURE_OIDC_HTTP_TIMEOUT');
+
+        $this->assertSame(OIDC_Client::DEFAULT_HTTP_TIMEOUT, OIDC_Client::get_http_timeout());
+    }
+
+    /**
+     * Test get_http_timeout honors a valid SECURE_OIDC_HTTP_TIMEOUT value.
+     */
+    public function testGetHttpTimeoutHonorsValidEnvValue(): void
+    {
+        putenv('SECURE_OIDC_HTTP_TIMEOUT=10');
+
+        $this->assertSame(10, OIDC_Client::get_http_timeout());
+    }
+
+    /**
+     * Test get_http_timeout falls back to the default for invalid or
+     * out-of-range SECURE_OIDC_HTTP_TIMEOUT values.
+     *
+     * @dataProvider invalidHttpTimeoutProvider
+     *
+     * @param string $raw The raw environment value.
+     */
+    public function testGetHttpTimeoutRejectsInvalidEnvValues(string $raw): void
+    {
+        putenv('SECURE_OIDC_HTTP_TIMEOUT=' . $raw);
+
+        $this->assertSame(OIDC_Client::DEFAULT_HTTP_TIMEOUT, OIDC_Client::get_http_timeout());
+    }
+
+    /**
+     * Invalid SECURE_OIDC_HTTP_TIMEOUT values.
+     *
+     * @return array<string, array{string}>
+     */
+    public static function invalidHttpTimeoutProvider(): array
+    {
+        return [
+            'non-numeric' => ['fast'],
+            'float' => ['12.5'],
+            'below minimum' => ['4'],
+            'above maximum' => ['61'],
+            'negative' => ['-10'],
+        ];
+    }
+
+    /**
+     * Test the interactive discovery request uses the configured HTTP timeout
+     * instead of the previous hard-coded 30 seconds.
+     */
+    public function testDiscoverUsesConfiguredHttpTimeout(): void
+    {
+        putenv('SECURE_OIDC_HTTP_TIMEOUT=10');
+
+        $captured_timeout = null;
+        Functions\when('wp_safe_remote_get')->alias(function ($url, $args) use (&$captured_timeout) {
+            $captured_timeout = $args['timeout'] ?? null;
+            return [
+                'body' => json_encode([
+                    'issuer' => 'https://idp.example.com',
+                    'authorization_endpoint' => 'https://idp.example.com/authorize',
+                    'token_endpoint' => 'https://idp.example.com/token',
+                    'jwks_uri' => 'https://idp.example.com/.well-known/jwks.json',
+                ]),
+                'response' => ['code' => 200],
+            ];
+        });
+
+        $this->client->discover('https://idp.example.com');
+
+        $this->assertSame(10, $captured_timeout);
     }
 
     // =========================================================================

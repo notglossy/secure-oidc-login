@@ -301,7 +301,7 @@ class OIDC_REST_Controller extends WP_REST_Controller {
 		// - Non-standard ports (only 80, 443, 8080 allowed)
 		// - URLs with embedded credentials
 		// It also validates redirect destinations to prevent redirect-based SSRF
-		$response = wp_safe_remote_get( $discovery_url, array( 'timeout' => 30 ) );
+		$response = wp_safe_remote_get( $discovery_url, array( 'timeout' => OIDC_Client::get_http_timeout() ) );
 
 		if ( is_wp_error( $response ) ) {
 			// Provide user-friendly error messages for common SSRF blocks

@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `client_id` parameter on RP-initiated logout requests per OIDC RP-Initiated Logout 1.0
 
 ### Changed
+- Interactive IdP requests (token exchange, JWKS fetch, userinfo, discovery) now time out after 15 seconds instead of 30, so a hanging IdP surfaces the plugin's own error message instead of holding a login request for up to ~90 seconds and hitting opaque webserver 504s. Configurable via the `SECURE_OIDC_HTTP_TIMEOUT` environment variable (5-60 seconds); the background refresh path keeps its existing 10-second timeout
 - Automatic token refresh no longer blocks page render: a token inside the refresh buffer is refreshed on the `shutdown` hook after the page has been generated. Under PHP-FPM and LiteSpeed the connection is handed back to the client first, so the request never waits on the IdP round trip; on other SAPIs the connection stays open during the refresh, but the response content is already complete. Only a fully expired token is refreshed synchronously, preserving the logout-on-failure enforcement
 - User lookups by OIDC subject and IdP session ID (every SSO login and back-channel logout) are now served by the `wp_usermeta` `meta_key` index via hash-in-key rows (`oidc_subject_idx_{sha256(sub)}` / `oidc_sid_idx_{sha256(sid)}`) instead of scanning meta values, keeping them fast on large memberships. Existing installs need no migration: legacy rows keep working via a read fallback and are indexed lazily on first use
 

@@ -261,6 +261,7 @@ For enhanced security in production environments, you can override sensitive set
 
 **Authentication Flow:**
 - `SECURE_OIDC_STATE_TTL` - State/nonce parameter expiration in seconds (60-600, default: 300)
+- `SECURE_OIDC_HTTP_TIMEOUT` - HTTP timeout in seconds for interactive IdP requests: token exchange, JWKS fetch, userinfo, discovery (5-60, default: 15)
 
 #### Setting Environment Variables
 

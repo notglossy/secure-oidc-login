@@ -47,6 +47,37 @@ class OIDC_Client {
 	const JWKS_CACHE_DURATION = 900;
 
 	/**
+	 * Default HTTP timeout in seconds for interactive IdP requests.
+	 *
+	 * PERFORMANCE: The interactive callback path performs up to three
+	 * sequential IdP round trips (token exchange, JWKS fetch on cache miss,
+	 * userinfo). A healthy IdP answers each in well under 2 seconds, but at
+	 * the previous 30-second timeout a hanging IdP could hold a login
+	 * request for ~90 seconds - beyond typical PHP-FPM/webserver limits,
+	 * surfacing as opaque 504s instead of the plugin's own error message.
+	 * 15 seconds keeps the worst case (~45s) inside those limits while
+	 * leaving generous headroom over normal latency. The background refresh
+	 * path keeps its own shorter 10-second timeout (see refresh_token()).
+	 *
+	 * @var int
+	 */
+	const DEFAULT_HTTP_TIMEOUT = 15;
+
+	/**
+	 * Minimum accepted SECURE_OIDC_HTTP_TIMEOUT value in seconds.
+	 *
+	 * @var int
+	 */
+	const MIN_HTTP_TIMEOUT = 5;
+
+	/**
+	 * Maximum accepted SECURE_OIDC_HTTP_TIMEOUT value in seconds.
+	 *
+	 * @var int
+	 */
+	const MAX_HTTP_TIMEOUT = 60;
+
+	/**
 	 * Allowed JWT signing algorithms (asymmetric only).
 	 *
 	 * SECURITY: Only asymmetric algorithms are permitted for OIDC ID token verification.
@@ -126,6 +157,33 @@ class OIDC_Client {
 	 */
 	private function get_setting( $key ): string {
 		return Secure_OIDC_Login::get_setting( $key, $this->options );
+	}
+
+	/**
+	 * Get the HTTP timeout in seconds for interactive IdP requests.
+	 *
+	 * Configurable via the SECURE_OIDC_HTTP_TIMEOUT environment variable
+	 * (5-60 seconds); invalid or out-of-range values are logged and fall
+	 * back to the default. Static so callers outside the client (e.g. the
+	 * REST discovery endpoint) can share the same value.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @return int Timeout in seconds.
+	 */
+	public static function get_http_timeout(): int {
+		$env_value = getenv( 'SECURE_OIDC_HTTP_TIMEOUT' );
+		if ( false === $env_value || '' === $env_value ) {
+			return self::DEFAULT_HTTP_TIMEOUT;
+		}
+
+		$parsed = filter_var( $env_value, FILTER_VALIDATE_INT );
+		if ( false === $parsed || $parsed < self::MIN_HTTP_TIMEOUT || $parsed > self::MAX_HTTP_TIMEOUT ) {
+			error_log( "[Secure OIDC Login] Invalid SECURE_OIDC_HTTP_TIMEOUT value: {$env_value}. Using default " . self::DEFAULT_HTTP_TIMEOUT . ' seconds.' );
+			return self::DEFAULT_HTTP_TIMEOUT;
+		}
+
+		return $parsed;
 	}
 
 	/**
@@ -241,7 +299,7 @@ class OIDC_Client {
 			array(
 				'body'    => $token_params,
 				'headers' => $headers,
-				'timeout' => 30,
+				'timeout' => self::get_http_timeout(),
 			)
 		);
 
@@ -933,7 +991,7 @@ class OIDC_Client {
 		$response = wp_safe_remote_get(
 			$jwks_uri,
 			array(
-				'timeout' => 30,
+				'timeout' => self::get_http_timeout(),
 			)
 		);
 
@@ -1101,7 +1159,7 @@ class OIDC_Client {
 				'headers' => array(
 					'Authorization' => 'Bearer ' . $access_token,
 				),
-				'timeout' => 30,
+				'timeout' => self::get_http_timeout(),
 			)
 		);
 
@@ -1284,7 +1342,7 @@ class OIDC_Client {
 		$response = wp_safe_remote_get(
 			$discovery_url,
 			array(
-				'timeout' => 30,
+				'timeout' => self::get_http_timeout(),
 			)
 		);
 
