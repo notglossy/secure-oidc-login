@@ -9,6 +9,7 @@ declare(strict_types=1);
 
 namespace SecureOIDCLogin\Tests\Unit\Token;
 
+use Brain\Monkey\Actions;
 use Brain\Monkey\Functions;
 use Mockery;
 use OIDC_Client;
@@ -1648,5 +1649,264 @@ class OIDCTokenRefreshTest extends OIDCTestCase
 
         $this->assertInstanceOf(WP_Error::class, $result);
         $this->assertNotContains('oidc_refresh_lock_123', $deleted_keys);
+    }
+
+    /**
+     * Test maybe_refresh_async skips when auto-refresh is disabled.
+     */
+    public function testMaybeRefreshAsyncSkipsWhenDisabled(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'enable_auto_token_refresh' => false,
+        ]);
+
+        $result = $this->refresh->maybe_refresh_async(123);
+
+        $this->assertTrue($result);
+    }
+
+    /**
+     * Test maybe_refresh_async defers the IdP round trip to shutdown when the
+     * token is inside the refresh buffer but still valid.
+     */
+    public function testMaybeRefreshAsyncDefersWhenInsideBuffer(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'enable_auto_token_refresh' => true,
+            'token_refresh_buffer' => 300,
+        ]);
+
+        $this->token_manager
+            ->shouldReceive('has_refresh_token')
+            ->with(123)
+            ->once()
+            ->andReturn(true);
+
+        // Inside the buffer window, but not yet fully expired.
+        $this->token_manager
+            ->shouldReceive('is_token_expired')
+            ->with(123, 300)
+            ->once()
+            ->andReturn(true);
+        $this->token_manager
+            ->shouldReceive('is_token_expired')
+            ->with(123, 0)
+            ->once()
+            ->andReturn(false);
+
+        // The refresh must be scheduled for shutdown, not run inline.
+        Actions\expectAdded('shutdown')->once();
+        $this->client->shouldNotReceive('refresh_token');
+
+        $result = $this->refresh->maybe_refresh_async(123);
+
+        $this->assertTrue($result);
+    }
+
+    /**
+     * Test maybe_refresh_async refreshes synchronously when the token has
+     * fully expired (the request cannot proceed on the stored token, and
+     * failure enforcement must be able to log the user out).
+     */
+    public function testMaybeRefreshAsyncRefreshesInlineWhenFullyExpired(): void
+    {
+        $user_id = 123;
+        $new_tokens = [
+            'access_token' => 'new-access-token',
+            'refresh_token' => 'new-refresh-token',
+            'expires_in' => 3600,
+        ];
+
+        Functions\when('get_option')->justReturn([
+            'enable_auto_token_refresh' => true,
+            'token_refresh_buffer' => 300,
+            'enforce_refresh_token_rotation' => false,
+        ]);
+
+        $this->token_manager
+            ->shouldReceive('has_refresh_token')
+            ->with($user_id)
+            ->once()
+            ->andReturn(true);
+
+        $this->token_manager
+            ->shouldReceive('is_token_expired')
+            ->with($user_id, 300)
+            ->once()
+            ->andReturn(true);
+        $this->token_manager
+            ->shouldReceive('is_token_expired')
+            ->with($user_id, 0)
+            ->once()
+            ->andReturn(true);
+
+        $this->token_manager
+            ->shouldReceive('get_refresh_token')
+            ->with($user_id)
+            ->once()
+            ->andReturn('old-refresh-token');
+
+        $this->client
+            ->shouldReceive('refresh_token')
+            ->with('old-refresh-token')
+            ->once()
+            ->andReturn($new_tokens);
+
+        $this->token_manager
+            ->shouldReceive('was_refresh_token_rotated')
+            ->with($user_id, 'new-refresh-token')
+            ->once()
+            ->andReturn(true);
+
+        $this->token_manager
+            ->shouldReceive('store_tokens')
+            ->with($user_id, $new_tokens)
+            ->once()
+            ->andReturn(true);
+
+        $result = $this->refresh->maybe_refresh_async($user_id);
+
+        $this->assertTrue($result);
+    }
+
+    /**
+     * Test the same user is only scheduled once per request even when
+     * maybe_refresh_async runs multiple times.
+     */
+    public function testMaybeRefreshAsyncSchedulesShutdownHookOnce(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'enable_auto_token_refresh' => true,
+            'token_refresh_buffer' => 300,
+        ]);
+
+        $this->token_manager
+            ->shouldReceive('has_refresh_token')
+            ->with(123)
+            ->twice()
+            ->andReturn(true);
+
+        $this->token_manager
+            ->shouldReceive('is_token_expired')
+            ->with(123, 300)
+            ->twice()
+            ->andReturn(true);
+        $this->token_manager
+            ->shouldReceive('is_token_expired')
+            ->with(123, 0)
+            ->twice()
+            ->andReturn(false);
+
+        Actions\expectAdded('shutdown')->once();
+
+        $this->assertTrue($this->refresh->maybe_refresh_async(123));
+        $this->assertTrue($this->refresh->maybe_refresh_async(123));
+    }
+
+    /**
+     * Test run_deferred_refresh re-checks token state at shutdown and
+     * no-ops when a concurrent request already refreshed, then clears the
+     * slot so a second invocation does nothing.
+     */
+    public function testRunDeferredRefreshReChecksAndClearsSlot(): void
+    {
+        Functions\when('get_option')->justReturn([
+            'enable_auto_token_refresh' => true,
+            'token_refresh_buffer' => 300,
+        ]);
+
+        $this->token_manager
+            ->shouldReceive('has_refresh_token')
+            ->with(123)
+            ->twice()
+            ->andReturn(true);
+
+        // Inside the buffer at schedule time; already refreshed by the time
+        // shutdown runs (e.g. a concurrent request won the lock).
+        $this->token_manager
+            ->shouldReceive('is_token_expired')
+            ->with(123, 300)
+            ->twice()
+            ->andReturn(true, false);
+        $this->token_manager
+            ->shouldReceive('is_token_expired')
+            ->with(123, 0)
+            ->once()
+            ->andReturn(false);
+
+        $this->client->shouldNotReceive('refresh_token');
+
+        $this->assertTrue($this->refresh->maybe_refresh_async(123));
+
+        $this->refresh->run_deferred_refresh();
+
+        // The slot is cleared: a second run must not re-check anything (the
+        // mock expectations above are exact counts).
+        $this->refresh->run_deferred_refresh();
+    }
+
+    /**
+     * Test run_deferred_refresh performs the actual refresh at shutdown
+     * when the token is still inside the buffer.
+     */
+    public function testRunDeferredRefreshRefreshesAtShutdown(): void
+    {
+        $user_id = 123;
+        $new_tokens = [
+            'access_token' => 'new-access-token',
+            'refresh_token' => 'new-refresh-token',
+            'expires_in' => 3600,
+        ];
+
+        Functions\when('get_option')->justReturn([
+            'enable_auto_token_refresh' => true,
+            'token_refresh_buffer' => 300,
+            'enforce_refresh_token_rotation' => false,
+        ]);
+
+        $this->token_manager
+            ->shouldReceive('has_refresh_token')
+            ->with($user_id)
+            ->twice()
+            ->andReturn(true);
+
+        $this->token_manager
+            ->shouldReceive('is_token_expired')
+            ->with($user_id, 300)
+            ->twice()
+            ->andReturn(true);
+        $this->token_manager
+            ->shouldReceive('is_token_expired')
+            ->with($user_id, 0)
+            ->once()
+            ->andReturn(false);
+
+        $this->token_manager
+            ->shouldReceive('get_refresh_token')
+            ->with($user_id)
+            ->once()
+            ->andReturn('old-refresh-token');
+
+        $this->client
+            ->shouldReceive('refresh_token')
+            ->with('old-refresh-token')
+            ->once()
+            ->andReturn($new_tokens);
+
+        $this->token_manager
+            ->shouldReceive('was_refresh_token_rotated')
+            ->with($user_id, 'new-refresh-token')
+            ->once()
+            ->andReturn(true);
+
+        $this->token_manager
+            ->shouldReceive('store_tokens')
+            ->with($user_id, $new_tokens)
+            ->once()
+            ->andReturn(true);
+
+        $this->assertTrue($this->refresh->maybe_refresh_async($user_id));
+
+        $this->refresh->run_deferred_refresh();
     }
 }

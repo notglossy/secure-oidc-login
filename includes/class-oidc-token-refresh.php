@@ -91,6 +91,17 @@ class OIDC_Token_Refresh {
 	private ?array $options = null;
 
 	/**
+	 * User ID with a token refresh deferred to the shutdown hook, if any.
+	 *
+	 * A single slot suffices: the init hook defers at most the current user,
+	 * and a dropped extra deferral would be retried on that user's next
+	 * request within the buffer window anyway.
+	 *
+	 * @var int|null
+	 */
+	private ?int $deferred_user_id = null;
+
+	/**
 	 * Initialize the token refresh handler.
 	 *
 	 * @param OIDC_Client        $client        The OIDC client for token operations.
@@ -128,6 +139,102 @@ class OIDC_Token_Refresh {
 
 		// Token needs refresh
 		return $this->refresh( $user_id );
+	}
+
+	/**
+	 * Check tokens and refresh without blocking the response when possible.
+	 *
+	 * PERFORMANCE: The cheap checks (options, cached meta reads) run inline,
+	 * but the IdP round trip (up to a 10s timeout against a degraded IdP) is
+	 * deferred to the shutdown hook - after the response has been sent to the
+	 * client - whenever the access token is still valid, i.e. merely inside
+	 * the refresh buffer. No user request then waits on the IdP. Only a token
+	 * that has fully expired is refreshed synchronously: the stored token is
+	 * no longer usable for this request, and on failure the caller enforces
+	 * logout - neither can wait for shutdown.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @param int $user_id The WordPress user ID.
+	 * @return true|WP_Error True when no synchronous refresh was needed (a
+	 *                       deferred refresh counts as true) or the synchronous
+	 *                       refresh succeeded; WP_Error when it failed.
+	 */
+	public function maybe_refresh_async( int $user_id ): bool|WP_Error {
+		if ( ! $this->is_auto_refresh_enabled() ) {
+			return true;
+		}
+
+		if ( ! $this->token_manager->has_refresh_token( $user_id ) ) {
+			return true;
+		}
+
+		if ( ! $this->token_manager->is_token_expired( $user_id, $this->get_refresh_buffer() ) ) {
+			return true;
+		}
+
+		if ( $this->token_manager->is_token_expired( $user_id, 0 ) ) {
+			return $this->refresh( $user_id );
+		}
+
+		$this->schedule_deferred_refresh( $user_id );
+
+		return true;
+	}
+
+	/**
+	 * Queue a user's token refresh to run on the shutdown hook.
+	 *
+	 * @param int $user_id The WordPress user ID.
+	 * @return void
+	 */
+	private function schedule_deferred_refresh( int $user_id ): void {
+		if ( null !== $this->deferred_user_id ) {
+			return;
+		}
+
+		$this->deferred_user_id = $user_id;
+
+		// Latest possible priority: the response handoff below discards any
+		// output produced afterwards, so every other shutdown callback (which
+		// may still produce output) must run before the connection is handed
+		// back to the client.
+		add_action( 'shutdown', array( $this, 'run_deferred_refresh' ), PHP_INT_MAX );
+	}
+
+	/**
+	 * Execute the deferred token refresh on shutdown.
+	 *
+	 * Hands the finished response back to the client first - under PHP-FPM
+	 * and LiteSpeed this closes the connection so the browser renders
+	 * immediately while the IdP round trip continues in the background
+	 * (other SAPIs keep the connection open, but the page content has
+	 * already been generated and sent). Then re-runs the full
+	 * maybe_refresh() checks: a concurrent request may already have
+	 * refreshed the token, in which case this no-ops. Failures are logged
+	 * by the refresh path; the token was still valid when the refresh was
+	 * deferred, so later requests retry via the buffer window and the
+	 * per-user lock TTL throttles retries against a struggling IdP.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @return void
+	 */
+	public function run_deferred_refresh(): void {
+		if ( null === $this->deferred_user_id ) {
+			return;
+		}
+
+		$user_id                = $this->deferred_user_id;
+		$this->deferred_user_id = null;
+
+		if ( function_exists( 'fastcgi_finish_request' ) ) {
+			fastcgi_finish_request();
+		} elseif ( function_exists( 'litespeed_finish_request' ) ) {
+			litespeed_finish_request();
+		}
+
+		$this->maybe_refresh( $user_id );
 	}
 
 	/**

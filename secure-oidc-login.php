@@ -965,7 +965,11 @@ class Secure_OIDC_Login {
 	 * Check and refresh tokens if needed for the current user.
 	 *
 	 * Called on init hook (priority 20) to ensure tokens are refreshed before
-	 * they expire. If refresh fails and enforcement is enabled, logs out the user.
+	 * they expire. A token that is merely inside the refresh buffer is
+	 * refreshed after the response has been sent (shutdown hook), so the page
+	 * render never waits on the IdP round trip; only a fully expired token is
+	 * refreshed synchronously. If that synchronous refresh fails, logs out
+	 * the user.
 	 *
 	 * @since 0.7.0
 	 */
@@ -983,7 +987,7 @@ class Secure_OIDC_Login {
 		}
 
 		$user_id = get_current_user_id();
-		$result  = $this->token_refresh->maybe_refresh( $user_id );
+		$result  = $this->token_refresh->maybe_refresh_async( $user_id );
 
 		// If refresh failed and we should enforce it, log out the user
 		if ( is_wp_error( $result ) ) {
