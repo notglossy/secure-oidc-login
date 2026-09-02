@@ -55,4 +55,43 @@ class OIDC_Env {
 
 		return $value;
 	}
+
+	/**
+	 * Read an integer environment variable with range validation.
+	 *
+	 * Returns $default when the variable is unset/empty or holds an invalid
+	 * value outside the allowed range (a warning is logged for invalid values
+	 * so misconfigurations are not silent).
+	 *
+	 * @since 1.4.0
+	 *
+	 * @param string $name    Environment variable name.
+	 * @param int    $default Default value when not set or invalid.
+	 * @param int    $min     Minimum allowed value (inclusive).
+	 * @param int    $max     Maximum allowed value (inclusive).
+	 * @return int Validated integer value.
+	 */
+	public static function get_int( string $name, int $default, int $min, int $max ): int {
+		$raw = getenv( $name );
+
+		if ( false === $raw || '' === $raw ) {
+			return $default;
+		}
+
+		$parsed = filter_var( $raw, FILTER_VALIDATE_INT );
+
+		if ( false === $parsed || $parsed < $min || $parsed > $max ) {
+			error_log(
+				sprintf(
+					'[Secure OIDC Login] Invalid %s value: %s. Using default %d.',
+					$name,
+					$raw,
+					$default
+				)
+			);
+			return $default;
+		}
+
+		return $parsed;
+	}
 }
