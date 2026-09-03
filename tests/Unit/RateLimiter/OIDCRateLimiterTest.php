@@ -699,7 +699,7 @@ class OIDCRateLimiterTest extends OIDCTestCase
     }
 
     /**
-     * Test non-positive counts are treated as an empty window.
+     * Non-positive counts are treated as an empty window.
      */
     public function testNonPositiveAttemptCountsStartNewWindow(): void
     {
