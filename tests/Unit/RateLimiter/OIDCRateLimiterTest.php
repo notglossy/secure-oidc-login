@@ -162,9 +162,7 @@ class OIDCRateLimiterTest extends OIDCTestCase
      */
     public function testRecordAttemptIncrementsExistingTransient(): void
     {
-        $ip_hash = hash('sha256', '192.168.1.100' . 'test-salt-value');
-        $attempts_key = 'oidc_attempts_test_action_' . substr($ip_hash, 0, 16);
-        $this->transients[$attempts_key] = 5;
+        $attempts_key = $this->seed_attempts('test_action', 5);
 
         $this->limiter->record_attempt('test_action');
 
