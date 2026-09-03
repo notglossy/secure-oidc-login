@@ -19,6 +19,28 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 class OIDC_Env {
 	/**
+	 * Sanitize a raw env value for safe inclusion in log lines.
+	 *
+	 * Env values are operator-controlled, but newlines would allow log-line
+	 * injection and very long values bloat the log, so collapse CR/LF runs
+	 * to a single space and cap the length.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @param string $raw Unsanitized raw value.
+	 * @return string Value safe to interpolate into a single log line.
+	 */
+	private static function sanitize_for_log( string $raw ): string {
+		$single_line = preg_replace( '/[\r\n]+/', ' ', $raw );
+
+		if ( ! is_string( $single_line ) ) {
+			return '';
+		}
+
+		return substr( $single_line, 0, 200 );
+	}
+
+	/**
 	 * Read a boolean environment variable.
 	 *
 	 * Values are parsed with FILTER_VALIDATE_BOOLEAN, so "true"/"false",
@@ -47,7 +69,7 @@ class OIDC_Env {
 			error_log(
 				sprintf(
 					'[Secure OIDC Login] Ignoring invalid boolean value "%s" for %s; falling back to stored setting.',
-					$raw,
+					self::sanitize_for_log( $raw ),
 					$name
 				)
 			);
@@ -85,7 +107,7 @@ class OIDC_Env {
 				sprintf(
 					'[Secure OIDC Login] Invalid %s value: %s. Using default %d.',
 					$name,
-					$raw,
+					self::sanitize_for_log( $raw ),
 					$default_value
 				)
 			);

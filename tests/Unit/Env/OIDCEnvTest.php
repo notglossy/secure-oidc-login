@@ -160,5 +160,9 @@ class OIDCEnvTest extends OIDCTestCase
 
         putenv('SECURE_OIDC_TEST_INT=12.5');
         $this->assertSame(10, OIDC_Env::get_int('SECURE_OIDC_TEST_INT', 10, 5, 30));
+
+        // Newlines must not allow log-line injection; value still falls back.
+        putenv("SECURE_OIDC_TEST_INT=10\n[Fake]");
+        $this->assertSame(10, OIDC_Env::get_int('SECURE_OIDC_TEST_INT', 10, 5, 30));
     }
 }
