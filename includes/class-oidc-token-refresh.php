@@ -51,12 +51,16 @@ class OIDC_Token_Refresh {
 	/**
 	 * Lifetime of the per-user refresh lock in seconds.
 	 *
-	 * Long enough to cover the token endpoint round trip (10s timeout), short
-	 * enough that a failed refresh can be retried promptly without hammering the IdP.
+	 * Must outlive the IdP round trip so a second concurrent request cannot
+	 * reacquire the lock and replay the same refresh token while the first
+	 * request is still in flight (rotation-enforcing IdPs revoke the family
+	 * on reuse). Covers the max configurable HTTP timeout (30 s) plus a
+	 * margin; short enough that a failed refresh can be retried promptly
+	 * without hammering the IdP.
 	 *
 	 * @var int
 	 */
-	const REFRESH_LOCK_TTL = 30;
+	const REFRESH_LOCK_TTL = 60;
 
 	/**
 	 * Option-name prefix for the per-user refresh lock.

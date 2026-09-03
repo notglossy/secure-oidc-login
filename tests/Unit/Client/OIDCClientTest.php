@@ -1334,6 +1334,8 @@ class OIDCClientTest extends OIDCTestCase
             $property->setValue(null, false);
         }
 
+        putenv('SECURE_OIDC_HTTP_TIMEOUT');
+
         parent::tearDown();
     }
 
@@ -3507,5 +3509,38 @@ class OIDCClientTest extends OIDCTestCase
         $result = $this->createClientWithStubbedJwt($claims)->validate_logout_token('h.p.s');
         $this->assertInstanceOf(WP_Error::class, $result);
         $this->assertStringContainsString('jti', $result->get_error_message());
+    }
+
+    /**
+     * Test get_http_timeout defaults to 10s when the env var is unset.
+     */
+    public function testGetHttpTimeoutDefaultsToTenSeconds(): void
+    {
+        putenv('SECURE_OIDC_HTTP_TIMEOUT');
+        $this->assertSame(10, OIDC_Client::get_http_timeout());
+    }
+
+    /**
+     * Test get_http_timeout honors an in-range SECURE_OIDC_HTTP_TIMEOUT value.
+     */
+    public function testGetHttpTimeoutHonorsConfiguredValue(): void
+    {
+        putenv('SECURE_OIDC_HTTP_TIMEOUT=25');
+        $this->assertSame(25, OIDC_Client::get_http_timeout());
+    }
+
+    /**
+     * Test get_http_timeout falls back to 10s for out-of-range or invalid values.
+     */
+    public function testGetHttpTimeoutFallsBackOnInvalidValue(): void
+    {
+        putenv('SECURE_OIDC_HTTP_TIMEOUT=1');
+        $this->assertSame(10, OIDC_Client::get_http_timeout());
+
+        putenv('SECURE_OIDC_HTTP_TIMEOUT=99');
+        $this->assertSame(10, OIDC_Client::get_http_timeout());
+
+        putenv('SECURE_OIDC_HTTP_TIMEOUT=soon');
+        $this->assertSame(10, OIDC_Client::get_http_timeout());
     }
 }

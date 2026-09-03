@@ -47,6 +47,42 @@ class OIDC_Client {
 	const JWKS_CACHE_DURATION = 900;
 
 	/**
+	 * Default HTTP timeout in seconds for IdP requests.
+	 *
+	 * A degraded (hanging, not failing) IdP would otherwise hold the interactive
+	 * login path for 30 s per hop (token exchange + JWKS + userinfo ≈ 90 s
+	 * total), exceeding typical PHP-FPM/webserver limits and turning slow IdPs
+	 * into opaque 504s. A healthy IdP answers in well under 2 s. Override with
+	 * the SECURE_OIDC_HTTP_TIMEOUT environment variable (5-30 s).
+	 *
+	 * @var int
+	 */
+	const DEFAULT_HTTP_TIMEOUT = 10;
+
+	/**
+	 * Minimum allowed HTTP timeout in seconds.
+	 *
+	 * @var int
+	 */
+	const MIN_HTTP_TIMEOUT = 5;
+
+	/**
+	 * Maximum allowed HTTP timeout in seconds.
+	 *
+	 * @var int
+	 */
+	const MAX_HTTP_TIMEOUT = 30;
+
+	/**
+	 * Get the HTTP timeout for IdP requests, honoring SECURE_OIDC_HTTP_TIMEOUT.
+	 *
+	 * @return int Timeout in seconds (5-30).
+	 */
+	public static function get_http_timeout(): int {
+		return OIDC_Env::get_int( 'SECURE_OIDC_HTTP_TIMEOUT', self::DEFAULT_HTTP_TIMEOUT, self::MIN_HTTP_TIMEOUT, self::MAX_HTTP_TIMEOUT );
+	}
+
+	/**
 	 * Allowed JWT signing algorithms (asymmetric only).
 	 *
 	 * SECURITY: Only asymmetric algorithms are permitted for OIDC ID token verification.
@@ -241,7 +277,7 @@ class OIDC_Client {
 			array(
 				'body'    => $token_params,
 				'headers' => $headers,
-				'timeout' => 30,
+				'timeout' => self::get_http_timeout(),
 			)
 		);
 
@@ -933,7 +969,7 @@ class OIDC_Client {
 		$response = wp_safe_remote_get(
 			$jwks_uri,
 			array(
-				'timeout' => 30,
+				'timeout' => self::get_http_timeout(),
 			)
 		);
 
@@ -1101,7 +1137,7 @@ class OIDC_Client {
 				'headers' => array(
 					'Authorization' => 'Bearer ' . $access_token,
 				),
-				'timeout' => 30,
+				'timeout' => self::get_http_timeout(),
 			)
 		);
 
@@ -1182,14 +1218,15 @@ class OIDC_Client {
 
 		// SECURITY: Use wp_safe_remote_post() to prevent SSRF attacks
 		// This validates the token_endpoint URL and blocks private IPs, non-standard ports, etc.
-		// Timeout is shorter than the login-time token exchange because refresh runs
-		// synchronously on init and would otherwise block page loads on a slow IdP.
+		// Shares the same configurable timeout as the interactive login path so a
+		// slow IdP cannot block page loads; refresh used to be hardcoded to 10 s,
+		// now it honors SECURE_OIDC_HTTP_TIMEOUT with the same 10 s default.
 		$response = wp_safe_remote_post(
 			$token_endpoint,
 			array(
 				'body'    => $token_params,
 				'headers' => $headers,
-				'timeout' => 10,
+				'timeout' => self::get_http_timeout(),
 			)
 		);
 
@@ -1284,7 +1321,7 @@ class OIDC_Client {
 		$response = wp_safe_remote_get(
 			$discovery_url,
 			array(
-				'timeout' => 30,
+				'timeout' => self::get_http_timeout(),
 			)
 		);
 

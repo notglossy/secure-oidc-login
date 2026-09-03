@@ -76,37 +76,13 @@ class OIDC_Rate_Limiter {
 	 */
 	public function __construct() {
 		// Default: 10 attempts
-		$this->max_attempts = $this->get_env_int( 'SECURE_OIDC_RATE_LIMIT_ATTEMPTS', 10, 1, 100 );
+		$this->max_attempts = OIDC_Env::get_int( 'SECURE_OIDC_RATE_LIMIT_ATTEMPTS', 10, 1, 100 );
 
 		// Default: 5 minutes
-		$this->time_window = $this->get_env_int( 'SECURE_OIDC_RATE_LIMIT_WINDOW', 5 * MINUTE_IN_SECONDS, MINUTE_IN_SECONDS, HOUR_IN_SECONDS );
+		$this->time_window = OIDC_Env::get_int( 'SECURE_OIDC_RATE_LIMIT_WINDOW', 5 * MINUTE_IN_SECONDS, MINUTE_IN_SECONDS, HOUR_IN_SECONDS );
 
 		// Default: 15 minutes
-		$this->lockout_duration = $this->get_env_int( 'SECURE_OIDC_RATE_LIMIT_LOCKOUT', 15 * MINUTE_IN_SECONDS, MINUTE_IN_SECONDS, DAY_IN_SECONDS );
-	}
-
-	/**
-	 * Get integer from environment variable with validation.
-	 *
-	 * @param string $var_name      Environment variable name.
-	 * @param int    $default_value Default value if not set or invalid.
-	 * @param int    $min           Minimum allowed value.
-	 * @param int    $max           Maximum allowed value.
-	 * @return int Validated integer value.
-	 */
-	private function get_env_int( string $var_name, int $default_value, int $min, int $max ): int {
-		$env_value = getenv( $var_name );
-		if ( false === $env_value || '' === $env_value ) {
-			return $default_value;
-		}
-
-		$parsed = filter_var( $env_value, FILTER_VALIDATE_INT );
-		if ( false === $parsed || $parsed < $min || $parsed > $max ) {
-			error_log( "[Secure OIDC Login] Invalid {$var_name} value: {$env_value}. Using default {$default_value}." );
-			return $default_value;
-		}
-
-		return $parsed;
+		$this->lockout_duration = OIDC_Env::get_int( 'SECURE_OIDC_RATE_LIMIT_LOCKOUT', 15 * MINUTE_IN_SECONDS, MINUTE_IN_SECONDS, DAY_IN_SECONDS );
 	}
 
 	/**
