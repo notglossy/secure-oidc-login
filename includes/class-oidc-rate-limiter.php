@@ -144,7 +144,7 @@ class OIDC_Rate_Limiter {
 	public function record_attempt( string $action ): void {
 		$ip_address   = $this->get_client_ip();
 		$attempts_key = $this->get_attempts_key( $action, $ip_address );
-		$state = $this->get_attempt_state( $action, $ip_address ) ?? array(
+		$state        = $this->get_attempt_state( $action, $ip_address ) ?? array(
 			'count'   => 0,
 			'started' => time(),
 		);
@@ -166,8 +166,7 @@ class OIDC_Rate_Limiter {
 		$attempts_key = $this->get_attempts_key( $action, $ip_address );
 		$raw          = get_transient( $attempts_key );
 
-		// Backfill for counters written before the window-start format existed:
-		// anchor the surviving count to a fresh window starting now.
+		// Legacy integer counters migrate to a fresh window starting now.
 		if ( is_int( $raw ) ) {
 			return $raw > 0 ? array(
 				'count'   => $raw,

@@ -664,7 +664,7 @@ class OIDCRateLimiterTest extends OIDCTestCase
     }
 
     /**
-     * Test an expired window is treated as empty even if the transient lingers.
+     * An expired window is treated as empty even if the transient lingers.
      */
     public function testExpiredWindowStartsNewWindow(): void
     {
@@ -683,7 +683,7 @@ class OIDCRateLimiterTest extends OIDCTestCase
     }
 
     /**
-     * Test a corrupt attempt value is treated as an empty window.
+     * A corrupt attempt value is treated as an empty window.
      */
     public function testCorruptAttemptStateStartsNewWindow(): void
     {
