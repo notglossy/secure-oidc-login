@@ -397,9 +397,8 @@ class OIDC_Rate_Limiter {
 	 * @return int Remaining attempts (0 if locked out).
 	 */
 	public function get_remaining_attempts( string $action ): int {
-		$ip_address   = $this->get_client_ip();
-		$lockout_key  = $this->get_lockout_key( $action, $ip_address );
-		$attempts_key = $this->get_attempts_key( $action, $ip_address );
+		$ip_address  = $this->get_client_ip();
+		$lockout_key = $this->get_lockout_key( $action, $ip_address );
 
 		// Check lockout first
 		if ( get_transient( $lockout_key ) ) {
