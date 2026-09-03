@@ -7,29 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0-beta] - 2026-09-03
+
+Beta release with OIDC Back-Channel Logout, hardened discovery/callback validation, indexed lookups, off-render token refresh, and a round of small robustness fixes.
+
 ### Added
-- Back-channel logout support (OIDC Back-Channel Logout 1.0): the IdP can terminate WordPress sessions server-to-server via `/secure-oidc-login/v1/backchannel-logout`, with full logout token validation and single-use `jti` replay protection
-- `max_age` request parameter with `auth_time` claim verification (OIDC Core 3.1.3.7 step 13) via the new "Max Authentication Age" setting
-- `prompt` setting (`login`/`consent`/`select_account`) and `login_hint` passthrough on the login initiation URL
-- `secure_oidc_login_auth_params` filter for IdP-specific authorization request parameters (security-critical parameters cannot be overridden)
-- "Remember Users" login setting and `secure_oidc_login_remember_user` filter to control the persistent 14-day auth cookie (previously always enabled)
-- `client_id` parameter on RP-initiated logout requests per OIDC RP-Initiated Logout 1.0
+- Back-channel logout support (OIDC Back-Channel Logout 1.0): the IdP can terminate WordPress sessions server-to-server via `/secure-oidc-login/v1/backchannel-logout`, with full logout token validation and single-use `jti` replay protection (#70, #93)
+- `max_age` request parameter with `auth_time` claim verification (OIDC Core 3.1.3.7 step 13) via the new "Max Authentication Age" setting (#70)
+- `prompt` setting (`login`/`consent`/`select_account`) and `login_hint` passthrough on the login initiation URL (#70)
+- `secure_oidc_login_auth_params` filter for IdP-specific authorization request parameters (security-critical parameters cannot be overridden) (#70)
+- "Remember Users" login setting and `secure_oidc_login_remember_user` filter to control the persistent 14-day auth cookie (previously always enabled) (#70)
+- `client_id` parameter on RP-initiated logout requests per OIDC RP-Initiated Logout 1.0 (#70)
 
 ### Changed
-- Automatic token refresh no longer blocks page render: a token inside the refresh buffer is refreshed on the `shutdown` hook after the page has been generated. Under PHP-FPM and LiteSpeed the connection is handed back to the client first, so the request never waits on the IdP round trip; on other SAPIs the connection stays open during the refresh, but the response content is already complete. Only a fully expired token is refreshed synchronously, preserving the logout-on-failure enforcement
-- User lookups by OIDC subject and IdP session ID (every SSO login and back-channel logout) are now served by the `wp_usermeta` `meta_key` index via hash-in-key rows (`oidc_subject_idx_{sha256(sub)}` / `oidc_sid_idx_{sha256(sid)}`) instead of scanning meta values, keeping them fast on large memberships. Existing installs need no migration: legacy rows keep working via a read fallback and are indexed lazily on first use
+- Interactive IdP HTTP timeouts (discovery, token exchange, JWKS, userinfo, refresh) are now 10 s by default and tunable via `SECURE_OIDC_HTTP_TIMEOUT` (5–30 s) (#99)
+- Rate limiter now preserves the original window end on increment (fixed window) and decides expiry from `started` rather than lingering transients; legacy plain-integer counters migrate to a fresh window (#100)
+- Setting description for "Disable Native Login" now clarifies that REST/XML-RPC application passwords keep working (#95)
+
+### Performance
+- Automatic token refresh no longer blocks page render: a token inside the refresh buffer is refreshed on the `shutdown` hook after the page has been generated. Under PHP-FPM and LiteSpeed the connection is handed back to the client first; on other SAPIs the response content is already complete. Only a fully expired token is refreshed synchronously (#98)
+- User lookups by OIDC subject and IdP session ID (every SSO login and back-channel logout) are now served by the `wp_usermeta` `meta_key` index via hash-in-key rows (`oidc_subject_idx_{sha256(sub)}` / `oidc_sid_idx_{sha256(sid)}`) instead of scanning meta values; legacy rows keep working via a read fallback and are indexed lazily (#97)
 
 ### Security
-- Bind the OIDC `state` to the initiating browser via an `HttpOnly` cookie, preventing login-CSRF / forced-login (session fixation)
-- Validate the discovery document `issuer` against the discovery URL (OIDC Discovery 1.0 §4.3) and require HTTPS on all advertised endpoints
-- Validate the RFC 9207 `iss` authorization response parameter on the callback; required when the IdP advertises support during discovery (IdP mix-up defense)
-- Form-urlencode `client_id`/`client_secret` in HTTP Basic credentials per RFC 6749 §2.3.1
-- Drop JWKS keys with an unknown `kty` instead of assigning them the JWT header algorithm
+- Bind the OIDC `state` to the initiating browser via an `HttpOnly` cookie, preventing login-CSRF / forced-login (session fixation); on HTTPS the cookie now uses the `__Host-` prefix (`__Host-secure_oidc_state`) so a subdomain or sibling path can never shadow it (#64, #92)
+- Validate the discovery document `issuer` against the discovery URL (OIDC Discovery 1.0 §4.3) and require HTTPS on all advertised endpoints (#69)
+- Validate the RFC 9207 `iss` authorization response parameter on the callback; required when the IdP advertises support during discovery (IdP mix-up defense) (#69)
+- Form-urlencode `client_id`/`client_secret` in HTTP Basic credentials per RFC 6749 §2.3.1 (#69)
+- Drop JWKS keys with an unknown `kty` instead of assigning them the JWT header algorithm (#69)
+- Require `iat` and `exp` claims in ID tokens (Firebase JWT only enforces them when present) per OIDC Core §2 / §3.1.3.7 (#88)
+- Pass error *codes* (e.g. `token_validation_failed`) — not free-text IdP/`WP_Error` detail — through login redirects; `display_login_errors()` renders only mapped translatable messages while full detail goes to `error_log` (#90)
+- `jti` replay cache is now durable (non-autoloaded `oidc_bcl_jti_*` options with atomic `INSERT IGNORE`, not evictable transients), with a bounded opportunistic sweep (1 % of validations, `LIMIT 100`) so a persistent object cache cannot silently reopen the replay window (#93)
+- Strict boolean parsing for env-var overrides via `OIDC_Env::get_bool()` (`true`/`false`, `1`/`0`, `yes`/`no`, `on`/`off`); unrecognized values log a warning and fall back to the stored setting instead of silently disabling the feature (#89)
 
 ### Fixed
-- Serialize automatic token refresh with a per-user lock so parallel requests cannot replay a rotated refresh token (which rotation-enforcing IdPs treat as reuse and may revoke the session)
-- Validate refresh token responses (`access_token` presence, Bearer `token_type`) in the client like the login-time token exchange
-- Lower the token refresh HTTP timeout from 30s to 10s so a slow IdP cannot block page loads for half a minute
+- Serialize automatic token refresh with a per-user lock so parallel requests cannot replay a rotated refresh token (which rotation-enforcing IdPs treat as reuse and may revoke the session) (#69)
+- Validate refresh token responses (`access_token` presence, Bearer `token_type`) in the client like the login-time token exchange; `exchange_code()` also now rejects scalar JSON bodies (#69, #100)
+- Build IdP authorization and end-session URLs with `?`/`&` awareness so endpoints that already contain a query string (e.g. Azure AD B2C `?p=...`) are not corrupted (#84)
+- Back-channel logout rate limiting now counts only failed token validations, so legitimate bulk revocation from the IdP is never throttled (#86)
+- Fail gracefully when state-scoped transients (`oidc_code_verifier_*`, `oidc_nonce_*`) expire mid-callback: redirect with a "Login session expired" error instead of an uncaught `TypeError`/500 (#87)
+- Preserve `WP_User` already authenticated at `authenticate` priority 20 (application passwords) when "Disable Native Login" is enabled (priority 30); REST API, XML-RPC, Jetpack and mobile-app auth keep working (#95)
+- `oidc_created` user-meta fast-path now handles the `false`-on-unchanged read-back the same way `oidc_subject` already did via `OIDC_User_Index` (#100)
 
 ## [1.3.1] - 2026-04-19
 
@@ -212,7 +229,8 @@ First stable release. Comprehensive security audit completed with no critical or
 - Flexible email verification
 - PHPStan level 6 compliance
 
-[Unreleased]: https://github.com/notglossy/secure-oidc-login/compare/v1.3.1...HEAD
+[Unreleased]: https://github.com/notglossy/secure-oidc-login/compare/v1.4.0-beta...HEAD
+[1.4.0-beta]: https://github.com/notglossy/secure-oidc-login/compare/v1.3.1...v1.4.0-beta
 [1.3.1]: https://github.com/notglossy/secure-oidc-login/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/notglossy/secure-oidc-login/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/notglossy/secure-oidc-login/compare/v1.1.0...v1.2.0
