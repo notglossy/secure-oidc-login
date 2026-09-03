@@ -144,14 +144,10 @@ class OIDC_Rate_Limiter {
 	public function record_attempt( string $action ): void {
 		$ip_address   = $this->get_client_ip();
 		$attempts_key = $this->get_attempts_key( $action, $ip_address );
-		$state        = $this->get_attempt_state( $action, $ip_address );
-
-		if ( null === $state ) {
-			$state = array(
-				'count'   => 0,
-				'started' => time(),
-			);
-		}
+		$state = $this->get_attempt_state( $action, $ip_address ) ?? array(
+			'count'   => 0,
+			'started' => time(),
+		);
 
 		// Increment within the current window, preserving its original end.
 		++$state['count'];
@@ -186,7 +182,7 @@ class OIDC_Rate_Limiter {
 		$count   = (int) $raw['count'];
 		$started = (int) $raw['started'];
 
-		if ( $count <= 0 || $started <= 0 || time() - $started >= $this->time_window ) {
+		if ( $count <= 0 || $started <= 0 || $started > time() || time() - $started >= $this->time_window ) {
 			return null;
 		}
 

@@ -35,6 +35,13 @@ class OIDCRateLimiterTest extends OIDCTestCase
     private $transients = [];
 
     /**
+     * Captured transient expirations, keyed by transient key.
+     *
+     * @var array<string, int>
+     */
+    private $transient_expirations = [];
+
+    /**
      * Set up test environment.
      */
     protected function setUp(): void
@@ -42,6 +49,7 @@ class OIDCRateLimiterTest extends OIDCTestCase
         parent::setUp();
 
         $this->transients = [];
+        $this->transient_expirations = [];
 
         // Mock WordPress constants
         if (!defined('MINUTE_IN_SECONDS')) {
@@ -61,6 +69,7 @@ class OIDCRateLimiterTest extends OIDCTestCase
 
         Functions\when('set_transient')->alias(function (string $key, $value, int $expiration) {
             $this->transients[$key] = $value;
+            $this->transient_expirations[$key] = $expiration;
             return true;
         });
 
@@ -650,6 +659,7 @@ class OIDCRateLimiterTest extends OIDCTestCase
         $this->assertIsArray($state);
         $this->assertSame(3, $state['count']);
         $this->assertSame($started, $state['started']);
+        $this->assertEqualsWithDelta(60, $this->transient_expirations[$attempts_key], 5);
         $this->assertFalse($this->limiter->is_rate_limited('test_action'));
     }
 
@@ -693,7 +703,7 @@ class OIDCRateLimiterTest extends OIDCTestCase
      */
     public function testNonPositiveAttemptCountsStartNewWindow(): void
     {
-        $bad_states = [0, -3, ['count' => 0, 'started' => time()], ['count' => 2, 'started' => 0]];
+        $bad_states = [0, -3, ['count' => 0, 'started' => time()], ['count' => 2, 'started' => 0], ['count' => 2, 'started' => time() + 60]];
 
         foreach ($bad_states as $bad) {
             $attempts_key = $this->seed_attempts('test_action', $bad);
