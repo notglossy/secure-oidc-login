@@ -25,6 +25,7 @@ class OIDCEnvTest extends OIDCTestCase
     protected function tearDown(): void
     {
         putenv('SECURE_OIDC_TEST_BOOL');
+        putenv('SECURE_OIDC_TEST_INT');
         parent::tearDown();
     }
 
@@ -114,5 +115,50 @@ class OIDCEnvTest extends OIDCTestCase
 
         putenv('SECURE_OIDC_TEST_BOOL=enabled');
         $this->assertNull(OIDC_Env::get_bool('SECURE_OIDC_TEST_BOOL'));
+    }
+
+    /**
+     * Unset and empty variables fall back to the default.
+     */
+    public function testGetIntReturnsDefaultWhenVarUnsetOrEmpty(): void
+    {
+        putenv('SECURE_OIDC_TEST_INT');
+        $this->assertSame(10, OIDC_Env::get_int('SECURE_OIDC_TEST_INT', 10, 5, 30));
+
+        putenv('SECURE_OIDC_TEST_INT=');
+        $this->assertSame(10, OIDC_Env::get_int('SECURE_OIDC_TEST_INT', 10, 5, 30));
+    }
+
+    /**
+     * In-range integers are returned as-is, including the bounds.
+     */
+    public function testGetIntReturnsValueWithinRange(): void
+    {
+        putenv('SECURE_OIDC_TEST_INT=15');
+        $this->assertSame(15, OIDC_Env::get_int('SECURE_OIDC_TEST_INT', 10, 5, 30));
+
+        putenv('SECURE_OIDC_TEST_INT=5');
+        $this->assertSame(5, OIDC_Env::get_int('SECURE_OIDC_TEST_INT', 10, 5, 30));
+
+        putenv('SECURE_OIDC_TEST_INT=30');
+        $this->assertSame(30, OIDC_Env::get_int('SECURE_OIDC_TEST_INT', 10, 5, 30));
+    }
+
+    /**
+     * Out-of-range and non-integer values fall back to the default.
+     */
+    public function testGetIntReturnsDefaultWhenOutOfRangeOrInvalid(): void
+    {
+        putenv('SECURE_OIDC_TEST_INT=4');
+        $this->assertSame(10, OIDC_Env::get_int('SECURE_OIDC_TEST_INT', 10, 5, 30));
+
+        putenv('SECURE_OIDC_TEST_INT=31');
+        $this->assertSame(10, OIDC_Env::get_int('SECURE_OIDC_TEST_INT', 10, 5, 30));
+
+        putenv('SECURE_OIDC_TEST_INT=fast');
+        $this->assertSame(10, OIDC_Env::get_int('SECURE_OIDC_TEST_INT', 10, 5, 30));
+
+        putenv('SECURE_OIDC_TEST_INT=12.5');
+        $this->assertSame(10, OIDC_Env::get_int('SECURE_OIDC_TEST_INT', 10, 5, 30));
     }
 }
