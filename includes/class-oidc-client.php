@@ -335,9 +335,7 @@ class OIDC_Client {
 
 		// Validate that both required tokens are present in the response.
 		// Per OAuth 2.0 / OIDC spec, the token endpoint must return access_token and id_token.
-		// A 200 + application/json response with a scalar body (e.g. `"ok"` or `123`)
-		// decodes to a non-array; reject it here like refresh_token() does instead
-		// of reading array offsets off a non-array below.
+		// Reject scalar JSON bodies before reading array offsets.
 		if ( ! is_array( $tokens ) || empty( $tokens['access_token'] ) || empty( $tokens['id_token'] ) ) {
 			return new WP_Error( 'oidc_error', __( 'Invalid token response.', 'secure-oidc-login' ) );
 		}

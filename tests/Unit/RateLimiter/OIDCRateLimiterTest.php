@@ -628,6 +628,25 @@ class OIDCRateLimiterTest extends OIDCTestCase
     }
 
     /**
+     * Seed the attempts transient for the pinned test IP and return its key.
+     *
+     * Earlier proxy tests leave forwarded headers in $_SERVER, which would
+     * otherwise key the limiter off a different IP than the one hashed here.
+     *
+     * @param mixed $state Value to store in the transient.
+     */
+    private function seed_attempts(string $action, $state): string
+    {
+        $_SERVER['REMOTE_ADDR'] = '192.168.1.100';
+        unset($_SERVER['HTTP_X_REAL_IP'], $_SERVER['HTTP_X_FORWARDED_FOR'], $_SERVER['HTTP_CLIENT_IP']);
+
+        $ip_hash = hash('sha256', '192.168.1.100' . 'test-salt-value');
+        $attempts_key = 'oidc_attempts_' . $action . '_' . substr($ip_hash, 0, 16);
+        $this->transients[$attempts_key] = $state;
+        return $attempts_key;
+    }
+
+    /**
      * Test increments preserve the window start instead of sliding the window.
      *
      * Regression test for issue #83: recording an attempt used to reset the
@@ -636,15 +655,8 @@ class OIDCRateLimiterTest extends OIDCTestCase
      */
     public function testRecordAttemptPreservesWindowStart(): void
     {
-        // Pin the IP sources: earlier proxy tests leave forwarded headers in
-        // $_SERVER, which would key the limiter off a different IP.
-        $_SERVER['REMOTE_ADDR'] = '192.168.1.100';
-        unset($_SERVER['HTTP_X_REAL_IP'], $_SERVER['HTTP_X_FORWARDED_FOR'], $_SERVER['HTTP_CLIENT_IP']);
-
-        $ip_hash = hash('sha256', '192.168.1.100' . 'test-salt-value');
-        $attempts_key = 'oidc_attempts_test_action_' . substr($ip_hash, 0, 16);
         $started = time() - 240; // 60s left in the default 5-minute window
-        $this->transients[$attempts_key] = ['count' => 2, 'started' => $started];
+        $attempts_key = $this->seed_attempts('test_action', ['count' => 2, 'started' => $started]);
 
         $this->limiter->record_attempt('test_action');
 
@@ -660,15 +672,8 @@ class OIDCRateLimiterTest extends OIDCTestCase
      */
     public function testExpiredWindowStartsNewWindow(): void
     {
-        // Pin the IP sources: earlier proxy tests leave forwarded headers in
-        // $_SERVER, which would key the limiter off a different IP.
-        $_SERVER['REMOTE_ADDR'] = '192.168.1.100';
-        unset($_SERVER['HTTP_X_REAL_IP'], $_SERVER['HTTP_X_FORWARDED_FOR'], $_SERVER['HTTP_CLIENT_IP']);
-
-        $ip_hash = hash('sha256', '192.168.1.100' . 'test-salt-value');
-        $attempts_key = 'oidc_attempts_test_action_' . substr($ip_hash, 0, 16);
         // At the cap, but the window expired: must not lock out.
-        $this->transients[$attempts_key] = ['count' => 10, 'started' => time() - 301];
+        $attempts_key = $this->seed_attempts('test_action', ['count' => 10, 'started' => time() - 301]);
 
         $this->assertFalse($this->limiter->is_rate_limited('test_action'));
         $this->assertSame(10, $this->limiter->get_remaining_attempts('test_action'));
@@ -686,14 +691,7 @@ class OIDCRateLimiterTest extends OIDCTestCase
      */
     public function testCorruptAttemptStateStartsNewWindow(): void
     {
-        // Pin the IP sources: earlier proxy tests leave forwarded headers in
-        // $_SERVER, which would key the limiter off a different IP.
-        $_SERVER['REMOTE_ADDR'] = '192.168.1.100';
-        unset($_SERVER['HTTP_X_REAL_IP'], $_SERVER['HTTP_X_FORWARDED_FOR'], $_SERVER['HTTP_CLIENT_IP']);
-
-        $ip_hash = hash('sha256', '192.168.1.100' . 'test-salt-value');
-        $attempts_key = 'oidc_attempts_test_action_' . substr($ip_hash, 0, 16);
-        $this->transients[$attempts_key] = 'garbage';
+        $attempts_key = $this->seed_attempts('test_action', 'garbage');
 
         $this->assertFalse($this->limiter->is_rate_limited('test_action'));
 
@@ -702,5 +700,26 @@ class OIDCRateLimiterTest extends OIDCTestCase
         $state = $this->transients[$attempts_key];
         $this->assertIsArray($state);
         $this->assertSame(1, $state['count']);
+    }
+
+    /**
+     * Test non-positive counts are treated as an empty window.
+     */
+    public function testNonPositiveAttemptCountsStartNewWindow(): void
+    {
+        $bad_states = [0, -3, ['count' => 0, 'started' => time()], ['count' => 2, 'started' => 0]];
+
+        foreach ($bad_states as $bad) {
+            $attempts_key = $this->seed_attempts('test_action', $bad);
+
+            $this->assertFalse($this->limiter->is_rate_limited('test_action'));
+            $this->assertSame(10, $this->limiter->get_remaining_attempts('test_action'));
+
+            $this->limiter->record_attempt('test_action');
+
+            $state = $this->transients[$attempts_key];
+            $this->assertIsArray($state);
+            $this->assertSame(1, $state['count']);
+        }
     }
 }

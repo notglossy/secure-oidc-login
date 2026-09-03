@@ -188,13 +188,12 @@ class OIDC_Rate_Limiter {
 
 		// Backfill for counters written before the window-start format existed:
 		// anchor the surviving count to a fresh window starting now.
-		if ( is_int( $raw ) || ( is_string( $raw ) && is_numeric( $raw ) ) ) {
-			$count = (int) $raw;
-			if ( $count <= 0 ) {
+		if ( is_int( $raw ) ) {
+			if ( $raw <= 0 ) {
 				return null;
 			}
 			return array(
-				'count'   => $count,
+				'count'   => $raw,
 				'started' => time(),
 			);
 		}
