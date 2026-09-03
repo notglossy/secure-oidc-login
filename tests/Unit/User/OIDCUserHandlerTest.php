@@ -510,6 +510,49 @@ class OIDCUserHandlerTest extends OIDCTestCase
     }
 
     /**
+     * Test user creation succeeds when the oidc_created write reports false
+     * but the flag is already stored.
+     *
+     * Regression test for issue #83: update_user_meta() returns false both on
+     * failure and when the value is unchanged. A pre-existing flag must not
+     * fail account creation (the subject link was already hardened the same
+     * way in OIDC_User_Index::link_subject()).
+     */
+    public function testGetOrCreateUserSucceedsWhenOidcCreatedFlagUnchanged(): void
+    {
+        $claims = $this->getSampleClaims();
+        $claims['email_verified'] = true;
+
+        Functions\when('get_users')->justReturn([]);
+        Functions\when('get_user_by')->alias(function($field, $value) {
+            if ($field === 'ID' && $value === 1) {
+                return new WP_User(1, 'newuser', 'test@example.com');
+            }
+            return false;
+        });
+        Functions\when('is_email')->justReturn(true);
+        Functions\when('sanitize_user')->alias(fn($username) => $username);
+
+        // update_user_meta() reports false (nothing to write) ...
+        Functions\when('update_user_meta')->justReturn(false);
+        // ... but both values are already stored, so both read back successfully.
+        Functions\when('get_user_meta')->alias(function($user_id, $key, $single = false) use ($claims) {
+            if ($key === 'oidc_subject') {
+                return $single ? $claims['sub'] : [$claims['sub']];
+            }
+            if ($key === 'oidc_created') {
+                return $single ? '1' : ['1'];
+            }
+            return $single ? '' : [];
+        });
+
+        $result = $this->handler->get_or_create_user($claims);
+
+        $this->assertIsObject($result);
+        $this->assertSame(1, $result->ID);
+    }
+
+    /**
      * Test get_or_create_user merges userinfo with id_token_claims.
      */
     public function testGetOrCreateUserMergesUserinfoWithIdTokenClaims(): void

@@ -144,6 +144,29 @@ class OIDCClientTest extends OIDCTestCase
     }
 
     /**
+     * Test exchange_code returns error when a 200 JSON response decodes to a non-array.
+     *
+     * Regression test for issue #83: a misbehaving IdP may return 200 +
+     * application/json with a scalar body (e.g. `"ok"` or `123`). This must
+     * land in the error path without array-offset warnings, mirroring
+     * refresh_token().
+     */
+    public function testExchangeCodeReturnsErrorOnScalarJsonBody(): void
+    {
+        foreach (['"just a string"', '123', 'null', 'true'] as $body) {
+            Functions\when('wp_safe_remote_post')->justReturn([
+                'body' => $body,
+                'response' => ['code' => 200]
+            ]);
+
+            $result = $this->client->exchange_code('auth-code');
+
+            $this->assertInstanceOf(WP_Error::class, $result, "Body {$body} should fail validation");
+            $this->assertStringContainsString('Invalid token response', $result->get_error_message());
+        }
+    }
+
+    /**
      * Test exchange_code returns error when id_token missing.
      */
     public function testExchangeCodeReturnsErrorWhenIdTokenMissing(): void

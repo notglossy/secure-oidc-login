@@ -151,11 +151,17 @@ class OIDCRateLimiterTest extends OIDCTestCase
         $attempts_key = 'oidc_attempts_test_action_' . substr($ip_hash, 0, 16);
 
         $this->assertArrayHasKey($attempts_key, $this->transients);
-        $this->assertSame(1, $this->transients[$attempts_key]);
+        $state = $this->transients[$attempts_key];
+        $this->assertIsArray($state);
+        $this->assertSame(1, $state['count']);
+        $this->assertEqualsWithDelta(time(), $state['started'], 5);
     }
 
     /**
-     * Test record_attempt increments existing transient.
+     * Test record_attempt migrates a legacy plain-integer counter and increments it.
+     *
+     * Counters written before the window-start format existed carry no start
+     * time; they are anchored to a fresh window starting now.
      */
     public function testRecordAttemptIncrementsExistingTransient(): void
     {
@@ -165,7 +171,10 @@ class OIDCRateLimiterTest extends OIDCTestCase
 
         $this->limiter->record_attempt('test_action');
 
-        $this->assertSame(6, $this->transients[$attempts_key]);
+        $state = $this->transients[$attempts_key];
+        $this->assertIsArray($state);
+        $this->assertSame(6, $state['count']);
+        $this->assertEqualsWithDelta(time(), $state['started'], 5);
     }
 
     /**
@@ -616,5 +625,82 @@ class OIDCRateLimiterTest extends OIDCTestCase
 
         // Lockout should be active
         $this->assertTrue($this->limiter->is_rate_limited('test_action'));
+    }
+
+    /**
+     * Test increments preserve the window start instead of sliding the window.
+     *
+     * Regression test for issue #83: recording an attempt used to reset the
+     * transient TTL to a fresh full window, so a slow trickle of attempts
+     * could accumulate indefinitely. The window start must survive increments.
+     */
+    public function testRecordAttemptPreservesWindowStart(): void
+    {
+        // Pin the IP sources: earlier proxy tests leave forwarded headers in
+        // $_SERVER, which would key the limiter off a different IP.
+        $_SERVER['REMOTE_ADDR'] = '192.168.1.100';
+        unset($_SERVER['HTTP_X_REAL_IP'], $_SERVER['HTTP_X_FORWARDED_FOR'], $_SERVER['HTTP_CLIENT_IP']);
+
+        $ip_hash = hash('sha256', '192.168.1.100' . 'test-salt-value');
+        $attempts_key = 'oidc_attempts_test_action_' . substr($ip_hash, 0, 16);
+        $started = time() - 240; // 60s left in the default 5-minute window
+        $this->transients[$attempts_key] = ['count' => 2, 'started' => $started];
+
+        $this->limiter->record_attempt('test_action');
+
+        $state = $this->transients[$attempts_key];
+        $this->assertIsArray($state);
+        $this->assertSame(3, $state['count']);
+        $this->assertSame($started, $state['started']);
+        $this->assertFalse($this->limiter->is_rate_limited('test_action'));
+    }
+
+    /**
+     * Test an expired window is treated as empty even if the transient lingers.
+     */
+    public function testExpiredWindowStartsNewWindow(): void
+    {
+        // Pin the IP sources: earlier proxy tests leave forwarded headers in
+        // $_SERVER, which would key the limiter off a different IP.
+        $_SERVER['REMOTE_ADDR'] = '192.168.1.100';
+        unset($_SERVER['HTTP_X_REAL_IP'], $_SERVER['HTTP_X_FORWARDED_FOR'], $_SERVER['HTTP_CLIENT_IP']);
+
+        $ip_hash = hash('sha256', '192.168.1.100' . 'test-salt-value');
+        $attempts_key = 'oidc_attempts_test_action_' . substr($ip_hash, 0, 16);
+        // At the cap, but the window expired: must not lock out.
+        $this->transients[$attempts_key] = ['count' => 10, 'started' => time() - 301];
+
+        $this->assertFalse($this->limiter->is_rate_limited('test_action'));
+        $this->assertSame(10, $this->limiter->get_remaining_attempts('test_action'));
+
+        $this->limiter->record_attempt('test_action');
+
+        $state = $this->transients[$attempts_key];
+        $this->assertIsArray($state);
+        $this->assertSame(1, $state['count']);
+        $this->assertEqualsWithDelta(time(), $state['started'], 5);
+    }
+
+    /**
+     * Test a corrupt attempt value is treated as an empty window.
+     */
+    public function testCorruptAttemptStateStartsNewWindow(): void
+    {
+        // Pin the IP sources: earlier proxy tests leave forwarded headers in
+        // $_SERVER, which would key the limiter off a different IP.
+        $_SERVER['REMOTE_ADDR'] = '192.168.1.100';
+        unset($_SERVER['HTTP_X_REAL_IP'], $_SERVER['HTTP_X_FORWARDED_FOR'], $_SERVER['HTTP_CLIENT_IP']);
+
+        $ip_hash = hash('sha256', '192.168.1.100' . 'test-salt-value');
+        $attempts_key = 'oidc_attempts_test_action_' . substr($ip_hash, 0, 16);
+        $this->transients[$attempts_key] = 'garbage';
+
+        $this->assertFalse($this->limiter->is_rate_limited('test_action'));
+
+        $this->limiter->record_attempt('test_action');
+
+        $state = $this->transients[$attempts_key];
+        $this->assertIsArray($state);
+        $this->assertSame(1, $state['count']);
     }
 }
