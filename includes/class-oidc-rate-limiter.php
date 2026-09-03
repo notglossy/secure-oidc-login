@@ -182,10 +182,6 @@ class OIDC_Rate_Limiter {
 		$attempts_key = $this->get_attempts_key( $action, $ip_address );
 		$raw          = get_transient( $attempts_key );
 
-		if ( false === $raw ) {
-			return null;
-		}
-
 		// Backfill for counters written before the window-start format existed:
 		// anchor the surviving count to a fresh window starting now.
 		if ( is_int( $raw ) ) {
@@ -205,11 +201,7 @@ class OIDC_Rate_Limiter {
 		$count   = (int) $raw['count'];
 		$started = (int) $raw['started'];
 
-		if ( $count <= 0 || $started <= 0 ) {
-			return null;
-		}
-
-		if ( time() - $started >= $this->time_window ) {
+		if ( $count <= 0 || $started <= 0 || time() - $started >= $this->time_window ) {
 			return null;
 		}
 
@@ -410,7 +402,7 @@ class OIDC_Rate_Limiter {
 			return $this->max_attempts;
 		}
 
-		$remaining = $this->max_attempts - (int) $state['count'];
+		$remaining = $this->max_attempts - $state['count'];
 		return max( 0, $remaining );
 	}
 
