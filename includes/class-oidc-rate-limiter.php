@@ -147,16 +147,10 @@ class OIDC_Rate_Limiter {
 		$state        = $this->get_attempt_state( $action, $ip_address );
 
 		if ( null === $state ) {
-			// First attempt in this window
-			set_transient(
-				$attempts_key,
-				array(
-					'count'   => 1,
-					'started' => time(),
-				),
-				$this->time_window
+			$state = array(
+				'count'   => 0,
+				'started' => time(),
 			);
-			return;
 		}
 
 		// Increment within the current window, preserving its original end.

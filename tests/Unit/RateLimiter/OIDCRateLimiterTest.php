@@ -158,10 +158,7 @@ class OIDCRateLimiterTest extends OIDCTestCase
     }
 
     /**
-     * Test record_attempt migrates a legacy plain-integer counter and increments it.
-     *
-     * Counters written before the window-start format existed carry no start
-     * time; they are anchored to a fresh window starting now.
+     * Legacy integer counters migrate to the new state format.
      */
     public function testRecordAttemptIncrementsExistingTransient(): void
     {
