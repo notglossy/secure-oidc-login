@@ -105,19 +105,18 @@ class OIDC_Rate_Limiter {
 			return true;
 		}
 
-		// Check current attempt count
-		$attempts_key = $this->get_attempts_key( $action, $ip_address );
-		$attempts     = get_transient( $attempts_key );
+		// Check current attempt count within the fixed window.
+		$state = $this->get_attempt_state( $action, $ip_address );
 
-		if ( false === $attempts ) {
+		if ( null === $state ) {
 			// No previous attempts or window expired
 			return false;
 		}
 
-		if ( $attempts >= $this->max_attempts ) {
+		if ( $state['count'] >= $this->max_attempts ) {
 			// Exceeded max attempts - initiate lockout
 			$this->lockout( $action, $ip_address );
-			$this->log_rate_limit_event( $action, $ip_address, 'lockout_initiated', $attempts );
+			$this->log_rate_limit_event( $action, $ip_address, 'lockout_initiated', $state['count'] );
 			return true;
 		}
 
@@ -130,20 +129,66 @@ class OIDC_Rate_Limiter {
 	 *
 	 * Should be called for each authentication attempt, successful or not.
 	 *
+	 * Uses a fixed window: the stored state carries the window start time and
+	 * increments preserve the original window end (the transient TTL is set to
+	 * the remaining window, not a fresh full window), so a slow trickle of
+	 * attempts cannot slide the window forward and accumulate indefinitely.
+	 *
+	 * NOTE: the transients API offers no atomic increment, so concurrent
+	 * record_attempt() calls can undercount by one and fail open slightly.
+	 * The window-start bookkeeping still bounds the impact to a single fixed
+	 * window.
+	 *
 	 * @param string $action Unique identifier for the action.
 	 */
 	public function record_attempt( string $action ): void {
 		$ip_address   = $this->get_client_ip();
 		$attempts_key = $this->get_attempts_key( $action, $ip_address );
-		$attempts     = get_transient( $attempts_key );
+		$state        = $this->get_attempt_state( $action, $ip_address ) ?? array(
+			'count'   => 0,
+			'started' => time(),
+		);
 
-		if ( false === $attempts ) {
-			// First attempt in this window
-			set_transient( $attempts_key, 1, $this->time_window );
-		} else {
-			// Increment attempt count
-			set_transient( $attempts_key, $attempts + 1, $this->time_window );
+		// Increment within the current window, preserving its original end.
+		++$state['count'];
+		$remaining = $this->time_window - ( time() - $state['started'] );
+		set_transient( $attempts_key, $state, max( 1, $remaining ) );
+	}
+
+	/**
+	 * Returns the current fixed-window attempt state, or null when no live window exists.
+	 *
+	 * @param string $action     Action identifier.
+	 * @param string $ip_address IP address.
+	 * @return array{count: int, started: int}|null Attempt state, or null when no live window exists.
+	 */
+	private function get_attempt_state( string $action, string $ip_address ): ?array {
+		$attempts_key = $this->get_attempts_key( $action, $ip_address );
+		$raw          = get_transient( $attempts_key );
+
+		// Legacy integer counters migrate to a fresh window starting now.
+		if ( is_int( $raw ) ) {
+			return $raw > 0 ? array(
+				'count'   => $raw,
+				'started' => time(),
+			) : null;
 		}
+
+		if ( ! is_array( $raw ) || ! isset( $raw['count'], $raw['started'] ) ) {
+			return null;
+		}
+
+		$count   = (int) $raw['count'];
+		$started = (int) $raw['started'];
+
+		if ( $count <= 0 || $started <= 0 || $started > time() || time() - $started >= $this->time_window ) {
+			return null;
+		}
+
+		return array(
+			'count'   => $count,
+			'started' => $started,
+		);
 	}
 
 	/**
@@ -324,21 +369,20 @@ class OIDC_Rate_Limiter {
 	 * @return int Remaining attempts (0 if locked out).
 	 */
 	public function get_remaining_attempts( string $action ): int {
-		$ip_address   = $this->get_client_ip();
-		$lockout_key  = $this->get_lockout_key( $action, $ip_address );
-		$attempts_key = $this->get_attempts_key( $action, $ip_address );
+		$ip_address  = $this->get_client_ip();
+		$lockout_key = $this->get_lockout_key( $action, $ip_address );
 
 		// Check lockout first
 		if ( get_transient( $lockout_key ) ) {
 			return 0;
 		}
 
-		$attempts = get_transient( $attempts_key );
-		if ( false === $attempts ) {
+		$state = $this->get_attempt_state( $action, $ip_address );
+		if ( null === $state ) {
 			return $this->max_attempts;
 		}
 
-		$remaining = $this->max_attempts - (int) $attempts;
+		$remaining = $this->max_attempts - $state['count'];
 		return max( 0, $remaining );
 	}
 

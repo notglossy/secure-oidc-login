@@ -35,6 +35,13 @@ class OIDCRateLimiterTest extends OIDCTestCase
     private $transients = [];
 
     /**
+     * Captured transient expirations, keyed by transient key.
+     *
+     * @var array<string, int>
+     */
+    private $transient_expirations = [];
+
+    /**
      * Set up test environment.
      */
     protected function setUp(): void
@@ -42,6 +49,7 @@ class OIDCRateLimiterTest extends OIDCTestCase
         parent::setUp();
 
         $this->transients = [];
+        $this->transient_expirations = [];
 
         // Mock WordPress constants
         if (!defined('MINUTE_IN_SECONDS')) {
@@ -61,6 +69,7 @@ class OIDCRateLimiterTest extends OIDCTestCase
 
         Functions\when('set_transient')->alias(function (string $key, $value, int $expiration) {
             $this->transients[$key] = $value;
+            $this->transient_expirations[$key] = $expiration;
             return true;
         });
 
@@ -151,21 +160,25 @@ class OIDCRateLimiterTest extends OIDCTestCase
         $attempts_key = 'oidc_attempts_test_action_' . substr($ip_hash, 0, 16);
 
         $this->assertArrayHasKey($attempts_key, $this->transients);
-        $this->assertSame(1, $this->transients[$attempts_key]);
+        $state = $this->transients[$attempts_key];
+        $this->assertIsArray($state);
+        $this->assertSame(1, $state['count']);
+        $this->assertEqualsWithDelta(time(), $state['started'], 5);
     }
 
     /**
-     * Test record_attempt increments existing transient.
+     * Legacy integer counters migrate to the new state format.
      */
     public function testRecordAttemptIncrementsExistingTransient(): void
     {
-        $ip_hash = hash('sha256', '192.168.1.100' . 'test-salt-value');
-        $attempts_key = 'oidc_attempts_test_action_' . substr($ip_hash, 0, 16);
-        $this->transients[$attempts_key] = 5;
+        $attempts_key = $this->seed_attempts('test_action', 5);
 
         $this->limiter->record_attempt('test_action');
 
-        $this->assertSame(6, $this->transients[$attempts_key]);
+        $state = $this->transients[$attempts_key];
+        $this->assertIsArray($state);
+        $this->assertSame(6, $state['count']);
+        $this->assertEqualsWithDelta(time(), $state['started'], 5);
     }
 
     /**
@@ -616,5 +629,93 @@ class OIDCRateLimiterTest extends OIDCTestCase
 
         // Lockout should be active
         $this->assertTrue($this->limiter->is_rate_limited('test_action'));
+    }
+
+    /**
+     * Pin the test client IP, seed the attempts transient, and return its key.
+     */
+    private function seed_attempts(string $action, $state): string
+    {
+        $_SERVER['REMOTE_ADDR'] = '192.168.1.100';
+        unset($_SERVER['HTTP_X_REAL_IP'], $_SERVER['HTTP_X_FORWARDED_FOR'], $_SERVER['HTTP_CLIENT_IP']);
+
+        $ip_hash = hash('sha256', '192.168.1.100' . 'test-salt-value');
+        $attempts_key = 'oidc_attempts_' . $action . '_' . substr($ip_hash, 0, 16);
+        $this->transients[$attempts_key] = $state;
+        return $attempts_key;
+    }
+
+    /**
+     * Recording an attempt must preserve the original window start.
+     */
+    public function testRecordAttemptPreservesWindowStart(): void
+    {
+        $started = time() - 240; // 60s left in the default 5-minute window
+        $attempts_key = $this->seed_attempts('test_action', ['count' => 2, 'started' => $started]);
+
+        $this->limiter->record_attempt('test_action');
+
+        $state = $this->transients[$attempts_key];
+        $this->assertIsArray($state);
+        $this->assertSame(3, $state['count']);
+        $this->assertSame($started, $state['started']);
+        $this->assertEqualsWithDelta(60, $this->transient_expirations[$attempts_key], 5);
+        $this->assertFalse($this->limiter->is_rate_limited('test_action'));
+    }
+
+    /**
+     * An expired window is treated as empty even if the transient lingers.
+     */
+    public function testExpiredWindowStartsNewWindow(): void
+    {
+        // At the cap, but the window expired: must not lock out.
+        $attempts_key = $this->seed_attempts('test_action', ['count' => 10, 'started' => time() - 301]);
+
+        $this->assertFalse($this->limiter->is_rate_limited('test_action'));
+        $this->assertSame(10, $this->limiter->get_remaining_attempts('test_action'));
+
+        $this->limiter->record_attempt('test_action');
+
+        $state = $this->transients[$attempts_key];
+        $this->assertIsArray($state);
+        $this->assertSame(1, $state['count']);
+        $this->assertEqualsWithDelta(time(), $state['started'], 5);
+    }
+
+    /**
+     * A corrupt attempt value is treated as an empty window.
+     */
+    public function testCorruptAttemptStateStartsNewWindow(): void
+    {
+        $attempts_key = $this->seed_attempts('test_action', 'garbage');
+
+        $this->assertFalse($this->limiter->is_rate_limited('test_action'));
+
+        $this->limiter->record_attempt('test_action');
+
+        $state = $this->transients[$attempts_key];
+        $this->assertIsArray($state);
+        $this->assertSame(1, $state['count']);
+    }
+
+    /**
+     * Non-positive counts are treated as an empty window.
+     */
+    public function testNonPositiveAttemptCountsStartNewWindow(): void
+    {
+        $bad_states = [0, -3, ['count' => 0, 'started' => time()], ['count' => 2, 'started' => 0], ['count' => 2, 'started' => time() + 60]];
+
+        foreach ($bad_states as $bad) {
+            $attempts_key = $this->seed_attempts('test_action', $bad);
+
+            $this->assertFalse($this->limiter->is_rate_limited('test_action'));
+            $this->assertSame(10, $this->limiter->get_remaining_attempts('test_action'));
+
+            $this->limiter->record_attempt('test_action');
+
+            $state = $this->transients[$attempts_key];
+            $this->assertIsArray($state);
+            $this->assertSame(1, $state['count']);
+        }
     }
 }

@@ -247,6 +247,11 @@ class OIDC_User_Handler {
 		$subject_stored = OIDC_User_Index::link_subject( $user_id, $subject );
 		$created_stored = update_user_meta( $user_id, 'oidc_created', true );
 
+		// update_user_meta() returns false on failure and on no-op; confirm the value is stored.
+		if ( false === $created_stored ) {
+			$created_stored = (bool) get_user_meta( $user_id, 'oidc_created', true );
+		}
+
 		if ( false === $subject_stored || false === $created_stored ) {
 			// Rollback: Delete the user we just created since OIDC metadata couldn't be stored
 			// Without this metadata, the user cannot authenticate via OIDC on future logins

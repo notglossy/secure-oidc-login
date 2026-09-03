@@ -510,6 +510,41 @@ class OIDCUserHandlerTest extends OIDCTestCase
     }
 
     /**
+     * Account creation must succeed when oidc_created is already stored.
+     */
+    public function testGetOrCreateUserSucceedsWhenOidcCreatedFlagUnchanged(): void
+    {
+        $claims = $this->getSampleClaims();
+        $claims['email_verified'] = true;
+
+        Functions\when('get_users')->justReturn([]);
+        Functions\when('get_user_by')->alias(function($field, $value) {
+            if ($field === 'ID' && $value === 1) {
+                return new WP_User(1, 'newuser', 'test@example.com');
+            }
+            return false;
+        });
+
+        // update_user_meta() reports false (nothing to write) ...
+        Functions\when('update_user_meta')->justReturn(false);
+        // ... but both values are already stored, so both read back successfully.
+        Functions\when('get_user_meta')->alias(function($user_id, $key, $single = false) use ($claims) {
+            if ($key === 'oidc_subject') {
+                return $single ? $claims['sub'] : [$claims['sub']];
+            }
+            if ($key === 'oidc_created') {
+                return $single ? '1' : ['1'];
+            }
+            return $single ? '' : [];
+        });
+
+        $result = $this->handler->get_or_create_user($claims);
+
+        $this->assertIsObject($result);
+        $this->assertSame(1, $result->ID);
+    }
+
+    /**
      * Test get_or_create_user merges userinfo with id_token_claims.
      */
     public function testGetOrCreateUserMergesUserinfoWithIdTokenClaims(): void

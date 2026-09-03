@@ -144,6 +144,22 @@ class OIDCClientTest extends OIDCTestCase
     }
 
     /**
+     * A scalar JSON body must be rejected before reading array offsets.
+     */
+    public function testExchangeCodeReturnsErrorOnScalarJsonBody(): void
+    {
+        Functions\when('wp_safe_remote_post')->justReturn([
+            'body' => '"just a string"',
+            'response' => ['code' => 200]
+        ]);
+
+        $result = $this->client->exchange_code('auth-code');
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertStringContainsString('Invalid token response', $result->get_error_message());
+    }
+
+    /**
      * Test exchange_code returns error when id_token missing.
      */
     public function testExchangeCodeReturnsErrorWhenIdTokenMissing(): void
