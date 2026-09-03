@@ -510,13 +510,7 @@ class OIDCUserHandlerTest extends OIDCTestCase
     }
 
     /**
-     * Test user creation succeeds when the oidc_created write reports false
-     * but the flag is already stored.
-     *
-     * Regression test for issue #83: update_user_meta() returns false both on
-     * failure and when the value is unchanged. A pre-existing flag must not
-     * fail account creation (the subject link was already hardened the same
-     * way in OIDC_User_Index::link_subject()).
+     * Account creation must succeed when oidc_created is already stored.
      */
     public function testGetOrCreateUserSucceedsWhenOidcCreatedFlagUnchanged(): void
     {
@@ -530,8 +524,6 @@ class OIDCUserHandlerTest extends OIDCTestCase
             }
             return false;
         });
-        Functions\when('is_email')->justReturn(true);
-        Functions\when('sanitize_user')->alias(fn($username) => $username);
 
         // update_user_meta() reports false (nothing to write) ...
         Functions\when('update_user_meta')->justReturn(false);

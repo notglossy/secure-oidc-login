@@ -628,12 +628,7 @@ class OIDCRateLimiterTest extends OIDCTestCase
     }
 
     /**
-     * Seed the attempts transient for the pinned test IP and return its key.
-     *
-     * Earlier proxy tests leave forwarded headers in $_SERVER, which would
-     * otherwise key the limiter off a different IP than the one hashed here.
-     *
-     * @param mixed $state Value to store in the transient.
+     * Pin the test client IP, seed the attempts transient, and return its key.
      */
     private function seed_attempts(string $action, $state): string
     {
@@ -647,11 +642,7 @@ class OIDCRateLimiterTest extends OIDCTestCase
     }
 
     /**
-     * Test increments preserve the window start instead of sliding the window.
-     *
-     * Regression test for issue #83: recording an attempt used to reset the
-     * transient TTL to a fresh full window, so a slow trickle of attempts
-     * could accumulate indefinitely. The window start must survive increments.
+     * Recording an attempt must preserve the original window start.
      */
     public function testRecordAttemptPreservesWindowStart(): void
     {

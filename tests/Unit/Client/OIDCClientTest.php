@@ -144,12 +144,7 @@ class OIDCClientTest extends OIDCTestCase
     }
 
     /**
-     * Test exchange_code returns error when a 200 JSON response decodes to a non-array.
-     *
-     * Regression test for issue #83: a misbehaving IdP may return 200 +
-     * application/json with a scalar body (e.g. `"ok"` or `123`). This must
-     * land in the error path without array-offset warnings, mirroring
-     * refresh_token().
+     * A scalar JSON body must be rejected before reading array offsets.
      */
     public function testExchangeCodeReturnsErrorOnScalarJsonBody(): void
     {

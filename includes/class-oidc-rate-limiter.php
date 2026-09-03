@@ -166,13 +166,7 @@ class OIDC_Rate_Limiter {
 	}
 
 	/**
-	 * Read the current fixed-window attempt state.
-	 *
-	 * Returns null when there is no usable state: no transient, a corrupt
-	 * value, a plain-integer counter written before the window-start format
-	 * existed (the caller anchors it to a fresh window), or a window that has
-	 * expired logically even if its transient has not been garbage-collected
-	 * yet.
+	 * Returns the current fixed-window attempt state, or null when no live window exists.
 	 *
 	 * @param string $action     Action identifier.
 	 * @param string $ip_address IP address.
@@ -185,13 +179,10 @@ class OIDC_Rate_Limiter {
 		// Backfill for counters written before the window-start format existed:
 		// anchor the surviving count to a fresh window starting now.
 		if ( is_int( $raw ) ) {
-			if ( $raw <= 0 ) {
-				return null;
-			}
-			return array(
+			return $raw > 0 ? array(
 				'count'   => $raw,
 				'started' => time(),
-			);
+			) : null;
 		}
 
 		if ( ! is_array( $raw ) || ! isset( $raw['count'], $raw['started'] ) ) {
