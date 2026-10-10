@@ -764,7 +764,7 @@ class OIDC_Client {
 	 * of sweeping a bounded batch — amortized cost stays negligible while the
 	 * table cannot grow unbounded.
 	 *
-	 * @since 1.3.2
+	 * @since 1.4.0
 	 */
 	private function maybe_sweep_expired_jtis( bool $force = false ): void {
 		try {

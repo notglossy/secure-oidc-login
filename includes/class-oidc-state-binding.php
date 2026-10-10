@@ -9,7 +9,7 @@ declare(strict_types=1);
  * cannot redeem a captured `state`/`code` callback URL.
  *
  * @package Secure_OIDC_Login
- * @since 1.3.2
+ * @since 1.4.0
  */
 
 // Prevent direct file access

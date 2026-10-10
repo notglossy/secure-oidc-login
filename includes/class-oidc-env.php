@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 /**
  * Strict parsing of boolean environment variables.
  *
- * @since 1.3.2
+ * @since 1.4.0
  */
 class OIDC_Env {
 	/**
@@ -51,7 +51,7 @@ class OIDC_Env {
 	 * warning is logged for unrecognized values so misconfigurations are not
 	 * silent).
 	 *
-	 * @since 1.3.2
+	 * @since 1.4.0
 	 *
 	 * @param string $name Environment variable name.
 	 * @return bool|null True/false when recognized, null when unset or invalid.

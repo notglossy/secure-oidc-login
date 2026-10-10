@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-10
+
+Stable release of 1.4.0. No code changes since 1.4.0-beta; see the 1.4.0-beta notes below for the full list of changes since 1.3.1.
+
 ## [1.4.0-beta] - 2026-09-03
 
 Beta release with OIDC Back-Channel Logout, hardened discovery/callback validation, indexed lookups, off-render token refresh, and a round of small robustness fixes.
@@ -229,7 +233,8 @@ First stable release. Comprehensive security audit completed with no critical or
 - Flexible email verification
 - PHPStan level 6 compliance
 
-[Unreleased]: https://github.com/notglossy/secure-oidc-login/compare/v1.4.0-beta...HEAD
+[Unreleased]: https://github.com/notglossy/secure-oidc-login/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/notglossy/secure-oidc-login/compare/v1.4.0-beta...v1.4.0
 [1.4.0-beta]: https://github.com/notglossy/secure-oidc-login/compare/v1.3.1...v1.4.0-beta
 [1.3.1]: https://github.com/notglossy/secure-oidc-login/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/notglossy/secure-oidc-login/compare/v1.2.0...v1.3.0
