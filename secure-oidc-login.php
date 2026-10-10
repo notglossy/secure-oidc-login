@@ -4,7 +4,7 @@ declare(strict_types=1);
  * Plugin Name: Secure OIDC Login
  * Plugin URI: https://github.com/notglossy/secure-oidc-login
  * Description: OpenID Connect (OIDC) authentication plugin for WordPress. Allows users to authenticate using any OIDC-compliant identity provider.
- * Version: 1.4.0-beta
+ * Version: 1.4.0
  * Requires at least: 5.8
  * Tested up to: 6.7
  * Requires PHP: 8.1
@@ -24,7 +24,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 // Plugin version constant - used for cache busting and compatibility checks
-define( 'SECURE_OIDC_LOGIN_VERSION', '1.4.0-beta' );
+define( 'SECURE_OIDC_LOGIN_VERSION', '1.4.0' );
 // Plugin directory path constant - used for including files (has trailing slash)
 define( 'SECURE_OIDC_LOGIN_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 // Plugin URL constant - used for enqueueing assets (has trailing slash)
@@ -1030,7 +1030,7 @@ class Secure_OIDC_Login {
 	 * $_SERVER['HTTPS']='on' (or X-Forwarded-Proto handling is in place). A
 	 * misconfigured proxy would keep the site on the unprefixed cookie name.
 	 *
-	 * @since 1.3.2
+	 * @since 1.4.0
 	 *
 	 * @return string Cookie name.
 	 */
@@ -1047,7 +1047,7 @@ class Secure_OIDC_Login {
 	 * On HTTPS the __Host- prefixed name is used with Path=/ and no Domain, per
 	 * the prefix requirements — see STATE_COOKIE_HOST.
 	 *
-	 * @since 1.3.2
+	 * @since 1.4.0
 	 *
 	 * @param string $value The binding secret to store in the browser.
 	 * @param int    $ttl   Cookie lifetime in seconds (matches the state TTL).
@@ -1103,7 +1103,7 @@ class Secure_OIDC_Login {
 	 * be cleared from HTTP responses (browsers ignore Secure cookies set in
 	 * non-secure contexts); it lingers until the next HTTPS request.
 	 *
-	 * @since 1.3.2
+	 * @since 1.4.0
 	 */
 	private function clear_state_cookie(): void {
 		unset( $_COOKIE[ self::STATE_COOKIE ], $_COOKIE[ self::STATE_COOKIE_HOST ] );
@@ -1169,7 +1169,7 @@ class Secure_OIDC_Login {
 	/**
 	 * Append query parameters to a URL that may already contain a query string.
 	 *
-	 * @since 1.3.2
+	 * @since 1.4.0
 	 *
 	 * @param string              $url    The endpoint URL.
 	 * @param array<string,mixed> $params Query parameters to append.

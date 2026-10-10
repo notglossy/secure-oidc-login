@@ -20,7 +20,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  * already carry a query string. Appending with a literal '?' would corrupt
  * the resulting URL.
  *
- * @since 1.3.2
+ * @since 1.4.0
  */
 class OIDC_Url {
 	/**
@@ -29,7 +29,7 @@ class OIDC_Url {
 	 * Parameters are encoded with http_build_query(), which urlencodes both keys
 	 * and values (unlike add_query_arg()).
 	 *
-	 * @since 1.3.2
+	 * @since 1.4.0
 	 *
 	 * @param string              $url    The endpoint URL.
 	 * @param array<string,mixed> $params Query parameters to append.
